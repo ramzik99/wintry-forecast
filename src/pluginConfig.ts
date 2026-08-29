@@ -15,4 +15,3 @@ const config: ExternalPluginConfig = {
 };
 
 export default config;
-

@@ -207,4 +207,3 @@
 
   .snowline-label-chart{width:30px!important;min-width:30px!important;padding:0!important;font-size:13px!important;line-height:1!important}
 </style>
-

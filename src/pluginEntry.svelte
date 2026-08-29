@@ -36,4 +36,3 @@
 </script>
 
 <Plugin bind:this={plugin} />
-

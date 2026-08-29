@@ -207,4 +207,3 @@ Ramzi Kandah
 ## v200: convenience freeze
 
 v200 is the final convenience-first interface: fast point answers, a clean +144 h forecast, and optional sounding depth. Future changes should be bug fixes, compatibility updates, or small UI polish rather than new forecast metrics.
-
