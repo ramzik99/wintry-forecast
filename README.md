@@ -192,7 +192,12 @@ Each published release must use a new version number.
 
 ## Current version
 
-**21.0.0**
+**200.0.1**
+
+### 200.0.1 compatibility fixes
+
+- Metric / Imperial changes immediately re-render map contours, point labels, charts and exported chart values.
+- While the plugin is open, normal left-clicks are claimed by the plugin so Windy's native point picker is not opened.
 
 ## Author
 
@@ -202,3 +207,4 @@ Ramzi Kandah
 ## v200: convenience freeze
 
 v200 is the final convenience-first interface: fast point answers, a clean +144 h forecast, and optional sounding depth. Future changes should be bug fixes, compatibility updates, or small UI polish rather than new forecast metrics.
+

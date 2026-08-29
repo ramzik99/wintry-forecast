@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { singleclick } from '@windy/singleclick';
+  import { register, release, singleclick } from '@windy/singleclick';
   import Plugin from './plugin.svelte';
   import config from './pluginConfig';
 
@@ -26,11 +26,14 @@
 
   onMount(() => {
     singleclick.on(config.name, selectLocation as any);
+    register(config.name, 'high');
   });
 
   onDestroy(() => {
     singleclick.off(config.name, selectLocation as any);
+    release(config.name, 'high');
   });
 </script>
 
 <Plugin bind:this={plugin} />
+

@@ -131,7 +131,7 @@
   import { precipMmAt, formatPrecipMm, PRECIP_THRESHOLD_MM_H } from './precip';
   import { terrainPrecipitationType, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
   import { terrainCrossingState } from './terrainCrossing';
-  import { estimateNewSnowStep, formatNewSnowCm } from './snowAccum';
+  import { estimateNewSnowStep } from './snowAccum';
   import { nextWintryEvent } from './eventOutlook';
   import { formatElevation, formatPrecip, formatSnow, type UnitSystem } from './displayUnits';
   import SoundingChart from './SoundingChart.svelte';
@@ -213,7 +213,7 @@
     const finalSnow = newSnow.length ? newSnow[newSnow.length - 1] : 0;
     if (total < PRECIP_THRESHOLD_MM_H) return 'Dry forecast · no meaningful precipitation.';
     const ranked = (Object.entries(amounts) as [TerrainPrecipTypeKey, number][]).sort((a, b) => b[1] - a[1]); const [key, amount] = ranked[0], pct = Math.round(amount / total * 100);
-    return `${phaseName(key)} ${pct}% · new snow est. ${formatNewSnowCm(finalSnow)}`;
+    return `${phaseName(key)} ${pct}% · new snow est. ${formatSnow(finalSnow, units)}`;
   }
 
   function buildChart(p: any, terrain: number | null, target: number, crossingTime: number | null, now: number): ChartData | null {
@@ -304,7 +304,7 @@
       let y = 1217; ctx.fillStyle = '#ffffff'; ctx.font = '700 29px Arial'; ctx.fillText(chart.currentPhase ? `${chart.currentPhase.label}${chart.currentPhase.confidence === 'low' ? ' ~' : ''}` : 'Dry', 52, y);
       y += 34; ctx.fillStyle = '#b8c8d1'; ctx.font = '22px Arial';
       ctx.fillText(`Snowline ${formatElevation(chart.currentSnowline, units)}   ·   Precip ${formatPrecip(chart.currentPrecip, units)}`, 52, y);
-      y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min snowline ${chart.min24Snowline !== null ? `${chart.min24Snowline} m` : '—'} · new snow ${formatNewSnowCm(chart.newSnow24h)}`, 52, y);
+      y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min snowline ${formatElevation(chart.min24Snowline, units)} · new snow ${formatSnow(chart.newSnow24h, units)}`, 52, y);
       if (chart.nextChangeLabel) { y += 30; ctx.fillStyle = '#e5cf7c'; ctx.font = '700 20px Arial'; ctx.fillText(chart.nextChangeLabel, 52, y); }
       y += 30; ctx.fillStyle = '#8799a4'; ctx.font = '18px Arial'; ctx.fillText('New snow is a terrain-aware forecast estimate from precipitation type and wet-bulb profile; it is not total pre-existing snowpack.', 52, y);
       const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(v => v ? resolve(v) : reject(new Error('PNG failed')), 'image/png'));
@@ -333,3 +333,4 @@
 
   .event-head,.elevation-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.confidence{padding:2px 5px;border-radius:8px;font-size:6.5px;font-style:normal;font-weight:850}.confidence-high{background:rgba(96,211,139,.12);color:#87e5aa}.confidence-medium{background:rgba(255,209,84,.12);color:#f5d76d}.confidence-low{background:rgba(255,136,104,.12);color:#ffad96}.event-hazard{border-color:rgba(193,132,255,.38)!important;box-shadow:inset 3px 0 rgba(193,132,255,.8)}.event-timeline{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:3px}.event-timeline span{padding:4px;border-radius:6px;background:rgba(255,255,255,.035);font-size:7px;font-weight:800;text-align:center}.event-timeline small{display:block;margin-bottom:2px;color:#71838d;font-size:5.8px;text-transform:uppercase}.elevation-impact{margin-top:6px;padding:7px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.025)}.elevation-head b{font-size:8px}.elevation-head span,.impact-band{color:#87a7b7;font-size:6.8px}.impact-band{margin-top:3px}.elevation-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-top:5px}.elevation-grid span{padding:4px 2px;border-radius:6px;background:rgba(255,255,255,.035);text-align:center}.elevation-grid span.terrain-row{outline:1px solid rgba(255,190,112,.48);background:rgba(255,174,86,.07)}.elevation-grid b,.elevation-grid small,.elevation-grid em{display:block}.elevation-grid b{font-size:7px}.elevation-grid small{margin-top:2px;color:#9aabb4;font-size:5.7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.elevation-grid em{margin-top:2px;color:#dfeaf0;font-size:6.5px;font-style:normal;font-weight:800}
 </style>
+
