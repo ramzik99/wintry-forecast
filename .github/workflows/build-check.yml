@@ -13,7 +13,26 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+
+      - name: Verify source versions match
+        run: |
+          PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
+          CONFIG_VERSION="$(sed -n "s/.*version: '\([^']*\)'.*/\1/p" src/pluginConfig.ts | head -n 1)"
+          echo "package.json:     ${PACKAGE_VERSION}"
+          echo "pluginConfig.ts: ${CONFIG_VERSION}"
+          test -n "$CONFIG_VERSION"
+          test "$PACKAGE_VERSION" = "$CONFIG_VERSION"
+
       - name: Install dependencies
         run: npm install
+
       - name: Build plugin
         run: npm run build
+
+      - name: Verify packaged plugin version
+        run: |
+          PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
+          BUILT_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('dist/plugin.json','utf8')).version")"
+          echo "package.json:    ${PACKAGE_VERSION}"
+          echo "dist/plugin.json: ${BUILT_VERSION}"
+          test "$PACKAGE_VERSION" = "$BUILT_VERSION"

@@ -1,6 +1,6 @@
 {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "200.0.2",
+  "version": "200.0.3",
   "description": "v200 convenience-first terrain-aware wintry forecast. Five-second answers for precipitation type, terrain, snowline, precipitation, estimated new snow and timing, with a clean forecast timeline and optional sounding.",
   "main": "dist/plugin.min.js",
   "type": "module",

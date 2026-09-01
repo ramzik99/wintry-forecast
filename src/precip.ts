@@ -1,9 +1,10 @@
 import { valueAt } from './snowLevel';
 
 /**
- * Windy's precipitation feed used by this plugin is presented on a 3-hour
- * accumulation basis. Prefer the explicit past-3-hour field and keep the
- * returned value as a 3-hour amount rather than converting it to mm/h.
+ * Windy's precipitation feed used by this plugin is normalized onto a 3-hour
+ * accumulation-equivalent basis. Prefer the explicit past-3-hour field and
+ * keep the returned value as a 3-hour-equivalent amount rather than presenting
+ * it internally as an hourly rate.
  */
 const EXACT_KEYS = [
   'past3hprecip-surface',
@@ -22,8 +23,11 @@ const METRE_WATER_KEYS = new Set([
   'past3hprecip-surface',
 ]);
 
-/** Minimum 3-hour precipitation amount used for precipitation-type diagnosis. */
-export const PRECIP_THRESHOLD_MM_H = 0.1;
+/** Minimum normalized 3-hour-equivalent amount used for ptype diagnosis. */
+export const PRECIP_THRESHOLD_MM_3H = 0.1;
+
+/** @deprecated Use PRECIP_THRESHOLD_MM_3H; retained for source compatibility. */
+export const PRECIP_THRESHOLD_MM_H = PRECIP_THRESHOLD_MM_3H;
 
 type PrecipField = { key: string; field: unknown };
 const precipFieldCache = new WeakMap<object, PrecipField | null>();
@@ -57,7 +61,7 @@ function findPrecipFieldUncached(value: unknown, depth = 0): PrecipField | null 
   }
 
   // Compatibility fallback for unfamiliar precipitation aliases. Windy's
-  // displayed precipitation values are treated as 3-hour amounts here.
+  // displayed precipitation values are treated as 3-hour-equivalent amounts.
   for (const [key, field] of Object.entries(object)) {
     if (isPrecipKey(key) && looksArrayLike(field)) return { key, field };
   }
@@ -87,7 +91,7 @@ function toThreeHourlyMillimetres(key: string, raw: number): number {
   return normalized === 'past1hprecip-surface' ? millimetres * 3 : millimetres;
 }
 
-/** Precipitation amount in millimetres per 3 hours. */
+/** Precipitation amount in millimetres per 3-hour-equivalent period. */
 export function precipMmAt(data: Record<string, unknown>, index: number): number | null {
   const found = findPrecipField(data);
   if (!found) return null;

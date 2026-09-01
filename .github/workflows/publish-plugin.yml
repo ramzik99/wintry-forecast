@@ -10,11 +10,30 @@ jobs:
       WINDY_API_KEY: '${{ secrets.WINDY_API_KEY }}'
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Verify source versions match
+        run: |
+          PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
+          CONFIG_VERSION="$(sed -n "s/.*version: '\([^']*\)'.*/\1/p" src/pluginConfig.ts | head -n 1)"
+          echo "package.json:     ${PACKAGE_VERSION}"
+          echo "pluginConfig.ts: ${CONFIG_VERSION}"
+          test -n "$CONFIG_VERSION"
+          test "$PACKAGE_VERSION" = "$CONFIG_VERSION"
 
       - name: Install and build
         run: |
           npm install
           npm run build
+
+      - name: Verify packaged plugin version
+        run: |
+          PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
+          BUILT_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('dist/plugin.json','utf8')).version")"
+          echo "Publishing version ${BUILT_VERSION}"
+          test "$PACKAGE_VERSION" = "$BUILT_VERSION"
 
       - name: Publish plugin
         run: |
