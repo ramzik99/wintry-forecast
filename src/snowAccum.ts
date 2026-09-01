@@ -119,12 +119,21 @@ export function estimateNewSnowStep(
     return { hourlyCm: 0, cumulativeCm: snowpack };
   }
 
-  // Convert the 3-hour liquid amount to the current dt interval before SLR.
-  const liquidMm = Math.max(0, precipMm3h) * (dt / 3);
+  // The graph/event callers historically pass 1 h for their first sample
+  // because there is no previous timestamp from which to derive a cadence.
+  // The precipitation value itself is nevertheless a full 3-hour amount, so
+  // using dt=1 there would undercount that first interval by a factor of three.
+  // Restrict the correction to an empty forecast-created snowpack so normal
+  // elapsed-time settling/melt behaviour is otherwise unchanged.
+  const precipDt = previousCm <= 1e-9 && Math.abs(dt - 1) < 1e-6 ? 3 : dt;
+
+  // Convert the 3-hour liquid amount to the represented precipitation interval
+  // before applying the snow ratio and snow fraction.
+  const liquidMm = Math.max(0, precipMm3h) * (precipDt / 3);
   const addedCm = liquidMm * slr * fraction / 10;
   snowpack += addedCm;
 
-  return { hourlyCm: addedCm / dt, cumulativeCm: snowpack };
+  return { hourlyCm: addedCm / precipDt, cumulativeCm: snowpack };
 }
 
 export function formatNewSnowCm(value: number | null): string {
