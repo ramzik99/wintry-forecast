@@ -13,9 +13,10 @@ export interface NewSnowStep {
  * estimate, then applies simple settling and melt to that forecast-created
  * layer. The result should be treated as guidance, not model snow depth.
  *
- * Precipitation is supplied as a 3-hour liquid amount (mm/3h). The conversion
- * scales that amount by dt/3 so changing the forecast sampling interval does
- * not artificially multiply accumulation.
+ * Precipitation is supplied as a 3-hour-equivalent liquid amount (mm/3h).
+ * Callers pass the represented forecast interval in hours; the conversion
+ * scales the liquid amount by dt/3 so hourly and 3-hourly sampling integrate
+ * consistently.
  */
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -24,9 +25,8 @@ function clamp(value: number, min: number, max: number): number {
 /**
  * Fresh-snow ratio for the snow portion of the precipitation.
  *
- * Keep SLR separate from precipitation phase fraction: the previous scheme
- * used both a very low SLR and a reduced solid fraction for marginal snow,
- * effectively penalising mixed/wet snow twice.
+ * SLR is kept separate from precipitation phase fraction so mixed/wet snow is
+ * not penalised twice.
  */
 function snowToLiquidRatio(phase: TerrainPrecipType): number {
   const tw = phase.surfaceWetBulbC;
@@ -46,7 +46,7 @@ function snowToLiquidRatio(phase: TerrainPrecipType): number {
   }
 
   // For a rain/snow mix this is the ratio of the snow component only. The
-  // amount of precipitation assigned to that component is handled separately.
+  // amount assigned to that component is handled separately below.
   if (phase.key === 'mix') return 6;
 
   // Ice pellets are wintry precipitation, but they are not "new snow".
@@ -66,10 +66,9 @@ function snowFraction(phase: TerrainPrecipType): number {
   }
 
   if (phase.key === 'mix') {
-    // Use the diagnosed positive wet-bulb energy to vary the snow share rather
-    // than assigning every mixed event the same arbitrary fraction. A shallow
-    // weak warm layer retains substantially more snow than a nearly fully
-    // melting profile.
+    // Use the diagnosed positive wet-bulb energy to vary the snow share. A
+    // shallow/weak warm layer retains more snow than a nearly fully melting
+    // profile.
     const warmDM = Math.max(0, phase.meltingDegreeMetres);
     const fraction = 0.65 - 0.50 * clamp((warmDM - 150) / (1100 - 150), 0, 1);
     const surfaceAdjustment = tw > 0.8 ? 0.85 : 1;
@@ -119,21 +118,13 @@ export function estimateNewSnowStep(
     return { hourlyCm: 0, cumulativeCm: snowpack };
   }
 
-  // The graph/event callers historically pass 1 h for their first sample
-  // because there is no previous timestamp from which to derive a cadence.
-  // The precipitation value itself is nevertheless a full 3-hour amount, so
-  // using dt=1 there would undercount that first interval by a factor of three.
-  // Restrict the correction to an empty forecast-created snowpack so normal
-  // elapsed-time settling/melt behaviour is otherwise unchanged.
-  const precipDt = previousCm <= 1e-9 && Math.abs(dt - 1) < 1e-6 ? 3 : dt;
-
-  // Convert the 3-hour liquid amount to the represented precipitation interval
-  // before applying the snow ratio and snow fraction.
-  const liquidMm = Math.max(0, precipMm3h) * (precipDt / 3);
+  // precipMm3h is a 3-hour-equivalent amount. Convert it to the represented
+  // forecast interval before applying the snow ratio and snow fraction.
+  const liquidMm = Math.max(0, precipMm3h) * (dt / 3);
   const addedCm = liquidMm * slr * fraction / 10;
   snowpack += addedCm;
 
-  return { hourlyCm: addedCm / precipDt, cumulativeCm: snowpack };
+  return { hourlyCm: addedCm / dt, cumulativeCm: snowpack };
 }
 
 export function formatNewSnowCm(value: number | null): string {
