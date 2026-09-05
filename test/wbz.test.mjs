@@ -72,3 +72,30 @@ test('cold mountain profile still diagnoses snow above the atmospheric WBZ',()=>
   assert.equal(wetBulbZeroHeight(p).snowLevelM,500);
   assert.equal(terrainPrecipitationType(p,1200).key,'snow');
 });
+
+const { alignPrecipIntervals } = await import(moduleUrl('precipIntervals'));
+const { formatPrecip } = await import(moduleUrl('displayUnits'));
+const { estimateNewSnowStep } = await import(moduleUrl('snowAccum'));
+const precipUrl=moduleUrl('precip',[["'./snowLevel'",JSON.stringify(coreUrl)]]);
+const {precipMmAt}=await import(precipUrl);
+const {nextWintryEvent}=await import(moduleUrl('eventOutlook',[["'./snowLevel'",JSON.stringify(coreUrl)],["'./precip'",JSON.stringify(precipUrl)],["'./precipType'",JSON.stringify(moduleUrl('precipType'))],["'./snowAccum'",JSON.stringify(moduleUrl('snowAccum'))]]));
+test('three-hour source totals align by interval start, with no missing-value invention',()=>{
+ const h=3600000;
+ const data=alignPrecipIntervals([0,3*h,6*h],[6,null,9],[-h,0,2*h,3*h,6*h,9*h]);
+ assert.deepEqual(data.__precipMm3h,[null,6,6,null,9,null]);
+ assert.equal(precipMmAt(data,0),null);
+ assert.equal(precipMmAt(data,1),6);
+ assert.equal(formatPrecip(6,'metric'),'6 mm/3h');
+});
+test('three-hour snowfall uses the full liquid amount',()=>{
+ const phase={key:'snow',surfaceWetBulbC:-5};
+ assert.equal(estimateNewSnowStep(6,phase,0,3).cumulativeCm,9);
+});
+test('a single three-hour snow interval contributes a full interval to event totals',()=>{
+ const h=3600000;
+ const p={times:[0,3*h,6*h],forecast:{__precipMm3h:[6,0,0],
+ 'temp-850h':[-5,-5,-5],'dewpoint-850h':[-5,-5,-5],'gh-850h':[1000,1000,1000],
+ 'temp-700h':[-8,-8,-8],'dewpoint-700h':[-8,-8,-8],'gh-700h':[3000,3000,3000]}};
+ const e=nextWintryEvent(p,1000,0);
+ assert.ok(e);assert.equal(e.endTime,3*h);assert.equal(e.newSnowCm,9);
+});

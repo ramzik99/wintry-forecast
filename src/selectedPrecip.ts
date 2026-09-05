@@ -1,3 +1,4 @@
+import { alignPrecipIntervals } from './precipIntervals';
 import { getPointForecastData } from '@windy/fetch';
 
 export type SnowForecastModel = 'ecmwf';
@@ -47,6 +48,9 @@ function collectPrecipFields(value: unknown, out: Record<string, unknown>, depth
   }
 
   const object = value as Record<string, unknown>;
+  if (Array.isArray(object.ts) && Array.isArray(object.precipAmount)) {
+    out.__intervalTs=object.ts; out.__intervalPrecipMm=object.precipAmount;
+  }
   for (const [key, field] of Object.entries(object)) {
     if (isPrecipKey(key) && isNumericArrayLike(field)) out[key] = field;
   }
@@ -76,7 +80,7 @@ export async function loadSelectedPrecipFields(
   try {
     const response = await getPointForecastData(
       model,
-      { lat, lon, step: 1, days, source: 'detail' } as any,
+      { lat, lon, step: 3, days, source: 'detail' } as any,
     );
     const out: Record<string, unknown> = {};
     collectPrecipFields(response as unknown, out);
@@ -85,4 +89,12 @@ export async function loadSelectedPrecipFields(
     console.warn('Wintry forecast precipitation request failed', lat, lon, error);
     return {};
   }
+}
+
+export function alignSelectedPrecipFields(fields:Record<string,unknown>, targetTimes:number[]):Record<string,unknown>{
+  if(Array.isArray(fields.__intervalTs)&&Array.isArray(fields.__intervalPrecipMm)){
+    return alignPrecipIntervals(fields.__intervalTs as number[],fields.__intervalPrecipMm,targetTimes);
+  }
+  // Unknown time axes must not be merged by array index.
+  return {};
 }

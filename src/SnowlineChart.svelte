@@ -116,6 +116,7 @@
         <span>No wintry precipitation through +144 h.</span>
       {/if}
     </div>
+    <div class="hint">{precipPeriodLabel(point.forecast)}</div>
     <div class="hint">Atmospheric WBZ estimate; gaps are unresolved. Precipitation is required for snow.</div>
   {:else}
     <div class="empty">Wintry forecast unavailable.</div>
@@ -129,7 +130,7 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';
-  import { precipMmAt, formatPrecipMm, PRECIP_THRESHOLD_MM_H } from './precip';
+  import { precipPeriodLabel, precipMmAt, formatPrecipMm, PRECIP_THRESHOLD_MM_H } from './precip';
   import { terrainPrecipitationType, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
   import { terrainCrossingState } from './terrainCrossing';
   import { estimateNewSnowStep } from './snowAccum';
@@ -236,7 +237,7 @@
 
     const cumulativeNewSnow: number[] = []; let running = 0;
     for (let i = 0; i < p.times.length; i++) {
-      const dt = i === 0 ? 1 : Math.max(.25, Math.min(3, (p.times[i] - p.times[i - 1]) / 3600_000));
+      const dt = 3;
       running = estimateNewSnowStep(precipValues[i], phases[i], running, dt).cumulativeCm;
       cumulativeNewSnow.push(running);
     }
@@ -251,7 +252,8 @@
     const min24Snowline = minEntry ? Math.round(Number(minEntry.value) / 10) * 10 : null;
     let newSnow24h = 0;
     for (const i of windowIndices) {
-      const dt = i === currentIndex ? 1 : Math.max(.25, Math.min(3, (p.times[i] - p.times[Math.max(currentIndex, i - 1)]) / 3600_000));
+      if(p.times[i]>=end24) continue;
+      const dt = Math.min(3,(end24-p.times[i])/3600_000);
       newSnow24h = estimateNewSnowStep(precipValues[i], phases[i], newSnow24h, dt).cumulativeCm;
     }
     const currentKey = phases[currentIndex]?.key ?? null;

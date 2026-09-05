@@ -2,12 +2,13 @@ import { valueAt } from './snowLevel';
 
 /**
  * Windy's precipitation feed used by this plugin is normalized onto a 3-hour
- * accumulation-equivalent basis. Prefer the explicit past-3-hour field and
+ * accumulation-equivalent basis internally. Prefer the explicit past-3-hour field and
  * keep the returned value as a 3-hour-equivalent amount rather than presenting
  * it internally as an hourly rate.
  */
 const EXACT_KEYS = [
   'past3hprecip-surface',
+  'past1hprecip-surface',
   'precip-surface',
   'rain-surface',
   'precipitation-surface',
@@ -15,12 +16,11 @@ const EXACT_KEYS = [
   'precip',
   'rain',
   'tp',
-  'past1hprecip-surface',
 ] as const;
 
 const METRE_WATER_KEYS = new Set([
-  'past1hprecip-surface',
   'past3hprecip-surface',
+  'past1hprecip-surface',
 ]);
 
 /** Minimum normalized 3-hour-equivalent amount used for ptype diagnosis. */
@@ -93,6 +93,7 @@ function toThreeHourlyMillimetres(key: string, raw: number): number {
 
 /** Precipitation amount in millimetres per 3-hour-equivalent period. */
 export function precipMmAt(data: Record<string, unknown>, index: number): number | null {
+  if ('__precipMm3h' in data) return valueAt(data.__precipMm3h,index);
   const found = findPrecipField(data);
   if (!found) return null;
   const raw = valueAt(found.field, index);
@@ -102,6 +103,19 @@ export function precipMmAt(data: Record<string, unknown>, index: number): number
 
 export function precipFieldName(data: Record<string, unknown>): string | null {
   return findPrecipField(data)?.key ?? null;
+}
+
+/** Human-readable source period; a rate conversion does not create hourly detail. */
+export function precipPeriodLabel(data: Record<string, unknown>): string {
+  if ('__precipPeriodsH' in data) {
+    const periods=(data.__precipPeriodsH as (number|null)[]).filter(v=>v!==null);
+    return periods.length===0?'Precipitation unavailable':periods.every(v=>v===3)?'Precipitation: 3-hour totals':'Precipitation: 3-hour equivalent';
+  }
+  const key = precipFieldName(data);
+  if (key === null) return 'Precipitation unavailable';
+  return normalizedKey(key) === 'past1hprecip-surface'
+    ? 'Precipitation: 3-hour equivalent'
+    : 'Precipitation: 3-hour totals';
 }
 
 export function formatPrecipMm(mm: number): string {

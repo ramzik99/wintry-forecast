@@ -90,7 +90,7 @@ export function nextWintryEvent(
   }
 
   const startTime = event[0].time;
-  const endTime = event[event.length - 1].time;
+  const endTime = event[event.length - 1].time + 3 * 3600_000;
   let peak = event[0];
   let minSnowlineM: number | null = null;
   const phaseWeights = new Map<TerrainPrecipTypeKey, { weight: number; phase: TerrainPrecipType }>();
@@ -118,7 +118,7 @@ export function nextWintryEvent(
   for (let i = startIndex; i <= endIndex; i++) {
     const phase = diagnosedPhase(point, i, terrainM);
     const precip = precipMmAt(point.forecast, i);
-    const dt = i > startIndex ? Math.max(0.25, Math.min(6, (times[i] - times[i - 1]) / 3600_000)) : 1;
+    const dt = 3;
     snowpack = estimateNewSnowStep(precip, phase, snowpack, dt).cumulativeCm;
   }
 
