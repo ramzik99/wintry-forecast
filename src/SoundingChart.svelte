@@ -281,7 +281,7 @@
       return { y: y(nearest.heightM), label: `${level}` };
     });
     const terrainY = terrain !== null && Number.isFinite(terrain) && terrain >= bottomH && terrain <= topH ? y(terrain) : null;
-    const wbz = wetBulbZeroHeight(profile, terrain);
+    const wbz = wetBulbZeroHeight(profile);
     const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM) ? wbz.snowLevelM : null;
     const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH ? y(snowlineM) : null;
     const precip = precipMmAt(p.forecast, idx);

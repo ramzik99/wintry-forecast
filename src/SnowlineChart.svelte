@@ -31,7 +31,7 @@
         <text x="37" y="78" text-anchor="end" class="axis">{chart.midLabel}</text>
         <text x="37" y="134" text-anchor="end" class="axis">{chart.minLabel}</text>
         <path d={chart.points} class="snowline-line" />
-        {#if !chart.points.trim()}<text x="195" y="65" text-anchor="middle" class="empty-band">WBZ unresolved above map terrain</text>{/if}
+        {#if !chart.points.trim()}<text x="195" y="65" text-anchor="middle" class="empty-band">Atmospheric WBZ unresolved</text>{/if}
 
         <text x="42" y="147" class="section-label precip-title">PRECIPITATION <tspan>{units === 'imperial' ? 'in/3h' : 'mm/3h'}</tspan></text>
         <rect x="42" y="153" width="306" height="36" rx="7" class="band-bg" />
@@ -116,7 +116,7 @@
         <span>No wintry precipitation through +144 h.</span>
       {/if}
     </div>
-    <div class="hint">WBZ uses levels above map terrain; gaps are unresolved. Tap chart to select time.</div>
+    <div class="hint">Atmospheric WBZ estimate; gaps are unresolved. Precipitation is required for snow.</div>
   {:else}
     <div class="empty">Wintry forecast unavailable.</div>
   {/if}
@@ -173,7 +173,7 @@
   $: showNow = Math.abs(timestamp - realNow) > 90 * 60_000;
 
   function nearestIndex(times: number[], target: number): number { let best = 0, dist = Infinity; times.forEach((t, i) => { const d = Math.abs(t - target); if (d < dist) { dist = d; best = i; } }); return best; }
-  function snowlineAt(p: any, index: number): number | null { try { const v = wetBulbZeroHeight(buildProfile(p.forecast, index), terrainM).snowLevelM; return v !== null && Number.isFinite(v) ? v : null; } catch { return null; } }
+  function snowlineAt(p: any, index: number): number | null { try { const v = wetBulbZeroHeight(buildProfile(p.forecast, index)).snowLevelM; return v !== null && Number.isFinite(v) ? v : null; } catch { return null; } }
   function phaseAt(p: any, terrain: number | null, index: number): TerrainPrecipType | null { if (terrain === null || !Number.isFinite(terrain)) return null; const precip = precipMmAt(p.forecast, index); if (precip === null || precip < PRECIP_THRESHOLD_MM_H) return null; return terrainPrecipitationType(buildProfile(p.forecast, index), terrain); }
   function formatTooltipTime(time: number): string { return new Date(time).toLocaleString(undefined, { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
   function formatShortTime(time: number): string { return new Date(time).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }); }
