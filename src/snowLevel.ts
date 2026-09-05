@@ -17,7 +17,7 @@ export interface ProfilePoint {
 
 export interface SnowLevelResult {
   snowLevelM: number | null;
-  status: 'resolved' | 'terrain-unavailable' | 'insufficient-profile' | 'below-lowest-level' | 'no-crossing';
+  status: 'resolved' | 'insufficient-profile' | 'below-lowest-level' | 'no-crossing';
   upperBoundM?: number;
   lower?: ProfilePoint;
   upper?: ProfilePoint;
@@ -85,15 +85,12 @@ export function wetBulbFromDewpoint(
   return 0.5 * (lo + hi);
 }
 
-/** Resolve WBZ using only levels at or above Windy's local map terrain (metres ASL).
- * This does not downscale the atmospheric profile or replace a model-surface mask.
+/** Atmospheric WBZ estimate, retained for comparison with local map terrain.
+ * A crossing below local terrain is a model-profile diagnostic, not local air.
  */
-export function wetBulbZeroHeight(profile: ProfilePoint[], terrainM: number | null): SnowLevelResult {
-  if (terrainM === null || !Number.isFinite(terrainM)) {
-    return { snowLevelM: null, status: 'terrain-unavailable' };
-  }
+export function wetBulbZeroHeight(profile: ProfilePoint[]): SnowLevelResult {
   const p = profile
-    .filter(v => Number.isFinite(v.heightM) && Number.isFinite(v.wetBulbC) && v.heightM >= terrainM)
+    .filter(v => Number.isFinite(v.heightM) && Number.isFinite(v.wetBulbC))
     .sort((a, b) => a.heightM - b.heightM);
 
   if (!p.length) return { snowLevelM: null, status: 'insufficient-profile' };

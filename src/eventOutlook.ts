@@ -97,7 +97,7 @@ export function nextWintryEvent(
 
   for (const step of event) {
     if (step.precip > peak.precip) peak = step;
-    const snowline = wetBulbZeroHeight(buildProfile(point.forecast, step.index), terrainM).snowLevelM;
+    const snowline = wetBulbZeroHeight(buildProfile(point.forecast, step.index)).snowLevelM;
     if (snowline !== null && Number.isFinite(snowline)) minSnowlineM = minSnowlineM === null ? snowline : Math.min(minSnowlineM, snowline);
     const current = phaseWeights.get(step.phase.key);
     phaseWeights.set(step.phase.key, { weight: (current?.weight ?? 0) + Math.max(step.precip, PRECIP_THRESHOLD_MM_H), phase: current?.phase ?? step.phase });

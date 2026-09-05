@@ -1,26 +1,23 @@
-# WBZ above local map terrain
+# Atmospheric snowline and map-terrain hatching
 
-The WBZ calculation uses Windy's elevation lookup at each requested coordinate,
-in metres above sea level. It excludes pressure-level heights below that local
-map elevation before finding the first warm-to-cold wet-bulb zero crossing.
-This applies to contour sample points as well as selected locations, forecast
-charts, event minima and sounding WBZ markers. Elevation requests are cached.
+The atmospheric wet-bulb zero crossing remains available for comparison with
+Windy's local map elevation, including when that elevation is above the crossing.
+No local-terrain cutoff is applied to the atmospheric WBZ search. Crossings below
+terrain are model-profile diagnostics, not observations of air inside a mountain.
+This is not a model-surface mask or a downscaling of model meteorology.
 
-A cold lowest retained level is not an exact WBZ height. Such a profile returns
-an unresolved result, with the lowest retained height as a bound. Missing terrain,
-insufficient levels and absence of a crossing also return no numeric WBZ. Forecast
-lines break at these times; no terrain-crossing time is inferred across a gap.
-Event minima use only resolved values and can therefore miss the actual minimum.
+Diagonal hatching marks positive terrain-minus-WBZ on the viewport sampling grid.
+Each cell is split into triangles; the positive region is interpolated and clipped
+before drawing diagonal strokes. Missing terrain or unresolved WBZ leaves a gap.
+Hatching updates with the forecast time and viewport and is removed with contours.
+It is not gated by precipitation: the legend explicitly says precipitation is
+required. Existing precipitation-type and snow-amount calculations remain separate.
 
-This is a **local map-terrain cutoff**, not a model-surface-pressure mask.
-It does not downscale ECMWF temperature or humidity, correct model orography,
-or establish conditions in an unresolved near-surface layer. Map elevation is
-itself a gridded estimate. In a valley below model terrain, a level above map
-terrain might still be below the model surface. Precipitation-type and estimated
-snow-amount calculations retain their existing methods. WBZ is a thermal proxy,
-not an exact observed snowfall limit.
+The viewport grid cannot resolve every ridge or valley. Hatching is an approximate
+sampled comparison, not a high-resolution terrain mask. A cold lowest profile level
+returns an unresolved WBZ with a bound, never a fabricated exact height. Such
+profiles still allow precipitation-type display but do not generate numeric contours
+or hatching. Temporal gaps remain disconnected.
 
-Validation: `npm test`, then `npm run build` (Linux) or run Rollup with
-`SERVE=false` (Windows). Before release, inspect a lowland, mountain and
-below-sea-level location inside Windy, including a cold unresolved profile,
-terrain-lookup failure, timeline changes, contours and the sounding panel.
+Run npm test and the production build. A live Windy visual check remains necessary
+before release, including map navigation, timeline changes, mountains and dry areas.
