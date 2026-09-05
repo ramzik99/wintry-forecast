@@ -281,7 +281,7 @@
       return { y: y(nearest.heightM), label: `${level}` };
     });
     const terrainY = terrain !== null && Number.isFinite(terrain) && terrain >= bottomH && terrain <= topH ? y(terrain) : null;
-    const wbz = wetBulbZeroHeight(profile);
+    const wbz = wetBulbZeroHeight(profile, terrain);
     const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM) ? wbz.snowLevelM : null;
     const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH ? y(snowlineM) : null;
     const precip = precipMmAt(p.forecast, idx);
@@ -291,7 +291,7 @@
     return {
       tempPoints, dewPoints, wetBulbPoints, nodes, tempGrid, pressureGrid, terrainY, snowlineY,
       surfaceTw: diagnostics ? `${diagnostics.extrapolated ? '~' : ''}${formatTemperature(diagnostics.wetBulbC,units)}` : '—',
-      snowline: formatElevation(snowlineM,units),
+      snowline: snowlineM === null ? 'WBZ unresolved' : formatElevation(snowlineM,units),
       warmEnergy: phase ? `${Math.round(phase.meltingDegreeMetres)} °C·m` : '—',
       coldEnergy: phase ? `${Math.round(phase.refreezingDegreeMetres)} °C·m` : '—',
       phaseLabel: phase ? `${phase.icon} ${phase.label}` : 'Dry',

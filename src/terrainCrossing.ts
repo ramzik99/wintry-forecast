@@ -8,9 +8,9 @@ export type CrossingState = {
   direction: 'below' | 'above' | 'none';
 };
 
-function snowlineAt(point: any, index: number): number | null {
+function snowlineAt(point: any, index: number, terrainM: number): number | null {
   try {
-    const result = wetBulbZeroHeight(buildProfile(point.forecast, index));
+    const result = wetBulbZeroHeight(buildProfile(point.forecast, index), terrainM);
     return result.snowLevelM !== null && Number.isFinite(result.snowLevelM) ? result.snowLevelM : null;
   } catch {
     return null;
@@ -59,16 +59,19 @@ export function terrainCrossingState(point: any, terrainM: number | null, target
     }
   });
 
-  const current = snowlineAt(point, startIndex);
-  if (current === null) return null;
+  const current = snowlineAt(point, startIndex, terrainM);
+  const unresolved: CrossingState = { summary: 'Terrain crossing unresolved',
+    detail: 'The above-map-terrain profile does not resolve WBZ at every required time; no crossing time is inferred across gaps.',
+    crossingIndex: null, crossingTime: null, direction: 'none' };
+  if (current === null) return unresolved;
   const currentBelowTerrain = current <= terrainM;
 
   let previousIndex = startIndex;
   let previousValue = current;
 
   for (let i = startIndex + 1; i < point.times.length; i++) {
-    const value = snowlineAt(point, i);
-    if (value === null) continue;
+    const value = snowlineAt(point, i, terrainM);
+    if (value === null) return unresolved;
 
     const belowTerrain = value <= terrainM;
     if (belowTerrain !== currentBelowTerrain) {

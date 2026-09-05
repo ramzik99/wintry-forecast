@@ -17,6 +17,8 @@ export interface ProfilePoint {
 
 export interface SnowLevelResult {
   snowLevelM: number | null;
+  status: 'resolved' | 'terrain-unavailable' | 'insufficient-profile' | 'below-lowest-level' | 'no-crossing';
+  upperBoundM?: number;
   lower?: ProfilePoint;
   upper?: ProfilePoint;
   belowLowestLevel?: boolean;
@@ -83,29 +85,34 @@ export function wetBulbFromDewpoint(
   return 0.5 * (lo + hi);
 }
 
-export function wetBulbZeroHeight(profile: ProfilePoint[]): SnowLevelResult {
+/** Resolve WBZ using only levels at or above Windy's local map terrain (metres ASL).
+ * This does not downscale the atmospheric profile or replace a model-surface mask.
+ */
+export function wetBulbZeroHeight(profile: ProfilePoint[], terrainM: number | null): SnowLevelResult {
+  if (terrainM === null || !Number.isFinite(terrainM)) {
+    return { snowLevelM: null, status: 'terrain-unavailable' };
+  }
   const p = profile
-    .filter(v => Number.isFinite(v.heightM) && Number.isFinite(v.wetBulbC))
+    .filter(v => Number.isFinite(v.heightM) && Number.isFinite(v.wetBulbC) && v.heightM >= terrainM)
     .sort((a, b) => a.heightM - b.heightM);
 
-  if (p.length < 2) return { snowLevelM: null };
-
-  // If the lowest resolved atmospheric level is already <= 0 C wet bulb,
-  // the true WBZ lies at or below that level. Do not pretend we know exactly.
-  if (p[0].wetBulbC <= 0) {
-    return {
-      snowLevelM: p[0].heightM,
-      lower: p[0],
-      upper: p[0],
-      belowLowestLevel: true,
-    };
+  if (!p.length) return { snowLevelM: null, status: 'insufficient-profile' };
+  if (p[0].wetBulbC === 0) {
+    return { snowLevelM: p[0].heightM, status: 'resolved', lower: p[0], upper: p[0] };
   }
+  // A cold lowest level does not resolve the lower crossing. It may be between
+  // terrain and that level, below terrain, or absent from an entirely cold column.
+  if (p[0].wetBulbC < 0) {
+    return { snowLevelM: null, status: 'below-lowest-level',
+      upperBoundM: p[0].heightM, belowLowestLevel: true };
+  }
+  if (p.length < 2) return { snowLevelM: null, status: 'insufficient-profile' };
 
   for (let i = 0; i < p.length - 1; i++) {
     const lower = p[i];
     const upper = p[i + 1];
 
-    if (lower.wetBulbC > 0 && upper.wetBulbC <= 0) {
+    if (upper.heightM > lower.heightM && lower.wetBulbC > 0 && upper.wetBulbC <= 0) {
       const fraction =
         (0 - lower.wetBulbC) /
         (upper.wetBulbC - lower.wetBulbC);
@@ -117,11 +124,12 @@ export function wetBulbZeroHeight(profile: ProfilePoint[]): SnowLevelResult {
         lower,
         upper,
         belowLowestLevel: false,
+        status: 'resolved',
       };
     }
   }
 
-  return { snowLevelM: null };
+  return { snowLevelM: null, status: 'no-crossing' };
 }
 
 export function buildProfile(

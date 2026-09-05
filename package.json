@@ -7,7 +7,8 @@
   "scripts": {
     "build": "rm -rf dist && mkdir dist && SERVE=false rollup -c && cp package.json dist/",
     "build:win": "rmdir /s /q dist && mkdir dist && set SERVE=false && rollup -c && copy package.json dist\\",
-    "start": "rollup -w -c"
+    "start": "rollup -w -c",
+    "test": "node --test test/*.test.mjs"
   },
   "keywords": [
     "windy",
