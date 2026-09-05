@@ -11,7 +11,7 @@
       </div>
     </div>
 
-    <div class="hatch-legend"><span>╱╱╱</span> Terrain above estimated snowline · does not indicate precipitation</div>
+    <div class="hatch-legend"><span>╱╱╱</span> Terrain above estimated snowline</div>
     <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
     <V21Panel bind:unitSystem {activeRunTime} on:select={handleV21Select} />
 
