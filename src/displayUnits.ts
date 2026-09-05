@@ -34,11 +34,12 @@ export function formatSnow(cm: number | null, units: UnitSystem): string {
 
 export function formatPrecip(mm3h: number | null, units: UnitSystem): string {
   if (mm3h === null || !Number.isFinite(mm3h)) return '—';
+  const hourly = mm3h;
   if (units === 'imperial') {
-    const value = mmToInches(mm3h);
+    const value = mmToInches(hourly);
     return `${value < 0.1 ? value.toFixed(2) : value.toFixed(1)} in/3h`;
   }
-  return `${mm3h < 10 ? mm3h.toFixed(1).replace(/\.0$/, '') : Math.round(mm3h)} mm/3h`;
+  return `${hourly < 10 ? hourly.toFixed(2).replace(/\.?0+$/, '') : Math.round(hourly)} mm/3h`;
 }
 
 export function formatTemperature(c: number | null, units: UnitSystem, digits = 1): string {
