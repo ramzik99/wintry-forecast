@@ -10,7 +10,7 @@ Diagonal hatching marks positive terrain-minus-WBZ on the viewport sampling grid
 Each cell is split into triangles; the positive region is interpolated and clipped
 before drawing diagonal strokes. Missing terrain or unresolved WBZ leaves a gap.
 Hatching updates with the forecast time and viewport and is removed with contours.
-It is not gated by precipitation: the legend explicitly says hatching does not indicate precipitation. Existing precipitation-type and snow-amount calculations remain separate.
+Hatching is not gated by precipitation. Existing precipitation-type and snow-amount calculations remain separate.
 
 The viewport grid cannot resolve every ridge or valley. Hatching is an approximate
 sampled comparison, not a high-resolution terrain mask. A cold lowest profile level
