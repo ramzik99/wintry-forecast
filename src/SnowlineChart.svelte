@@ -30,7 +30,8 @@
         <text x="37" y="22" text-anchor="end" class="axis">{chart.maxLabel}</text>
         <text x="37" y="78" text-anchor="end" class="axis">{chart.midLabel}</text>
         <text x="37" y="134" text-anchor="end" class="axis">{chart.minLabel}</text>
-        <polyline points={chart.points} class="snowline-line" />
+        <path d={chart.points} class="snowline-line" />
+        {#if !chart.points.trim()}<text x="195" y="65" text-anchor="middle" class="empty-band">WBZ unresolved above map terrain</text>{/if}
 
         <text x="42" y="147" class="section-label precip-title">PRECIPITATION <tspan>{units === 'imperial' ? 'in/3h' : 'mm/3h'}</tspan></text>
         <rect x="42" y="153" width="306" height="36" rx="7" class="band-bg" />
@@ -86,7 +87,7 @@
           <b>{tooltip.timeLabel}</b>
           {#if tooltip.phase}<strong class={`text-${tooltip.phase.key}`}><i class={`tip-phase-dot phase-${tooltip.phase.key}`}></i>{tooltip.phase.label}</strong>{/if}
           <div class="tip-grid">
-            <span>SL <b>{formatElevation(tooltip.snowline, units)}</b></span>
+            <span>SL <b>{tooltip.snowline === null ? 'Unresolved' : formatElevation(tooltip.snowline, units)}</b></span>
             <span>Precip <b>{formatPrecip(tooltip.precip, units)}</b></span>
             <span>New snow <b>{formatSnow(tooltip.newSnow, units)}</b></span>
             {#if terrainM !== null}<span>Terrain <b>{formatElevation(terrainM, units)}</b></span>{/if}
@@ -101,7 +102,7 @@
         {#if chart.currentPosition}<strong>{chart.currentPosition}</strong>{/if}
       </div>
       <div class="metrics">
-        <span><small>Snowline</small><b>{formatElevation(chart.currentSnowline, units)}</b></span>
+        <span><small>Snowline</small><b>{chart.currentSnowline === null ? 'WBZ unresolved' : formatElevation(chart.currentSnowline, units)}</b></span>
         <span><small>Precip</small><b>{formatPrecip(chart.currentPrecip, units)}</b></span>
       </div>
     </div>
@@ -115,7 +116,7 @@
         <span>No wintry precipitation through +144 h.</span>
       {/if}
     </div>
-    <div class="hint">Tap chart to select time · Sounding follows selection</div>
+    <div class="hint">WBZ uses levels above map terrain; gaps are unresolved. Tap chart to select time.</div>
   {:else}
     <div class="empty">Wintry forecast unavailable.</div>
   {/if}
@@ -172,7 +173,7 @@
   $: showNow = Math.abs(timestamp - realNow) > 90 * 60_000;
 
   function nearestIndex(times: number[], target: number): number { let best = 0, dist = Infinity; times.forEach((t, i) => { const d = Math.abs(t - target); if (d < dist) { dist = d; best = i; } }); return best; }
-  function snowlineAt(p: any, index: number): number | null { try { const v = wetBulbZeroHeight(buildProfile(p.forecast, index)).snowLevelM; return v !== null && Number.isFinite(v) ? v : null; } catch { return null; } }
+  function snowlineAt(p: any, index: number): number | null { try { const v = wetBulbZeroHeight(buildProfile(p.forecast, index), terrainM).snowLevelM; return v !== null && Number.isFinite(v) ? v : null; } catch { return null; } }
   function phaseAt(p: any, terrain: number | null, index: number): TerrainPrecipType | null { if (terrain === null || !Number.isFinite(terrain)) return null; const precip = precipMmAt(p.forecast, index); if (precip === null || precip < PRECIP_THRESHOLD_MM_H) return null; return terrainPrecipitationType(buildProfile(p.forecast, index), terrain); }
   function formatTooltipTime(time: number): string { return new Date(time).toLocaleString(undefined, { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
   function formatShortTime(time: number): string { return new Date(time).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }); }
@@ -218,12 +219,15 @@
 
   function buildChart(p: any, terrain: number | null, target: number, crossingTime: number | null, now: number): ChartData | null {
     if (!p?.times?.length) return null;
-    const entries = p.times.map((time: number, i: number) => ({ time, value: snowlineAt(p, i) })).filter((v: any) => v.value !== null && Number.isFinite(v.value)); if (entries.length < 2) return null;
-    const snow = entries.map((v: any) => Number(v.value)), scaleValues = terrain !== null && Number.isFinite(terrain) ? [...snow, terrain] : snow;
+    const samples = p.times.map((time: number, i: number) => ({ time, value: snowlineAt(p, i) }));
+    const entries = samples.filter((v: any) => v.value !== null && Number.isFinite(v.value));
+    const snow = entries.map((v: any) => Number(v.value)), scaleValues = terrain !== null && Number.isFinite(terrain) ? [...snow, terrain] : snow.length ? snow : [0];
     let min = Math.floor((Math.min(...scaleValues) - 150) / 100) * 100, max = Math.ceil((Math.max(...scaleValues) + 150) / 100) * 100; if (max - min < 600) { const mid = (min + max) / 2; min = Math.floor((mid - 300) / 100) * 100; max = Math.ceil((mid + 300) / 100) * 100; }
     const left = 42, right = 348, top = 18, bottom = 130, t0 = p.times[0], t1 = p.times[p.times.length - 1];
     const x = (t: number) => left + (t - t0) / Math.max(1, t1 - t0) * (right - left), y = (v: number) => bottom - (v - min) / Math.max(1, max - min) * (bottom - top);
-    const points = entries.map((v: any) => `${x(v.time).toFixed(1)},${y(v.value).toFixed(1)}`).join(' '), currentIndex = nearestIndex(p.times, target), currentValue = snowlineAt(p, currentIndex), currentTime = p.times[currentIndex];
+    let connected=false;
+    const points=samples.map((v:any)=>{if(v.value===null){connected=false;return ''}const command=connected?'L':'M';connected=true;return `${command}${x(v.time).toFixed(1)},${y(v.value).toFixed(1)}`}).join(' ');
+    const currentIndex = nearestIndex(p.times, target), currentValue = snowlineAt(p, currentIndex), currentTime = p.times[currentIndex];
     const currentTerrainDifference = currentValue !== null && terrain !== null ? Math.round((terrain - currentValue) / 10) * 10 : null;
     const precipValues = p.times.map((_: number, i: number) => precipMmAt(p.forecast, i)), validPrecip = precipValues.filter((v: number | null): v is number => v !== null && Number.isFinite(v)), precipMax = validPrecip.length ? Math.max(PRECIP_THRESHOLD_MM_H, ...validPrecip) : 0;
     const spacing = (right - left) / Math.max(1, p.times.length - 1), barWidth = Math.max(1.1, Math.min(4.5, spacing * .78));
@@ -303,8 +307,8 @@
       ctx.drawImage(img, 45, 155, 1110, 1030); URL.revokeObjectURL(url);
       let y = 1217; ctx.fillStyle = '#ffffff'; ctx.font = '700 29px Arial'; ctx.fillText(chart.currentPhase ? `${chart.currentPhase.label}${chart.currentPhase.confidence === 'low' ? ' ~' : ''}` : 'Dry', 52, y);
       y += 34; ctx.fillStyle = '#b8c8d1'; ctx.font = '22px Arial';
-      ctx.fillText(`Snowline ${formatElevation(chart.currentSnowline, units)}   ·   Precip ${formatPrecip(chart.currentPrecip, units)}`, 52, y);
-      y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min snowline ${formatElevation(chart.min24Snowline, units)} · new snow ${formatSnow(chart.newSnow24h, units)}`, 52, y);
+      ctx.fillText(`Snowline ${chart.currentSnowline === null ? 'WBZ unresolved' : formatElevation(chart.currentSnowline, units)}   ·   Precip ${formatPrecip(chart.currentPrecip, units)}`, 52, y);
+      y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min resolved snowline ${formatElevation(chart.min24Snowline, units)} · new snow ${formatSnow(chart.newSnow24h, units)}`, 52, y);
       if (chart.nextChangeLabel) { y += 30; ctx.fillStyle = '#e5cf7c'; ctx.font = '700 20px Arial'; ctx.fillText(chart.nextChangeLabel, 52, y); }
       y += 30; ctx.fillStyle = '#8799a4'; ctx.font = '18px Arial'; ctx.fillText('New snow is a terrain-aware forecast estimate from precipitation type and wet-bulb profile; it is not total pre-existing snowpack.', 52, y);
       const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(v => v ? resolve(v) : reject(new Error('PNG failed')), 'image/png'));
