@@ -94,7 +94,7 @@
   ];
 
   function contourIntervalForZoom(){const z=Number(map.getZoom?.()??6);return z<=4?500:z<=7?200:100}
-  function hexToRgb(hex:string):[number,number,number]{const v=hex.replace('#','');return[parseInt(v.slice(0,2),16),parseInt(v.slice(2,4),16)] as any}
+  function hexToRgb(hex:string):[number,number,number]{const v=hex.replace('#','');return[parseInt(v.slice(0,2),16),parseInt(v.slice(2,4),16),parseInt(v.slice(4,6),16)]}
   function rgbToHex(r:number,g:number,b:number){const p=(v:number)=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0');return`#${p(r)}${p(g)}${p(b)}`}
   function colorForLevel(level:number){if(level<=COLOUR_STOPS[0].value)return COLOUR_STOPS[0].color;if(level>=COLOUR_STOPS.at(-1)!.value)return COLOUR_STOPS.at(-1)!.color;for(let i=0;i<COLOUR_STOPS.length-1;i++){const a=COLOUR_STOPS[i],b=COLOUR_STOPS[i+1];if(level<a.value||level>b.value)continue;const f=(level-a.value)/(b.value-a.value),x=hexToRgb(a.color),y=hexToRgb(b.color);return rgbToHex(x[0]+(y[0]-x[0])*f,x[1]+(y[1]-x[1])*f,x[2]+(y[2]-x[2])*f)}return'#fff'}
   function getStoreTimestamp(){try{const t=store.get('timestamp');if(typeof t==='number'&&Number.isFinite(t))return t}catch{}return Date.now()}
