@@ -22,7 +22,13 @@ export interface SnowLevelResult {
   lower?: ProfilePoint;
   upper?: ProfilePoint;
   belowLowestLevel?: boolean;
+  extrapolated?: boolean;
 }
+
+const DEFAULT_COLD_COLUMN_LAPSE_C_PER_M = -0.006;
+const MIN_COLD_COLUMN_GRADIENT_C_PER_M = -0.012;
+const MAX_COLD_COLUMN_GRADIENT_C_PER_M = -0.001;
+const MAX_COLD_COLUMN_EXTRAPOLATION_M = 4000;
 
 /** Magnus saturation vapour pressure, hPa. */
 function saturationVapourPressure(tempC: number): number {
@@ -85,6 +91,35 @@ export function wetBulbFromDewpoint(
   return 0.5 * (lo + hi);
 }
 
+/**
+ * Keep the operational snowline field continuous when every resolved level is
+ * already below 0 C wet-bulb temperature. The physical result is still
+ * "below the lowest resolved level"; this finite value is a bounded downward
+ * extrapolation for mapping, interpolation and terrain comparisons.
+ */
+function coldColumnSnowLevel(profile: ProfilePoint[]): number {
+  const lowest = profile[0];
+  let gradient = DEFAULT_COLD_COLUMN_LAPSE_C_PER_M;
+
+  for (let i = 1; i < profile.length; i++) {
+    const dz = profile[i].heightM - lowest.heightM;
+    if (dz <= 50) continue;
+    const candidate = (profile[i].wetBulbC - lowest.wetBulbC) / dz;
+    if (
+      Number.isFinite(candidate) &&
+      candidate >= MIN_COLD_COLUMN_GRADIENT_C_PER_M &&
+      candidate <= MAX_COLD_COLUMN_GRADIENT_C_PER_M
+    ) {
+      gradient = candidate;
+      break;
+    }
+  }
+
+  const rawDz = (0 - lowest.wetBulbC) / gradient;
+  const dz = Math.max(-MAX_COLD_COLUMN_EXTRAPOLATION_M, Math.min(-1, rawDz));
+  return lowest.heightM + dz;
+}
+
 /** Atmospheric WBZ estimate, retained for comparison with local map terrain.
  * A crossing below local terrain is a model-profile diagnostic, not local air.
  */
@@ -97,11 +132,17 @@ export function wetBulbZeroHeight(profile: ProfilePoint[]): SnowLevelResult {
   if (p[0].wetBulbC === 0) {
     return { snowLevelM: p[0].heightM, status: 'resolved', lower: p[0], upper: p[0] };
   }
-  // A cold lowest level does not resolve the lower crossing. It may be between
-  // terrain and that level, below terrain, or absent from an entirely cold column.
+  // In an already-cold lowest level the true WBZ is below the resolved
+  // profile. Retain that status, but provide a bounded operational estimate so
+  // the map, chart and terrain comparison do not develop artificial gaps.
   if (p[0].wetBulbC < 0) {
-    return { snowLevelM: null, status: 'below-lowest-level',
-      upperBoundM: p[0].heightM, belowLowestLevel: true };
+    return {
+      snowLevelM: coldColumnSnowLevel(p),
+      status: 'below-lowest-level',
+      upperBoundM: p[0].heightM,
+      belowLowestLevel: true,
+      extrapolated: true,
+    };
   }
   if (p.length < 2) return { snowLevelM: null, status: 'insufficient-profile' };
 

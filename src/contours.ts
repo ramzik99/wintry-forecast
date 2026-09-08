@@ -8,6 +8,87 @@ export type LatLon = [number, number];
 export type ContourSegment = [LatLon, LatLon];
 export type ContourPolyline = LatLon[];
 
+type IndexedGridPoint = GridPoint & { r: number; c: number };
+
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : 0.5 * (sorted[mid - 1] + sorted[mid]);
+}
+
+function reconstructAxis(known: Array<{ index: number; value: number }>, length: number): number[] {
+  if (!known.length) return Array.from({ length }, (_, i) => i);
+  if (known.length === 1) return Array.from({ length }, () => known[0].value);
+
+  const ordered = [...known].sort((a, b) => a.index - b.index);
+  const slopes: number[] = [];
+  for (let i = 1; i < ordered.length; i++) {
+    const di = ordered[i].index - ordered[i - 1].index;
+    if (di > 0) slopes.push((ordered[i].value - ordered[i - 1].value) / di);
+  }
+  const step = median(slopes);
+  const anchor = ordered[Math.floor(ordered.length / 2)];
+  return Array.from({ length }, (_, i) => anchor.value + (i - anchor.index) * step);
+}
+
+/**
+ * Contours are a visual interpolation of a regularly sampled viewport field.
+ * A single failed profile request must not punch a four-cell hole in marching
+ * squares. Reconstruct missing grid geometry and fill missing values from the
+ * nearest available samples in grid space. The raw point data remain untouched.
+ */
+function continuousContourGrid(grid: GridPoint[][]): GridPoint[][] {
+  const rows = grid.length;
+  const cols = grid[0]?.length ?? 0;
+  if (!rows || !cols) return grid;
+
+  const valid: IndexedGridPoint[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const p = grid[r][c];
+      if (p && p.value !== null && Number.isFinite(p.value)) valid.push({ ...p, r, c });
+    }
+  }
+  if (!valid.length) return grid;
+
+  const rowLatKnown: Array<{ index: number; value: number }> = [];
+  for (let r = 0; r < rows; r++) {
+    const latitudes = valid.filter(p => p.r === r).map(p => p.lat).filter(Number.isFinite);
+    if (latitudes.length) rowLatKnown.push({ index: r, value: latitudes.reduce((a, b) => a + b, 0) / latitudes.length });
+  }
+  const colLonKnown: Array<{ index: number; value: number }> = [];
+  for (let c = 0; c < cols; c++) {
+    const longitudes = valid.filter(p => p.c === c).map(p => p.lon).filter(Number.isFinite);
+    if (longitudes.length) colLonKnown.push({ index: c, value: longitudes.reduce((a, b) => a + b, 0) / longitudes.length });
+  }
+
+  const rowLat = reconstructAxis(rowLatKnown, rows);
+  const colLon = reconstructAxis(colLonKnown, cols);
+
+  return grid.map((row, r) => row.map((p, c) => {
+    if (p.value !== null && Number.isFinite(p.value)) return p;
+
+    const neighbours = valid
+      .map(v => ({ v, d2: (v.r - r) ** 2 + (v.c - c) ** 2 }))
+      .sort((a, b) => a.d2 - b.d2)
+      .slice(0, 8);
+    let weighted = 0;
+    let weights = 0;
+    for (const item of neighbours) {
+      const weight = 1 / Math.max(0.25, item.d2);
+      weighted += (item.v.value as number) * weight;
+      weights += weight;
+    }
+
+    return {
+      lat: Number.isFinite(p.lat) && (p.lat !== 0 || rowLat[r] === 0) ? p.lat : rowLat[r],
+      lon: Number.isFinite(p.lon) && (p.lon !== 0 || colLon[c] === 0) ? p.lon : colLon[c],
+      value: weights > 0 ? weighted / weights : null,
+    };
+  }));
+}
+
 function interp(
   p1: LatLon,
   p2: LatLon,
@@ -38,13 +119,14 @@ export function contourSegments(
   level: number
 ): ContourSegment[] {
   const out: ContourSegment[] = [];
+  const source = continuousContourGrid(grid);
 
-  for (let r = 0; r < grid.length - 1; r++) {
-    for (let c = 0; c < grid[r].length - 1; c++) {
-      const sw = grid[r][c];
-      const se = grid[r][c + 1];
-      const nw = grid[r + 1][c];
-      const ne = grid[r + 1][c + 1];
+  for (let r = 0; r < source.length - 1; r++) {
+    for (let c = 0; c < source[r].length - 1; c++) {
+      const sw = source[r][c];
+      const se = source[r][c + 1];
+      const nw = source[r + 1][c];
+      const ne = source[r + 1][c + 1];
 
       if (
         sw.value === null ||
