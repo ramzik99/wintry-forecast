@@ -6,9 +6,13 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**300.0.0**
+**300.0.1**
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+
+### 300.0.1 automatic search
+
+Search starts after three characters and a 450 ms typing pause. Photon provides suggestions; outdated requests are cancelled and repeat queries cached. Saved places appear only inside Saved, with all saved entries available in a scrolling list.
 
 ### 300.0.0 compact controls
 
@@ -133,7 +137,7 @@ The panel includes:
 
 Saved places are stored locally in the browser/app environment; the first three are available as one-tap shortcuts.
 
-Search and user-requested reverse lookups share a paced client queue and in-memory cache. The public service prohibits autocomplete and applies a one-request-per-second limit to the whole application, not each user. A distributed deployment needs a shared rate-limited proxy or an appropriate provider before aggregate traffic exceeds that limit. See the [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/). Client pacing alone does not enforce an application-wide limit.
+Automatic place search uses [Photon](https://github.com/komoot/photon), which supports search-as-you-type. Its public endpoint permits reasonable use without an availability guarantee; a larger deployment should use a dedicated instance. User-requested reverse lookups use a paced Nominatim client queue and in-memory cache. The public service prohibits autocomplete and applies a one-request-per-second limit to the whole application, not each user. A distributed deployment needs a shared rate-limited proxy or an appropriate provider before aggregate traffic exceeds that limit. See the [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/). Client pacing alone does not enforce an application-wide limit.
 
 ## Contour generation and performance
 
