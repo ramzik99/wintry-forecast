@@ -26,9 +26,21 @@ test('WBZ remains below local mountain terrain for a snow comparison', () => {
 test('valid terrain below sea level is retained', () => {
   assert.equal(wetBulbZeroHeight([point(-300,2),point(100,-2)]).snowLevelM,-100);
 });
-test('an exact zero level is resolved, while an already cold column is not', () => {
+test('an exact zero level resolves and an already cold column stays finite below the profile', () => {
   assert.equal(wetBulbZeroHeight([point(800,0)]).snowLevelM,800);
-  assert.equal(wetBulbZeroHeight([point(800,-1),point(1800,-5)]).snowLevelM,null);
+  const cold=wetBulbZeroHeight([point(800,-1),point(1800,-5)]);
+  assert.equal(cold.status,'below-lowest-level');
+  assert.equal(cold.snowLevelM,550);
+  assert.equal(cold.upperBoundM,800);
+  assert.equal(cold.extrapolated,true);
+});
+test('cold-column fallback remains finite with a shallow or inverted resolved gradient', () => {
+  const shallow=wetBulbZeroHeight([point(100,-2),point(1100,-2.2)]);
+  const inversion=wetBulbZeroHeight([point(100,-2),point(1100,-1)]);
+  assert.ok(Number.isFinite(shallow.snowLevelM));
+  assert.ok(Number.isFinite(inversion.snowLevelM));
+  assert.ok(shallow.snowLevelM < 100);
+  assert.ok(inversion.snowLevelM < 100);
 });
 test('missing, warm-only and duplicate-height profiles produce no fabricated WBZ', () => {
   assert.equal(wetBulbZeroHeight([]).status,'insufficient-profile');
@@ -43,12 +55,13 @@ test('raw forecast heights stay in metres and feed the terrain-aware calculation
   assert.equal(wetBulbZeroHeight(profile).snowLevelM,2250);
   assert.equal(wetBulbZeroHeight(profile).snowLevelM,2250);
 });
-test('terrain timing cannot bridge an unresolved forecast interval', () => {
+test('terrain timing stays continuous through a fully cold forecast interval', () => {
   const p={times:[0,3600000,7200000],forecast:{
     'temp-850h':[2,-2,2], 'dewpoint-850h':[2,-2,2], 'gh-850h':[1000,1000,1000],
     'temp-700h':[-2,-4,-2], 'dewpoint-700h':[-2,-4,-2], 'gh-700h':[2000,2000,2000]}};
   const r=terrainCrossingState(p,800,0);
-  assert.equal(r.summary,'Terrain crossing unresolved'); assert.equal(r.crossingTime,null);
+  assert.equal(r.direction,'below');
+  assert.ok(r.crossingTime !== null);
 });
 
 const { terrainHatchSegments } = await import(moduleUrl('terrainHatching'));
