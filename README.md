@@ -6,9 +6,15 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**200.0.13**
+**300.0.0**
 
-v200 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+
+### 300.0.0 compact controls
+
+- Smaller main panel with a single-row forecast toolbar and quick saved-place shortcuts.
+- Clear appears only when needed; search, location, units and refresh remain directly accessible.
+- Preserves the −500 m contour floor, raw cold-column diagnostics and missing-data safeguards.
 
 ### 200.0.13 convenience and reliability
 

@@ -9,6 +9,7 @@
         on:focus={() => { if (visibleResults.length || favourites.length) open = true; }}
         aria-label="Search places"
         placeholder="Search place…"
+        title="Search a place, use your location, or tap the map"
         autocomplete="off"
         spellcheck="false"
       />
@@ -17,7 +18,7 @@
       </button>
     </div>
 
-    <div class="utility-row">
+    <div class="utility-row" class:has-clear={query || open || hasSelection}>
       <button class="location-button" class:busy={locating} type="button" aria-label="Use current location" title="Use current location" on:click={useCurrentLocation} disabled={locating}>
         <span class="location-icon">⌖</span>
         <span>{locating ? 'Locating…' : 'My location'}</span>
@@ -25,9 +26,11 @@
       <button class="fav-button" class:active={showFavourites} type="button" aria-label="Show saved places" title="Saved places" on:click={toggleFavourites}>
         <span>★</span><span>Saved</span>
       </button>
-      <button class="clear-button" type="button" aria-label="Clear search and selected place" title="Clear" on:click={clearSearch} disabled={!query && !open && !hasSelection}>
-        <span>×</span><span>Clear</span>
+      {#if query || open || hasSelection}
+      <button class="clear-button" type="button" aria-label="Clear search and selected place" title="Clear" on:click={clearSearch}>
+        <span aria-hidden="true">×</span>
       </button>
+      {/if}
     </div>
   </form>
 
@@ -307,7 +310,7 @@
 </script>
 
 <style lang="less">
-  .place-search { position: relative; margin-top: 9px; }
+  .place-search { position: relative; margin-top: 5px; }
   form { display: flex; flex-direction: column; gap: 5px; }
 
   .search-line { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 5px; }
@@ -319,7 +322,7 @@
     color: white;
   }
   input {
-    width: 100%; min-width: 0; height: 34px; padding: 0 10px;
+    width: 100%; min-width: 0; height: 28px; padding: 0 10px;
     font-size: 11px; outline: none;
   }
   input:focus { border-color: rgba(80,190,255,0.78); box-shadow: 0 0 0 1px rgba(80,190,255,0.18); }
@@ -327,12 +330,13 @@
 
   button { cursor: pointer; }
   button:disabled { opacity: 0.34; cursor: default; }
-  .search-button { height: 34px; padding: 0; background:rgba(255,255,255,.055); font-size: 10px; line-height: 1; font-weight: 900; letter-spacing:.15px; }.search-button:not(:disabled):hover,.search-button:not(:disabled):focus{border-color:rgba(80,190,255,.52);background:rgba(80,190,255,.12);outline:none}
+  .search-button { height: 28px; padding: 0; background:rgba(255,255,255,.055); font-size: 10px; line-height: 1; font-weight: 900; letter-spacing:.15px; }.search-button:not(:disabled):hover,.search-button:not(:disabled):focus{border-color:rgba(80,190,255,.52);background:rgba(80,190,255,.12);outline:none}
 
-  .utility-row { display: grid; grid-template-columns: 1.45fr 1fr 0.82fr; gap: 5px; }
+  .utility-row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 5px; }
+  .utility-row.has-clear { grid-template-columns: 1.2fr 1fr 28px; }
   .utility-row button {
     display: flex; align-items: center; justify-content: center; gap: 5px;
-    min-width: 0; height: 30px; padding: 0 7px;
+    min-width: 0; height: 28px; padding: 0 7px;
     color: rgba(255,255,255,0.78); font-size: 9px; line-height: 1; font-weight: 800;
     background: rgba(255,255,255,0.045);
   }
@@ -351,7 +355,7 @@
   }
 
   .results {
-    position: absolute; z-index: 5000; left: 0; right: 0; top: 72px; overflow: hidden;
+    position: absolute; z-index: 5000; left: 0; right: 0; top: calc(100% + 4px); overflow: hidden;
     border: 1px solid rgba(255,255,255,0.16); border-radius: 8px;
     background: rgba(18,21,25,0.985); box-shadow: 0 6px 18px rgba(0,0,0,0.42);
   }
@@ -368,11 +372,6 @@
   .empty, .credit { padding: 6px 8px; color: rgba(255,255,255,0.58); font-size: 8.5px; line-height: 1.15; }
   .credit { text-align: right; }
 
-  @media (max-width: 520px) {
-    .place-search { margin-top: 8px; }
-    input, .search-button { height: 36px; }
-    .utility-row button { height: 32px; font-size: 9.3px; }
-    .results { top: 78px; }
-  }
-  .quick-places{display:flex;gap:5px;margin-top:7px}.quick-places button{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:7px 5px;font-size:10px;color:#ffe59b}
+
+  .quick-places{display:flex;gap:5px;margin-top:5px}.quick-places button{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;height:28px;padding:0 5px;font-size:10px;color:#ffe59b}
 </style>

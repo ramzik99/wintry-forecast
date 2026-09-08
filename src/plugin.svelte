@@ -7,14 +7,13 @@
       <div class="top-controls">
         <button class="info-button" class:active={infoOpen} type="button" aria-label="How Wintry forecast works" title="How it works" on:click={() => infoOpen = true}>i</button>
         <button class="hide-button" type="button" aria-label="Hide Wintry forecast panel" title="Hide" on:click={() => panelHidden = true}>−</button>
-        <label class="switch"><input type="checkbox" bind:checked={enabled} on:change={toggleEnabled} /><span>{enabled ? 'On' : 'Off'}</span></label>
+        <label class="switch"><input type="checkbox" aria-label="Show snowline contours" bind:checked={enabled} on:change={toggleEnabled} /><span>{enabled ? 'On' : 'Off'}</span></label>
       </div>
     </div>
 
     <div class="hatch-legend"><span>╱╱╱</span> Terrain above estimated snowline</div>
     <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
     <V21Panel bind:unitSystem {activeRunTime} {lastChecked} busy={viewportLoading || probeLoading} on:refresh={refreshForecast} />
-    {#if !clickedLatLon && !probeLoading}<div class="start-hint">Tap the map or choose a saved place for your snow forecast.</div>{/if}
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
     {#if enabled && (viewportLoading || probeLoading)}
@@ -334,12 +333,11 @@
 </script>
 
 <style lang="less">
-  .start-hint{margin-top:8px;font-size:11px;line-height:1.4;color:#acbdc8}
   .refresh-error{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error button{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}
   :global(.forecast-quality){margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}
 
   .hatch-legend{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend span{color:#ff4fd8;font-weight:700;margin-right:4px}
-  .snowline-panel{width:260px;padding:9px 10px;border-radius:9px;background:rgba(38,42,46,.96);color:white;box-shadow:0 4px 16px rgba(0,0,0,.28)}
+  .snowline-panel{box-sizing:border-box;width:240px;max-width:calc(100vw - 28px);padding:8px;border-radius:9px;background:rgba(38,42,46,.96);color:white;box-shadow:0 4px 16px rgba(0,0,0,.28)}
   .top-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.top-controls{display:flex;align-items:center;gap:6px}.title{font-size:16px;font-weight:850;letter-spacing:-.2px}.switch{display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:1px solid rgba(255,255,255,.11);border-radius:7px;background:rgba(255,255,255,.035);font-size:9px;font-weight:850;white-space:nowrap;cursor:pointer}.switch input{appearance:none;-webkit-appearance:none;position:relative;margin:0;width:24px;height:14px;border:0;border-radius:8px;background:rgba(255,255,255,.16);cursor:pointer;transition:background .15s ease}.switch input:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#aebbc2;transition:transform .15s ease,background .15s ease}.switch input:checked{background:rgba(80,190,255,.35)}.switch input:checked:after{transform:translateX(10px);background:#8ee2ff}
   .hide-button,.info-button{width:24px;height:24px;padding:0;border:1px solid rgba(255,255,255,.10);border-radius:7px;background:rgba(255,255,255,.035);color:rgba(255,255,255,.74);font-size:15px;font-weight:800;cursor:pointer}.hide-button:hover,.info-button:hover{background:rgba(255,255,255,.075);color:#fff}.info-button{font-family:Georgia,serif;font-size:14px;font-style:italic}.info-button.active{border-color:rgba(80,190,255,.65);color:white}
   .show-panel{padding:7px 10px;border:1px solid rgba(255,255,255,.16);border-radius:8px;background:rgba(38,42,46,.96);color:#fff;box-shadow:0 3px 12px rgba(0,0,0,.24);font-size:11px;font-weight:800;cursor:pointer}
@@ -355,7 +353,7 @@
   :global(.snowline-outlook){padding:5px;border:1px solid rgba(110,203,255,.08);border-radius:8px;background:rgba(60,150,205,.035)}:global(.snowline-outlook-title){margin-bottom:4px;color:#79badc;font-size:6.5px;font-weight:900;letter-spacing:.75px}:global(.snowline-outlook-grid){display:grid;grid-template-columns:1fr 1fr;gap:4px}:global(.snowline-outlook-grid span){padding:4px 3px;background:rgba(255,255,255,.028)}:global(.snowline-outlook-grid strong){font-size:8.8px}:global(.snowline-no-snow strong){color:#8f9da5;font-weight:700}:global(.snowline-transition){margin-top:4px;padding:4px 5px;border-radius:6px;background:rgba(255,255,255,.035);color:#dce9ef;font-size:8px;line-height:1.12;font-weight:800}
   :global(.snowline-valid){margin:-1px 0 1px;color:#8799a4;font-size:7.2px;line-height:1;font-weight:800;text-align:center}:global(.snowline-compact-relation){display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:5px 7px;border-radius:8px;background:rgba(255,255,255,.025);color:var(--probe-accent,white);font-size:8.2px;line-height:1.1;font-weight:850;text-align:left}:global(.snowline-compact-relation strong){display:inline!important;padding:0!important;background:none!important;color:inherit!important;font-size:8px!important;letter-spacing:0!important}:global(.snowline-compact-relation small){display:none}:global(.snowline-compact-relation span){color:#aebbc2;font-weight:750;white-space:nowrap}:global(.snowline-event-line){width:100%;box-sizing:border-box;padding:6px 7px;border:0;border-radius:8px;background:rgba(110,203,255,.045);color:#d8e5eb;text-align:left;font-family:inherit;font-size:7.8px;line-height:1.2;font-weight:800}:global(button.snowline-event-line){display:flex;align-items:center;justify-content:space-between;gap:6px;cursor:pointer;pointer-events:auto}:global(button.snowline-event-line:hover){background:rgba(110,203,255,.11)}:global(button.snowline-event-line span){flex:0 0 auto;color:#8edcff;font-size:14px;line-height:8px}:global(.snowline-loading){padding:20px 0 14px;color:#9fb0ba;font-size:10px}
   :global(.snowline-probe-above>span){background:linear-gradient(180deg,rgba(8,25,34,.99),rgba(8,14,18,.99))}:global(.snowline-probe-below>span){background:linear-gradient(180deg,rgba(32,21,12,.99),rgba(18,13,10,.99))}:global(.snowline-probe-near>span){background:linear-gradient(180deg,rgba(29,27,11,.99),rgba(17,16,9,.99))}:global(.snowline-card-hazard>span){border-top-color:#c184ff!important;box-shadow:0 0 0 1px rgba(193,132,255,.35),0 12px 32px rgba(77,27,107,.58)}:global(.snowline-card-hazard>span>b){color:#e7c8ff!important;background:rgba(174,91,230,.12)!important}
-  @media(max-width:520px){.snowline-panel{width:235px;max-width:calc(100vw - 28px);padding:8px 9px}.info-overlay{align-items:flex-start;padding-top:54px}:global(.snowline-click-label>span){width:220px;min-height:142px;padding:40px 8px 8px}:global(.snowline-card-kicker){left:72px;right:72px}:global(.snowline-click-label b){font-size:13px}:global(.snowline-card-dry>span>b){font-size:10.5px}:global(.snowline-position strong){font-size:10.5px}:global(.snowline-label-grid strong),:global(.snowline-outlook-grid strong){font-size:8.5px}}
+  @media(max-width:520px){.info-overlay{align-items:flex-start;padding-top:54px}:global(.snowline-click-label>span){width:220px;min-height:142px;padding:40px 8px 8px}:global(.snowline-card-kicker){left:72px;right:72px}:global(.snowline-click-label b){font-size:13px}:global(.snowline-card-dry>span>b){font-size:10.5px}:global(.snowline-position strong){font-size:10.5px}:global(.snowline-label-grid strong),:global(.snowline-outlook-grid strong){font-size:8.5px}}
 
   :global(.snowline-label-chart){left:7px;width:69px;font-size:10px}
   :global(.snowline-label-favourite){left:81px;width:46px;font-size:10px}
@@ -366,5 +364,5 @@
   :global(.snowline-label-grid strong){font-size:13px;line-height:1.2}
   :global(.snowline-event-line){font-size:11px;line-height:1.4;padding:8px}
   :global(.snowline-compact-relation),:global(.snowline-compact-relation strong){font-size:10px!important;line-height:1.3}
-  .title{font-size:14px;white-space:nowrap}.top-row,.top-controls{gap:5px}
+  .title{font-size:13px;white-space:nowrap}.top-row,.top-controls{gap:3px}
 </style>
