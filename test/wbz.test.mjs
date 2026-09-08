@@ -81,6 +81,22 @@ test('hatching follows a changed forecast snowline',()=>{
   assert.ok(terrainHatchSegments(grid([[100,100],[100,100]])).length>0);
   assert.equal(terrainHatchSegments(grid([[-100,-100],[-100,-100]])).length,0);
 });
+
+test('hatch stripes join across triangle boundaries without duplicate overlaps',()=>{
+  const lines=terrainHatchSegments(grid([[100,100],[100,100]]),20);
+  const offsets=lines.map(line=>Math.round(line[0][0]+line[0][1]));
+  assert.equal(new Set(offsets).size,lines.length);
+  const diagonal=lines.find(line=>Math.abs(line[0][0]+line[0][1]-100)<1e-8);
+  assert.deepEqual(diagonal,[[0,100],[100,0]]);
+});
+
+test('joined hatching preserves missing-data gaps',()=>{
+  const values=Array.from({length:6},()=>[100,100,null,100,100]);
+  const lines=terrainHatchSegments(grid(values),20);
+  assert.ok(lines.some(line=>line[0][0]>=300));
+  assert.ok(lines.some(line=>line[1][0]<=100));
+  for(const line of lines)assert.ok(line[1][0]<=100||line[0][0]>=300);
+});
 test('cold mountain profile still diagnoses snow above the atmospheric WBZ',()=>{
   const p=[point(0,2),point(1000,-2),point(1800,-5),point(2600,-8)];
   assert.equal(wetBulbZeroHeight(p).snowLevelM,500);
