@@ -67,6 +67,15 @@ test('terrain timing stays continuous through a fully cold forecast interval', (
 
 const { terrainHatchSegments } = await import(moduleUrl('terrainHatching'));
 const { terrainPrecipitationType } = await import(moduleUrl('precipType'));
+const { precipitationLabel } = await import(moduleUrl('precipType'));
+test('low-confidence mountain snow is consistently qualified without changing its diagnosis',()=>{
+  const phase=terrainPrecipitationType([point(3500,1),point(5000,-10),point(7500,-25)],4790);
+  assert.equal(phase.key,'snow');assert.equal(phase.confidence,'low');
+  assert.equal(precipitationLabel(phase),'Snow possible');
+  assert.equal(precipitationLabel({...phase,confidence:'high'}),'Snow');
+  assert.equal(precipitationLabel({...phase,confidence:'high'},'low'),'Snow possible');
+  assert.equal(precipitationLabel({...phase,label:'Freezing rain'}),'Freezing rain possible');
+});
 const grid=(values)=>values.map((row,r)=>row.map((difference,c)=>({x:c*100,y:r*100,difference})));
 test('hatching covers positive terrain differences only',()=>{
   const lines=terrainHatchSegments(grid([[-100,100],[-100,100]]),10);

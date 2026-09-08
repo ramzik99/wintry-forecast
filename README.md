@@ -10,7 +10,9 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
 
-### 300.0.3 simpler controls and cleaner hatching
+### 300.0.3 clearer forecasts and controls
+
+Low-confidence precipitation estimates say “Snow possible” (or the corresponding type) consistently on the point card, forecast graph, event summary, copy and image export. The supporting note explains limited atmospheric detail instead of contradicting a definite headline. Event labels use the confidence of the whole event.
 
 Removed the manual Refresh button and automatic-refresh status text. Refresh continues in the background using the existing schedule and retry handling. The installed version remains visible. Hatching uses bold, widely spaced diagonal stripes beneath contour lines and labels with touching fragments joined across triangle boundaries, removing overlaps while preserving missing-data gaps.
 

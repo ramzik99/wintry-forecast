@@ -86,7 +86,7 @@
       {#if tooltip}
         <div class="tooltip" style={`left:${tooltip.cssX}px;top:${tooltip.cssY}px;`}>
           <b>{tooltip.timeLabel}</b>
-          {#if tooltip.phase}<strong class={`text-${tooltip.phase.key}`}><i class={`tip-phase-dot phase-${tooltip.phase.key}`}></i>{tooltip.phase.label}</strong>{/if}
+          {#if tooltip.phase}<strong class={`text-${tooltip.phase.key}`}><i class={`tip-phase-dot phase-${tooltip.phase.key}`}></i>{precipitationLabel(tooltip.phase)}</strong>{/if}
           <div class="tip-grid">
             <span>SL <b>{tooltip.snowline === null ? 'Unresolved' : formatElevation(tooltip.snowline, units)}</b></span>
             <span>Precip <b>{formatPrecip(tooltip.precip, units)}</b></span>
@@ -99,7 +99,7 @@
 
     <div class="current-card" class:active-snow={chart.currentPhase?.key === 'snow'} class:active-wet-snow={chart.currentPhase?.key === 'wet-snow'} class:active-mix={chart.currentPhase?.key === 'mix'} class:active-rain={chart.currentPhase?.key === 'rain'} class:active-ice-pellets={chart.currentPhase?.key === 'ice-pellets'} class:active-freezing-rain={chart.currentPhase?.key === 'freezing-rain'}>
       <div class="current-type">
-        <b>{#if chart.currentPhase}<i class={`current-phase-dot phase-${chart.currentPhase.key}`}></i>{chart.currentPhase.label}{:else}{chart.currentCondition}{/if}</b>
+        <b>{#if chart.currentPhase}<i class={`current-phase-dot phase-${chart.currentPhase.key}`}></i>{precipitationLabel(chart.currentPhase)}{:else}{chart.currentCondition}{/if}</b>
         {#if chart.currentPosition}<strong>{chart.currentPosition}</strong>{/if}
       </div>
       <div class="metrics">
@@ -111,14 +111,14 @@
     <div class="outlook24 event-intelligence">
       <b>{event?.activeNow ? 'Current wintry period' : 'Next wintry period'}</b>
       {#if event}
-        <span>{event.dominantPhase.icon} {event.dominantPhase.label} · {formatEventRange(event.startTime, event.endTime)}{#if event.incomplete} · Amount uncertain{:else if event.newSnowCm > 0.05} · est. {formatSnow(event.newSnowCm, units)}{event.activeNow ? ' remaining' : ''}{/if}</span>
+        <span>{event.dominantPhase.icon} {precipitationLabel(event.dominantPhase,event.confidence)} · {formatEventRange(event.startTime, event.endTime)}{#if event.incomplete} · Amount uncertain{:else if event.newSnowCm > 0.05} · est. {formatSnow(event.newSnowCm, units)}{event.activeNow ? ' remaining' : ''}{/if}</span>
         {#if !event.activeNow}<button type="button" title="Jump to event start" on:click={jumpToEvent}>Go to event →</button>{/if}
       {:else}
         <span>{noEventMessage(point,terrainM,timestamp)}</span>
       {/if}
     </div>
     {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}<button class="crossing-action" type="button" on:click={() => jumpToCrossing(Number(crossing.crossingTime))}>{crossing.direction === 'below' ? 'Snowline falls below this elevation' : 'Snowline rises above this elevation'} · {formatShortTime(crossing.crossingTime)} →</button>{/if}
-    {#if chart.currentPhase?.confidence === 'low'}<div class="quality-note">Precipitation type is uncertain at this elevation.</div>{/if}
+    {#if chart.currentPhase?.confidence === 'low'}<div class="quality-note">Limited atmospheric detail at this elevation; type may differ.</div>{/if}
     {#if !chart.coverageComplete}<div class="quality-note">Some precipitation data is missing. Snow amounts may be incomplete.</div>{/if}
     <div class="hint">{precipPeriodLabel(point.forecast)}</div>
     <div class="hint">Atmospheric WBZ estimate; gaps are unresolved. Precipitation is required for snow.</div>
@@ -135,7 +135,7 @@
   import store from '@windy/store';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';
   import { precipPeriodLabel, precipMmAt, formatPrecipMm, PRECIP_THRESHOLD_MM_H } from './precip';
-  import { terrainPrecipitationType, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
+  import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
   import { terrainCrossingState } from './terrainCrossing';
   import { estimateNewSnowStep } from './snowAccum';
   import { nextWintryEvent } from './eventOutlook';
@@ -315,7 +315,7 @@
       ctx.fillStyle = '#cbd7de'; ctx.font = '24px Arial'; ctx.fillText(placeName || 'Selected point', 52, 100);
       ctx.fillStyle = '#72cef4'; ctx.font = '20px Arial'; ctx.fillText(chart.validLabel, 52, 132);
       ctx.drawImage(img, 45, 155, 1110, 1030); URL.revokeObjectURL(url);
-      let y = 1217; ctx.fillStyle = '#ffffff'; ctx.font = '700 29px Arial'; ctx.fillText(chart.currentPhase ? `${chart.currentPhase.label}${chart.currentPhase.confidence === 'low' ? ' ~' : ''}` : chart.currentCondition, 52, y);
+      let y = 1217; ctx.fillStyle = '#ffffff'; ctx.font = '700 29px Arial'; ctx.fillText(chart.currentPhase ? precipitationLabel(chart.currentPhase) : chart.currentCondition, 52, y);
       y += 34; ctx.fillStyle = '#b8c8d1'; ctx.font = '22px Arial';
       ctx.fillText(`Snowline ${chart.currentSnowline === null ? 'WBZ unresolved' : formatElevation(chart.currentSnowline, units)}   ·   Precip ${formatPrecip(chart.currentPrecip, units)}`, 52, y);
       y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min estimated snowline ${formatElevation(chart.min24Snowline, units)} · new snow ${formatSnow(chart.newSnow24h, units)}`, 52, y);
