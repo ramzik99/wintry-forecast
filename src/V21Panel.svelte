@@ -7,10 +7,13 @@
     <span class="freshness" title={freshnessLabel}>{freshnessLabel}</span>
     <button class="refresh" type="button" on:click={() => dispatch('refresh')} disabled={busy} title={checkedLabel} aria-label="Refresh forecast">{busy ? '…' : 'Refresh'}</button>
   </div>
+  <div class="release-row"><span title="Plugin version">v{config.version}</span><span title={enabled ? 'Checks every 15 minutes while visible; retries failed map updates after 2 minutes' : 'Enable contours to resume automatic updates'}>{enabled ? 'Auto · 15 min' : 'Auto paused'}</span></div>
 </div>
 
 <script lang="ts">
   import { onMount, createEventDispatcher } from 'svelte';
+  import config from './pluginConfig';
+  export let enabled = true;
   import { saveUnitSystem, type UnitSystem } from './displayUnits';
 
   export let unitSystem: UnitSystem = 'metric';
@@ -47,6 +50,7 @@
 </script>
 
 <style lang="less">
+  .release-row { display:flex; justify-content:space-between; margin-top:4px; color:#a8b6bf; font-size:9px; line-height:12px; }
   .v21-panel { margin-top: 5px; }
   .meta-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
   .units { display: flex; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; }

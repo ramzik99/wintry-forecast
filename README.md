@@ -6,9 +6,15 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**300.0.1**
+**300.0.2**
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+
+### 300.0.2 automatic refresh, version and clearer contours
+
+The compact footer shows the installed version and automatic update status. Forecasts refresh every 15 minutes while enabled, visible and online; overdue checks run when returning to the tab or reconnecting. Failed map loads retry after two minutes, including failures on first open. Active requests are allowed to finish before another automatic refresh.
+
+Contours have a light outline for contrast, stronger major elevations and quieter terrain hatching underneath. Labels use screen-space length and spacing, avoid clipped map edges and can identify separate contour segments. Paths are batched by elevation to reduce rendering overhead. The contour field, interpolation and −500 m floor are unchanged.
 
 ### 300.0.1 automatic search
 
