@@ -7,6 +7,7 @@
     </div>
     <div class="chart-actions">
       {#if tab === 'graph' && showNow}<button class="now-action" type="button" title="Back to now" aria-label="Back to now" on:click={resetToNow}>Now</button>{/if}
+      {#if tab === 'graph' && chart}<button class="png-button" type="button" on:click={downloadPng} disabled={pngBusy}>{pngBusy ? 'Saving…' : 'Save image'}</button>{/if}
       <button class="drag-button" type="button" title="Drag graph" aria-label="Drag graph" on:pointerdown={startDrag}>↕</button>
       <button type="button" title="Close" aria-label="Close graph" on:click={() => dispatch('close')}>×</button>
     </div>
@@ -40,7 +41,7 @@
           <text x="37" y="190" text-anchor="end" class="axis">0</text>
           {#each chart.precipBars as bar}<rect x={bar.x} y={bar.y} width={bar.width} height={bar.height} rx="1.1" class="precip-bar" class:wet={bar.mm >= PRECIP_THRESHOLD_MM_H} />{/each}
         {:else}
-          <text x="195" y="175" text-anchor="middle" class="empty-band">Dry</text>
+          <text x="195" y="175" text-anchor="middle" class="empty-band">{chart.coverageComplete ? 'Dry' : 'Precipitation unavailable'}</text>
         {/if}
 
         <text x="42" y="205" class="section-label phase-title">PRECIPITATION TYPE</text>
@@ -63,7 +64,7 @@
           <path d={chart.newSnowArea} class="new-snow-area" />
           <polyline points={chart.newSnowPoints} class="new-snow-line" />
         {:else}
-          <text x="195" y="291" text-anchor="middle" class="empty-band">{units === 'imperial' ? '0 in' : '0 cm'}</text>
+          <text x="195" y="291" text-anchor="middle" class="empty-band">{chart.coverageComplete ? (units === 'imperial' ? '0 in' : '0 cm') : 'Unavailable'}</text>
         {/if}
 
         {#if chart.nowX !== null}
@@ -78,8 +79,8 @@
         {#if tooltip}<line x1={tooltip.x} x2={tooltip.x} y1="18" y2="302" class="inspect-line" />{/if}
 
         <text x="42" y="320" text-anchor="start" class="axis">{chart.startLabel}</text>
-        <text x="195" y="320" text-anchor="middle" class="axis">+72 h</text>
-        <text x="348" y="320" text-anchor="end" class="axis">+144 h</text>
+        <text x="195" y="320" text-anchor="middle" class="axis">{chart.midTimeLabel}</text>
+        <text x="348" y="320" text-anchor="end" class="axis">{chart.endTimeLabel}</text>
       </svg>
 
       {#if tooltip}
@@ -98,7 +99,7 @@
 
     <div class="current-card" class:active-snow={chart.currentPhase?.key === 'snow'} class:active-wet-snow={chart.currentPhase?.key === 'wet-snow'} class:active-mix={chart.currentPhase?.key === 'mix'} class:active-rain={chart.currentPhase?.key === 'rain'} class:active-ice-pellets={chart.currentPhase?.key === 'ice-pellets'} class:active-freezing-rain={chart.currentPhase?.key === 'freezing-rain'}>
       <div class="current-type">
-        <b>{#if chart.currentPhase}<i class={`current-phase-dot phase-${chart.currentPhase.key}`}></i>{chart.currentPhase.label}{:else}Dry{/if}</b>
+        <b>{#if chart.currentPhase}<i class={`current-phase-dot phase-${chart.currentPhase.key}`}></i>{chart.currentPhase.label}{:else}{chart.currentCondition}{/if}</b>
         {#if chart.currentPosition}<strong>{chart.currentPosition}</strong>{/if}
       </div>
       <div class="metrics">
@@ -110,12 +111,15 @@
     <div class="outlook24 event-intelligence">
       <b>{event?.activeNow ? 'Current wintry period' : 'Next wintry period'}</b>
       {#if event}
-        <span>{event.dominantPhase.icon} {event.dominantPhase.label} · {formatEventRange(event.startTime, event.endTime)}{#if event.newSnowCm > 0.05} · est. {formatSnow(event.newSnowCm, units)}{/if}</span>
+        <span>{event.dominantPhase.icon} {event.dominantPhase.label} · {formatEventRange(event.startTime, event.endTime)}{#if event.incomplete} · Amount uncertain{:else if event.newSnowCm > 0.05} · est. {formatSnow(event.newSnowCm, units)}{event.activeNow ? ' remaining' : ''}{/if}</span>
         {#if !event.activeNow}<button type="button" title="Jump to event start" on:click={jumpToEvent}>Go to event →</button>{/if}
       {:else}
-        <span>No wintry precipitation through +144 h.</span>
+        <span>{noEventMessage(point,terrainM,timestamp)}</span>
       {/if}
     </div>
+    {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}<button class="crossing-action" type="button" on:click={() => jumpToCrossing(Number(crossing.crossingTime))}>{crossing.direction === 'below' ? 'Snowline falls below this elevation' : 'Snowline rises above this elevation'} · {formatShortTime(crossing.crossingTime)} →</button>{/if}
+    {#if chart.currentPhase?.confidence === 'low'}<div class="quality-note">Precipitation type is uncertain at this elevation.</div>{/if}
+    {#if !chart.coverageComplete}<div class="quality-note">Some precipitation data is missing. Snow amounts may be incomplete.</div>{/if}
     <div class="hint">{precipPeriodLabel(point.forecast)}</div>
     <div class="hint">Atmospheric WBZ estimate; gaps are unresolved. Precipitation is required for snow.</div>
   {:else}
@@ -135,6 +139,8 @@
   import { terrainCrossingState } from './terrainCrossing';
   import { estimateNewSnowStep } from './snowAccum';
   import { nextWintryEvent } from './eventOutlook';
+  import { conditionLabel, noEventMessage } from './forecastStatus';
+  import { forecastIntervalIndex, forecastIntervalHours } from './forecastTime';
   import { formatElevation, formatPrecip, formatSnow, type UnitSystem } from './displayUnits';
   import SoundingChart from './SoundingChart.svelte';
 
@@ -163,14 +169,14 @@
   type ChartData = {
     points: string; terrainY: number | null; currentX: number | null; currentY: number | null; nowX: number | null; crossingX: number | null; min24X: number | null; min24Y: number | null;
     minLabel: string; midLabel: string; maxLabel: string; startLabel: string; currentSnowline: number | null; currentTerrainDifference: number | null; currentPosition: string;
-    currentPrecip: number | null; currentPhase: TerrainPrecipType | null; currentNewSnow: number; precipBars: Bar[]; hasPrecip: boolean; precipMaxLabel: string;
+    currentPrecip: number | null; currentCondition:string; coverageComplete:boolean; midTimeLabel:string; endTimeLabel:string; currentPhase: TerrainPrecipType | null; currentNewSnow: number; precipBars: Bar[]; hasPrecip: boolean; precipMaxLabel: string;
     minScale: number; maxScale: number; validLabel: string; phaseBlocks: Block[]; phaseSummary: string; newSnowPoints: string; newSnowArea: string; newSnowMax: number; newSnowMaxLabel: string; cumulativeNewSnow: number[];
     min24Snowline: number | null; newSnow24h: number; nextChangeLabel: string; nextChangeTime: number | null;
   };
 
   $: crossing = terrainCrossingState(point, terrainM, timestamp);
   $: event = nextWintryEvent(point, terrainM, timestamp);
-  $: chart = buildChart(point, terrainM, timestamp, crossing?.crossingTime ?? null, realNow);
+  $: chart = buildChart(point, terrainM, timestamp, crossing?.crossingTime ?? null, realNow, units);
   $: showNow = Math.abs(timestamp - realNow) > 90 * 60_000;
 
   function nearestIndex(times: number[], target: number): number { let best = 0, dist = Infinity; times.forEach((t, i) => { const d = Math.abs(t - target); if (d < dist) { dist = d; best = i; } }); return best; }
@@ -178,10 +184,9 @@
   function phaseAt(p: any, terrain: number | null, index: number): TerrainPrecipType | null { if (terrain === null || !Number.isFinite(terrain)) return null; const precip = precipMmAt(p.forecast, index); if (precip === null || precip < PRECIP_THRESHOLD_MM_H) return null; return terrainPrecipitationType(buildProfile(p.forecast, index), terrain); }
   function formatTooltipTime(time: number): string { return new Date(time).toLocaleString(undefined, { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
   function formatShortTime(time: number): string { return new Date(time).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }); }
-  function formatRun(time: number | null): string { if (!Number.isFinite(Number(time))) return 'ECMWF'; return `ECMWF ${String(new Date(Number(time)).getUTCHours()).padStart(2, '0')}Z`; }
+  function formatRun(time: number | null): string { if (time === null || !Number.isFinite(time)) return 'ECMWF · run unavailable'; return `ECMWF ${String(new Date(Number(time)).getUTCHours()).padStart(2, '0')}Z`; }
   function phaseName(key: TerrainPrecipTypeKey | null): string { if (!key) return 'Dry'; const labels: Record<TerrainPrecipTypeKey,string> = { snow:'Snow','wet-snow':'Wet snow',mix:'Mix',rain:'Rain','ice-pellets':'Ice pellets','freezing-rain':'Freezing rain' }; return labels[key]; }
   function terrainPosition(difference: number | null): string { if (difference === null) return ''; const value = formatElevation(Math.abs(difference), units); if (difference > 100) return `${value} above snowline`; if (difference < -100) return `${value} below snowline`; return 'Terrain near snowline'; }
-  function compactElevationRows(rows:ElevationOutlookRow[],terrain:number|null){if(terrain===null||!rows.length)return rows.slice(0,5);return [...rows].sort((a,b)=>Math.abs(a.elevationM-terrain)-Math.abs(b.elevationM-terrain)).slice(0,5).sort((a,b)=>a.elevationM-b.elevationM)}
 
   function clampPosition(x: number, y: number) { const rect = chartShell?.getBoundingClientRect(); const w = rect?.width ?? 430, h = rect?.height ?? 590; return { x: Math.max(6, Math.min(window.innerWidth - w - 6, x)), y: Math.max(6, Math.min(window.innerHeight - h - 6, y)) }; }
   function startDrag(event: PointerEvent) { if (!chartShell) return; dragPointerId = event.pointerId; const rect = chartShell.getBoundingClientRect(); dragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top }; window.addEventListener('pointermove', dragMove); window.addEventListener('pointerup', stopDrag, { once: true }); event.preventDefault(); }
@@ -191,7 +196,7 @@
   function jumpToCrossing(time: number) { setTimeline(time); }
   function jumpToNextChange() { const time = chart?.nextChangeTime; if (time !== null && time !== undefined) setTimeline(time); }
   function jumpToEvent() { if (event?.startTime) setTimeline(event.startTime); }
-  function formatEventRange(start:number,end:number){const a=formatShortTime(start),b=new Date(end).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});return start===end?a:`${a}–${b}`; }
+  function formatEventRange(start:number,end:number){const a=formatShortTime(start),b=new Date(start).toDateString()===new Date(end).toDateString()?new Date(end).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}):formatShortTime(end);return start===end?a:`${a}–${b}`; }
   function resetToNow() { if (!point?.times?.length) return; realNow = Date.now(); setTimeline(point.times[nearestIndex(point.times, realNow)]); }
 
   function buildBlocks(p: any, phases: (TerrainPrecipType | null)[], x: (t: number) => number, spacing: number): Block[] {
@@ -218,7 +223,7 @@
     return `${phaseName(key)} ${pct}% · new snow est. ${formatSnow(finalSnow, units)}`;
   }
 
-  function buildChart(p: any, terrain: number | null, target: number, crossingTime: number | null, now: number): ChartData | null {
+  function buildChart(p: any, terrain: number | null, target: number, crossingTime: number | null, now: number, units: UnitSystem): ChartData | null {
     if (!p?.times?.length) return null;
     const samples = p.times.map((time: number, i: number) => ({ time, value: snowlineAt(p, i) }));
     const entries = samples.filter((v: any) => v.value !== null && Number.isFinite(v.value));
@@ -228,7 +233,9 @@
     const x = (t: number) => left + (t - t0) / Math.max(1, t1 - t0) * (right - left), y = (v: number) => bottom - (v - min) / Math.max(1, max - min) * (bottom - top);
     let connected=false;
     const points=samples.map((v:any)=>{if(v.value===null){connected=false;return ''}const command=connected?'L':'M';connected=true;return `${command}${x(v.time).toFixed(1)},${y(v.value).toFixed(1)}`}).join(' ');
-    const currentIndex = nearestIndex(p.times, target), currentValue = snowlineAt(p, currentIndex), currentTime = p.times[currentIndex];
+    const currentIndex = forecastIntervalIndex(p.times, target);
+    if(currentIndex<0)return null;
+    const currentValue = snowlineAt(p, currentIndex), currentTime = p.times[currentIndex];
     const currentTerrainDifference = currentValue !== null && terrain !== null ? Math.round((terrain - currentValue) / 10) * 10 : null;
     const precipValues = p.times.map((_: number, i: number) => precipMmAt(p.forecast, i)), validPrecip = precipValues.filter((v: number | null): v is number => v !== null && Number.isFinite(v)), precipMax = validPrecip.length ? Math.max(PRECIP_THRESHOLD_MM_H, ...validPrecip) : 0;
     const spacing = (right - left) / Math.max(1, p.times.length - 1), barWidth = Math.max(1.1, Math.min(4.5, spacing * .78));
@@ -237,23 +244,23 @@
 
     const cumulativeNewSnow: number[] = []; let running = 0;
     for (let i = 0; i < p.times.length; i++) {
-      const dt = 3;
+      const dt = forecastIntervalHours(p.times, i);
       running = estimateNewSnowStep(precipValues[i], phases[i], running, dt).cumulativeCm;
       cumulativeNewSnow.push(running);
     }
-    const newSnowMax = Math.max(0, ...cumulativeNewSnow), snowTop = 285, snowBottom = 311;
+    const newSnowMax = Math.max(0, ...cumulativeNewSnow), snowTop = 274, snowBottom = 302;
     const snowY = (v: number) => snowBottom - (newSnowMax > 0 ? v / newSnowMax * (snowBottom - snowTop) : 0);
     const newSnowPoints = cumulativeNewSnow.map((v, i) => `${x(p.times[i]).toFixed(1)},${snowY(v).toFixed(1)}`).join(' ');
     const newSnowArea = cumulativeNewSnow.length ? `M ${x(p.times[0]).toFixed(1)} ${snowBottom} L ${newSnowPoints.replace(/,/g, ' ')} L ${x(p.times[p.times.length - 1]).toFixed(1)} ${snowBottom} Z` : '';
 
-    const end24 = currentTime + 24 * 3600_000;
-    const windowIndices = p.times.map((time: number, i: number) => ({ time, i })).filter((v: any) => v.time >= currentTime - 60_000 && v.time <= end24 + 60_000).map((v: any) => v.i);
+    const end24 = target + 24 * 3600_000;
+    const windowIndices = p.times.map((time: number, i: number) => ({ time, i })).filter((v: any) => v.time + forecastIntervalHours(p.times,v.i)*3600_000 > target && v.time < end24).map((v: any) => v.i);
     const minEntry = windowIndices.map((i: number) => ({ i, value: snowlineAt(p, i) })).filter((v: any) => v.value !== null && Number.isFinite(v.value)).sort((a: any, b: any) => a.value - b.value)[0] ?? null;
     const min24Snowline = minEntry ? Math.round(Number(minEntry.value) / 10) * 10 : null;
     let newSnow24h = 0;
     for (const i of windowIndices) {
       if(p.times[i]>=end24) continue;
-      const dt = Math.min(3,(end24-p.times[i])/3600_000);
+      const dt = (Math.min(end24,p.times[i]+forecastIntervalHours(p.times,i)*3600_000)-Math.max(target,p.times[i]))/3600_000;
       newSnow24h = estimateNewSnowStep(precipValues[i], phases[i], newSnow24h, dt).cumulativeCm;
     }
     const currentKey = phases[currentIndex]?.key ?? null;
@@ -275,8 +282,9 @@
       min24X: minEntry ? x(p.times[minEntry.i]) : null, min24Y: minEntry ? y(Number(minEntry.value)) : null,
       minLabel: formatElevation(min, units), midLabel: formatElevation((min + max) / 2, units), maxLabel: formatElevation(max, units), startLabel: new Date(t0).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }),
       currentSnowline: currentValue !== null ? Math.round(currentValue / 10) * 10 : null, currentTerrainDifference, currentPosition: terrainPosition(currentTerrainDifference), currentPrecip: precipValues[currentIndex] ?? null,
-      currentPhase: phases[currentIndex], currentNewSnow: cumulativeNewSnow[currentIndex] ?? 0, precipBars, hasPrecip: validPrecip.some(v => v >= PRECIP_THRESHOLD_MM_H),
-      precipMaxLabel: precipMax ? formatPrecip(precipMax, units).replace(/\s*(mm|in)\/3h$/, '') : '—', minScale: min, maxScale: max, validLabel: `Valid ${formatTooltipTime(currentTime)} · ${formatRun(p.runTime)}`,
+      currentPhase: phases[currentIndex], currentCondition:conditionLabel(precipValues[currentIndex],phases[currentIndex]), coverageComplete:validPrecip.length===p.times.length&&phases.every((phase:TerrainPrecipType|null,i:number)=>precipValues[i]<PRECIP_THRESHOLD_MM_H||phase!==null),
+      midTimeLabel:'+'+Math.round((t1-t0)/7200000)+' h', endTimeLabel:'+'+Math.round((t1-t0)/3600000)+' h', currentNewSnow: cumulativeNewSnow[currentIndex] ?? 0, precipBars, hasPrecip: validPrecip.some(v => v >= PRECIP_THRESHOLD_MM_H),
+      precipMaxLabel: precipMax ? formatPrecip(precipMax, units).replace(/\s*(mm|in)\/3h$/, '') : '—', minScale: min, maxScale: max, validLabel: `Forecast ${formatTooltipTime(target)} · ${formatRun(p.runTime)}`,
       phaseBlocks: buildBlocks(p, phases, x, spacing), phaseSummary: phaseSummary(phases, precipValues, cumulativeNewSnow), newSnowPoints, newSnowArea, newSnowMax, newSnowMaxLabel: formatSnow(newSnowMax, units), cumulativeNewSnow,
       min24Snowline, newSnow24h: Math.max(0, newSnow24h), nextChangeLabel, nextChangeTime,
     };
@@ -292,7 +300,7 @@
   }
 
   async function downloadPng() {
-    if (!svgEl || !chart || pngBusy || window.innerWidth <= 520) return;
+    if (!svgEl || !chart || pngBusy) return;
     pngBusy = true;
     try {
       const clone = svgEl.cloneNode(true) as SVGSVGElement; clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); clone.setAttribute('width', '1080'); clone.setAttribute('height', '1002');
@@ -307,12 +315,12 @@
       ctx.fillStyle = '#cbd7de'; ctx.font = '24px Arial'; ctx.fillText(placeName || 'Selected point', 52, 100);
       ctx.fillStyle = '#72cef4'; ctx.font = '20px Arial'; ctx.fillText(chart.validLabel, 52, 132);
       ctx.drawImage(img, 45, 155, 1110, 1030); URL.revokeObjectURL(url);
-      let y = 1217; ctx.fillStyle = '#ffffff'; ctx.font = '700 29px Arial'; ctx.fillText(chart.currentPhase ? `${chart.currentPhase.label}${chart.currentPhase.confidence === 'low' ? ' ~' : ''}` : 'Dry', 52, y);
+      let y = 1217; ctx.fillStyle = '#ffffff'; ctx.font = '700 29px Arial'; ctx.fillText(chart.currentPhase ? `${chart.currentPhase.label}${chart.currentPhase.confidence === 'low' ? ' ~' : ''}` : chart.currentCondition, 52, y);
       y += 34; ctx.fillStyle = '#b8c8d1'; ctx.font = '22px Arial';
       ctx.fillText(`Snowline ${chart.currentSnowline === null ? 'WBZ unresolved' : formatElevation(chart.currentSnowline, units)}   ·   Precip ${formatPrecip(chart.currentPrecip, units)}`, 52, y);
-      y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min resolved snowline ${formatElevation(chart.min24Snowline, units)} · new snow ${formatSnow(chart.newSnow24h, units)}`, 52, y);
+      y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min estimated snowline ${formatElevation(chart.min24Snowline, units)} · new snow ${formatSnow(chart.newSnow24h, units)}`, 52, y);
       if (chart.nextChangeLabel) { y += 30; ctx.fillStyle = '#e5cf7c'; ctx.font = '700 20px Arial'; ctx.fillText(chart.nextChangeLabel, 52, y); }
-      y += 30; ctx.fillStyle = '#8799a4'; ctx.font = '18px Arial'; ctx.fillText('New snow is a terrain-aware forecast estimate from precipitation type and wet-bulb profile; it is not total pre-existing snowpack.', 52, y);
+      y += 30; ctx.fillStyle = '#8799a4'; ctx.font = '18px Arial'; ctx.fillText('Estimated new snow, not existing snowpack. ECMWF profile and Windy terrain.', 52, y);
       const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(v => v ? resolve(v) : reject(new Error('PNG failed')), 'image/png'));
       const href = URL.createObjectURL(png), a = document.createElement('a'); a.href = href; a.download = `wintry-forecast-${(placeName || 'point').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.png`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(href), 30000);
     } catch (e) { console.warn('Wintry forecast PNG export failed', e); } finally { pngBusy = false; }
@@ -323,7 +331,7 @@
     realNow = Date.now(); realNowTimer = setInterval(() => realNow = Date.now(), 30000);
     try { const t = store.get('timestamp'); if (typeof t === 'number') timestamp = t; timestampListener = store.on('timestamp', (v: any) => { const n = Number(v); if (Number.isFinite(n)) timestamp = n; }); } catch {}
   });
-  onDestroy(() => { if (realNowTimer) clearInterval(realNowTimer); window.removeEventListener('pointermove', dragMove); if (timestampListener !== null) try { store.off(timestampListener); } catch {} });
+  onDestroy(() => { if (realNowTimer) clearInterval(realNowTimer); window.removeEventListener('pointermove', dragMove); window.removeEventListener('pointerup', stopDrag); if (timestampListener !== null) try { store.off(timestampListener); } catch {} });
 </script>
 
 <style lang="less">
@@ -338,4 +346,11 @@
   @media(max-width:520px){.chart-shell{width:calc(100vw - 12px);padding:9px;border-radius:12px}.png-button{display:none!important}.chart-title small,.chart-title em{max-width:180px}.metrics{gap:3px}.metrics small{font-size:5.3px}.metrics b{font-size:6.4px}.tooltip{min-width:158px}.outlook24 span,.outlook24 button{font-size:6.6px}}
 
   .event-head,.elevation-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.confidence{padding:2px 5px;border-radius:8px;font-size:6.5px;font-style:normal;font-weight:850}.confidence-high{background:rgba(96,211,139,.12);color:#87e5aa}.confidence-medium{background:rgba(255,209,84,.12);color:#f5d76d}.confidence-low{background:rgba(255,136,104,.12);color:#ffad96}.event-hazard{border-color:rgba(193,132,255,.38)!important;box-shadow:inset 3px 0 rgba(193,132,255,.8)}.event-timeline{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:3px}.event-timeline span{padding:4px;border-radius:6px;background:rgba(255,255,255,.035);font-size:7px;font-weight:800;text-align:center}.event-timeline small{display:block;margin-bottom:2px;color:#71838d;font-size:5.8px;text-transform:uppercase}.elevation-impact{margin-top:6px;padding:7px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.025)}.elevation-head b{font-size:8px}.elevation-head span,.impact-band{color:#87a7b7;font-size:6.8px}.impact-band{margin-top:3px}.elevation-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-top:5px}.elevation-grid span{padding:4px 2px;border-radius:6px;background:rgba(255,255,255,.035);text-align:center}.elevation-grid span.terrain-row{outline:1px solid rgba(255,190,112,.48);background:rgba(255,174,86,.07)}.elevation-grid b,.elevation-grid small,.elevation-grid em{display:block}.elevation-grid b{font-size:7px}.elevation-grid small{margin-top:2px;color:#9aabb4;font-size:5.7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.elevation-grid em{margin-top:2px;color:#dfeaf0;font-size:6.5px;font-style:normal;font-weight:800}
+  .chart-shell{box-sizing:border-box;max-height:calc(100dvh - 48px);overflow-y:auto;overscroll-behavior:contain}
+  .chart-head{position:sticky;top:-11px;z-index:5;padding:8px 0;background:#101a22}
+  .chart-actions{flex-wrap:wrap;justify-content:flex-end}.chart-actions button{min-height:32px}.png-button{display:inline-block!important;font-size:10px!important}
+  .current-type b{font-size:15px}.current-type strong{font-size:11px}.metrics small{font-size:10px}.metrics b{font-size:13px}
+  .outlook24{display:flex;flex-direction:column;gap:5px}.outlook24>b{font-size:10px}.outlook24 span,.outlook24 button{font-size:12px;line-height:1.4}
+  .crossing-action{width:100%;margin-top:7px;padding:9px;border:1px solid #35515c;border-radius:8px;background:#172932;color:#b7e6f8;text-align:left;font-size:11px;cursor:pointer}
+  .quality-note{margin-top:6px;color:#edc881;font-size:11px;line-height:1.4}.hint{font-size:10px;line-height:1.35}
 </style>

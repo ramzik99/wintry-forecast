@@ -14,9 +14,10 @@ Hatching is not gated by precipitation. Existing precipitation-type and snow-amo
 
 The viewport grid cannot resolve every ridge or valley. Hatching is an approximate
 sampled comparison, not a high-resolution terrain mask. A cold lowest profile level
-returns an unresolved WBZ with a bound, never a fabricated exact height. Such
-profiles still allow precipitation-type display but do not generate numeric contours
-or hatching. Temporal gaps remain disconnected.
+returns a below-profile status and a bounded extrapolated diagnostic, not a resolved
+crossing. Display contours clamp that value to −500 m; hatching retains the raw
+terrain comparison. Missing point values remain unknown; contour interpolation
+can bridge missing viewport samples.
 
 Run npm test and the production build. A live Windy visual check remains necessary
 before release, including map navigation, timeline changes, mountains and dry areas.

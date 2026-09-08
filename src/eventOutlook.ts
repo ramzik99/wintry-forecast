@@ -2,6 +2,7 @@ import { buildProfile, wetBulbZeroHeight } from './snowLevel';
 import { precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
 import { terrainPrecipitationType, type TerrainPrecipConfidence, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
 import { estimateNewSnowStep } from './snowAccum';
+import { forecastIntervalHours } from './forecastTime';
 
 export type EventConfidence = 'high' | 'medium' | 'low';
 
@@ -15,24 +16,12 @@ export interface WintryEventSummary {
   dominantPhase: TerrainPrecipType;
   confidence: EventConfidence;
   activeNow: boolean;
+  incomplete: boolean;
 }
 
 const MAX_EVENT_GAP_HOURS = 3;
 const WINTRY_KEYS = new Set<TerrainPrecipTypeKey>(['snow', 'wet-snow', 'mix', 'ice-pellets', 'freezing-rain']);
 const CONFIDENCE_SCORE: Record<TerrainPrecipConfidence, number> = { low: 1, medium: 2, high: 3 };
-
-function nearestIndex(times: number[], target: number): number {
-  let best = 0;
-  let dist = Infinity;
-  times.forEach((t, i) => {
-    const d = Math.abs(t - target);
-    if (d < dist) {
-      best = i;
-      dist = d;
-    }
-  });
-  return best;
-}
 
 function diagnosedPhase(point: any, index: number, terrainM: number): TerrainPrecipType | null {
   const precip = precipMmAt(point.forecast, index);
@@ -67,12 +56,14 @@ export function nextWintryEvent(
   if (!point?.times?.length || terrainM === null || !Number.isFinite(terrainM)) return null;
 
   const times: number[] = point.times;
-  const horizonEnd = Math.min(times[times.length - 1], fromTime + horizonHours * 3600_000);
-  const first = Math.max(0, nearestIndex(times, fromTime));
+  const horizonEnd = Math.min(times[0] + 144 * 3600_000,
+    times.at(-1)! + forecastIntervalHours(times, times.length - 1) * 3600_000,
+    fromTime + horizonHours * 3600_000);
   const qualifying: Array<{ index: number; time: number; precip: number; phase: TerrainPrecipType }> = [];
 
-  for (let i = first; i < times.length && times[i] <= horizonEnd + 60_000; i++) {
-    if (times[i] < fromTime - 90 * 60_000) continue;
+  for (let i = 0; i < times.length && times[i] < horizonEnd; i++) {
+    const intervalEnd = times[i] + forecastIntervalHours(times, i) * 3600_000;
+    if (intervalEnd <= fromTime) continue;
     const precip = precipMmAt(point.forecast, i);
     if (precip === null || precip < PRECIP_THRESHOLD_MM_H) continue;
     const phase = diagnosedPhase(point, i, terrainM);
@@ -90,7 +81,8 @@ export function nextWintryEvent(
   }
 
   const startTime = event[0].time;
-  const endTime = event[event.length - 1].time + 3 * 3600_000;
+  const last = event[event.length - 1];
+  const endTime = Math.min(horizonEnd, last.time + forecastIntervalHours(times, last.index) * 3600_000);
   let peak = event[0];
   let minSnowlineM: number | null = null;
   const phaseWeights = new Map<TerrainPrecipTypeKey, { weight: number; phase: TerrainPrecipType }>();
@@ -113,12 +105,17 @@ export function nextWintryEvent(
   }
 
   let snowpack = 0;
+  let incomplete = false;
   const startIndex = event[0].index;
   const endIndex = event[event.length - 1].index;
   for (let i = startIndex; i <= endIndex; i++) {
     const phase = diagnosedPhase(point, i, terrainM);
     const precip = precipMmAt(point.forecast, i);
-    const dt = 3;
+    const intervalStart = Math.max(fromTime, times[i]);
+    const intervalEnd = Math.min(endTime, times[i] + forecastIntervalHours(times, i) * 3600_000);
+    const dt = (intervalEnd - intervalStart) / 3600_000;
+    if (dt <= 0) continue;
+    if (precip === null || (precip >= PRECIP_THRESHOLD_MM_H && !phase)) incomplete = true;
     snowpack = estimateNewSnowStep(precip, phase, snowpack, dt).cumulativeCm;
   }
 
@@ -131,6 +128,7 @@ export function nextWintryEvent(
     newSnowCm: snowpack,
     dominantPhase: dominant,
     confidence: aggregateConfidence(event),
-    activeNow: fromTime >= startTime - 90 * 60_000 && fromTime <= endTime + 90 * 60_000,
+    activeNow: fromTime >= startTime && fromTime < endTime,
+    incomplete,
   };
 }

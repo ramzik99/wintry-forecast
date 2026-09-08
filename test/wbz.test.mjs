@@ -6,6 +6,7 @@ import ts from 'typescript';
 function moduleUrl(name, replacements = []) {
   let source = readFileSync(new URL(`../src/${name}.ts`, import.meta.url), 'utf8');
   for (const [from, to] of replacements) source = source.replaceAll(from, to);
+  source = source.replace(/(['"])\.\/([A-Za-z]+)\1/g, (_, quote, dependency) => JSON.stringify(moduleUrl(dependency)));
   const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   return `data:text/javascript;base64,${Buffer.from(js).toString('base64')}`;
 }
@@ -166,4 +167,79 @@ test('contour floor keeps missing samples missing and handles entirely cold or a
   assert.deepEqual(contourPolylines(field,-600),[]);
   assert.deepEqual(prepareSnowlineContours(contourGrid([[null,NaN]]),200).levels,[]);
   assert.deepEqual(prepareSnowlineContours([],500),{field:[],levels:[]});
+});
+
+const { conditionLabel, noEventMessage } = await import(moduleUrl('forecastStatus'));
+const { forecastIntervalIndex, forecastIntervalHours } = await import(moduleUrl('forecastTime'));
+const { profileIsFresh, isOlderRun, PROFILE_CACHE_TTL_MS } = await import(moduleUrl('forecastFreshness'));
+
+test('missing precipitation and unknown wet phase are never labelled dry',()=>{
+  assert.equal(conditionLabel(null,null),'Precipitation unavailable');
+  assert.equal(conditionLabel(NaN,null),'Precipitation unavailable');
+  assert.equal(conditionLabel(0,null),'Dry');
+  assert.equal(conditionLabel(2,null),'Precipitation · type uncertain');
+  assert.equal(conditionLabel(2,{label:'Snow'}),'Snow');
+});
+
+test('a zero-crossing layer uses the correct signed triangular areas',()=>{
+  const phase=terrainPrecipitationType([point(0,-2),point(1000,2),point(2000,-2)],0);
+  assert.equal(phase.meltingDegreeMetres,1000);
+  assert.equal(phase.refreezingDegreeMetres,500);
+  assert.equal(phase.key,'freezing-rain');
+  const snow=terrainPrecipitationType([point(0,-5),point(1000,-8),point(2000,-12)],0);
+  assert.equal(snow.meltingDegreeMetres,0);
+  assert.equal(snow.key,'snow');
+});
+
+test('interval selection preserves ongoing weather and rejects gaps and out-of-range times',()=>{
+  const h=3600000,times=[0,3*h,6*h];
+  assert.equal(forecastIntervalIndex(times,2*h),0);
+  assert.equal(forecastIntervalIndex(times,3*h),1);
+  assert.equal(forecastIntervalIndex(times,-1),-1);
+  assert.equal(forecastIntervalIndex(times,9*h),-1);
+  assert.equal(forecastIntervalIndex([0,6*h],4*h),-1);
+  assert.equal(forecastIntervalHours([0,h,2*h],0),1);
+});
+
+const snowEventPoint=()=>({times:[0,3*3600000,6*3600000],forecast:{__precipMm3h:[6,0,0],
+  'temp-850h':[-5,-5,-5],'dewpoint-850h':[-5,-5,-5],'gh-850h':[1000,1000,1000],
+  'temp-700h':[-8,-8,-8],'dewpoint-700h':[-8,-8,-8],'gh-700h':[3000,3000,3000]}});
+
+test('an ongoing snow event reports its remaining interval and amount',()=>{
+  const h=3600000,event=nextWintryEvent(snowEventPoint(),1000,2*h);
+  assert.ok(event);assert.equal(event.activeNow,true);assert.equal(event.endTime,3*h);
+  assert.equal(event.newSnowCm,3);assert.equal(event.incomplete,false);
+  assert.equal(nextWintryEvent(snowEventPoint(),1000,3*h),null);
+});
+
+test('an upcoming event is not called current and does not invent a minimum fifteen-minute amount',()=>{
+  const h=3600000,p=snowEventPoint();p.forecast.__precipMm3h=[0,6,0];
+  assert.equal(nextWintryEvent(p,1000,2*h).activeNow,false);
+  const nearEnd=nextWintryEvent(p,1000,6*h-5*60000);
+  assert.ok(Math.abs(nearEnd.newSnowCm-.25)<1e-9);
+});
+
+test('a missing interval makes an event amount uncertain',()=>{
+  const h=3600000,p=snowEventPoint();p.times=[0,h,2*h];p.forecast.__precipMm3h=[6,null,6];
+  const event=nextWintryEvent(p,1000,0);
+  assert.equal(event.incomplete,true);
+});
+
+test('no-event wording distinguishes complete dry coverage from missing data',()=>{
+  const p=snowEventPoint();p.forecast.__precipMm3h=[0,0,0];
+  assert.equal(noEventMessage(p,1000,0),'No wintry precipitation in the available forecast');
+  p.forecast.__precipMm3h[1]=null;
+  assert.match(noEventMessage(p,1000,0),/incomplete/);
+  assert.equal(noEventMessage(p,null,0),'Wintry outlook unavailable');
+  assert.equal(noEventMessage(p,1000,10*3600000),'Outside available forecast');
+});
+
+test('cached profiles expire and an older model run cannot replace a newer run',()=>{
+  const now=10000000,run=1000000;
+  assert.equal(profileIsFresh(now,run,run,now),true);
+  assert.equal(profileIsFresh(now-PROFILE_CACHE_TTL_MS,run,run,now),false);
+  assert.equal(profileIsFresh(now,run,run+3600000,now),false);
+  assert.equal(profileIsFresh(now+100,run,run,now),false);
+  assert.equal(isOlderRun(run,run+3600000),true);
+  assert.equal(isOlderRun(run+3600000,run),false);
 });

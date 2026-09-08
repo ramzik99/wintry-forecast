@@ -4,7 +4,6 @@ import terser from '@rollup/plugin-terser';
 import serve from 'rollup-plugin-serve';
 import rollupSvelte from 'rollup-plugin-svelte';
 import rollupSwc from 'rollup-plugin-swc3';
-import rollupCleanup from 'rollup-plugin-cleanup';
 import { less } from 'svelte-preprocess-less';
 import sveltePreprocess from 'svelte-preprocess';
 import { transformCodeToESMPlugin, keyPEM, certificatePEM } from '@windycom/plugin-devtools';
@@ -18,7 +17,7 @@ export default {
     {
       file: 'dist/plugin.min.js',
       format: 'module',
-      plugins: [rollupCleanup({ comments: 'none', extensions: ['ts'] }), terser()],
+      plugins: [terser()],
     },
   ],
   onwarn(warning, warn) {
