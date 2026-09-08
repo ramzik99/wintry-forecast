@@ -17,7 +17,7 @@
   {#if tab === 'graph'}
   {#if chart}
     <div class="plot-wrap">
-      <svg bind:this={svgEl} viewBox="0 0 360 324" role="img" aria-label="Terrain-aware wintry forecast through 144 hours" on:pointermove={handlePointer} on:pointerdown={handlePointer} on:pointerleave={() => tooltip = null}>
+      <svg bind:this={svgEl} viewBox="0 0 360 338" role="img" aria-label="Terrain-aware wintry forecast through 144 hours" on:pointermove={handlePointer} on:pointerdown={handlePointer} on:pointerleave={() => tooltip = null}>
         <text x="42" y="11" class="section-label snowline-title">SNOWLINE <tspan>{units === 'imperial' ? 'ft' : 'm'}</tspan></text>
         <rect x="42" y="18" width="306" height="112" rx="8" class="plot-bg" />
         {#if chart.terrainY !== null}
@@ -49,38 +49,38 @@
         {#each chart.phaseBlocks as block}<rect x={block.x} y="212" width={block.width} height="23" rx="2.8" class={`phase-block phase-${block.key}`} />{/each}
 
         <g class="phase-legend-svg">
-          <rect x="42" y="244" width="7" height="7" rx="1.5" class="phase-snow"/><text x="52" y="250">Snow</text>
-          <rect x="88" y="244" width="7" height="7" rx="1.5" class="phase-wet-snow"/><text x="98" y="250">Wet snow</text>
-          <rect x="149" y="244" width="7" height="7" rx="1.5" class="phase-mix"/><text x="159" y="250">Mix</text>
-          <rect x="183" y="244" width="7" height="7" rx="1.5" class="phase-rain"/><text x="193" y="250">Rain</text>
-          <rect x="218" y="244" width="7" height="7" rx="1.5" class="phase-ice-pellets"/><text x="228" y="250">Ice/sleet</text>
-          <rect x="279" y="244" width="7" height="7" rx="1.5" class="phase-freezing-rain"/><text x="289" y="250">Frz rain</text>
+          <rect x="42" y="244" width="7" height="7" rx="1.5" class="phase-snow"/><text x="53" y="251">Snow</text>
+          <rect x="145" y="244" width="7" height="7" rx="1.5" class="phase-wet-snow"/><text x="156" y="251">Wet snow</text>
+          <rect x="246" y="244" width="7" height="7" rx="1.5" class="phase-mix"/><text x="257" y="251">Mix</text>
+          <rect x="42" y="258" width="7" height="7" rx="1.5" class="phase-rain"/><text x="53" y="265">Rain</text>
+          <rect x="145" y="258" width="7" height="7" rx="1.5" class="phase-ice-pellets"/><text x="156" y="265">Ice pellets</text>
+          <rect x="246" y="258" width="7" height="7" rx="1.5" class="phase-freezing-rain"/><text x="257" y="265">Freezing rain</text>
         </g>
 
-        <text x="42" y="268" class="section-label snow-title">NEW SNOW <tspan>{units === 'imperial' ? 'est. in' : 'est. cm'}</tspan></text>
-        <rect x="42" y="274" width="306" height="28" rx="7" class="band-bg" />
+        <text x="42" y="282" class="section-label snow-title">NEW SNOW <tspan>{units === 'imperial' ? 'est. in' : 'est. cm'}</tspan></text>
+        <rect x="42" y="288" width="306" height="28" rx="7" class="band-bg" />
         {#if chart.newSnowMax > 0.05}
-          <text x="37" y="280" text-anchor="end" class="axis snow-axis">{chart.newSnowMaxLabel}</text>
+          <text x="37" y="294" text-anchor="end" class="axis snow-axis">{chart.newSnowMaxLabel}</text>
           <path d={chart.newSnowArea} class="new-snow-area" />
           <polyline points={chart.newSnowPoints} class="new-snow-line" />
         {:else}
-          <text x="195" y="291" text-anchor="middle" class="empty-band">{chart.coverageComplete ? (units === 'imperial' ? '0 in' : '0 cm') : 'Unavailable'}</text>
+          <text x="195" y="305" text-anchor="middle" class="empty-band">{chart.coverageComplete ? (units === 'imperial' ? '0 in' : '0 cm') : 'Unavailable'}</text>
         {/if}
 
         {#if chart.nowX !== null}
-          <line x1={chart.nowX} x2={chart.nowX} y1="18" y2="302" class="now-line" />
+          <line x1={chart.nowX} x2={chart.nowX} y1="18" y2="316" class="now-line" />
           <rect x={Math.max(43, Math.min(322, chart.nowX - 13))} y="20" width="26" height="12" rx="3" class="now-tag-bg" />
           <text x={Math.max(56, Math.min(335, chart.nowX))} y="29" text-anchor="middle" class="now-tag">Now</text>
         {/if}
         {#if chart.currentX !== null && chart.currentY !== null}
-          <line x1={chart.currentX} x2={chart.currentX} y1="18" y2="302" class="cursor" />
+          <line x1={chart.currentX} x2={chart.currentX} y1="18" y2="316" class="cursor" />
           <circle cx={chart.currentX} cy={chart.currentY} r="4.2" class="current-dot" />
         {/if}
-        {#if tooltip}<line x1={tooltip.x} x2={tooltip.x} y1="18" y2="302" class="inspect-line" />{/if}
+        {#if tooltip}<line x1={tooltip.x} x2={tooltip.x} y1="18" y2="316" class="inspect-line" />{/if}
 
-        <text x="42" y="320" text-anchor="start" class="axis">{chart.startLabel}</text>
-        <text x="195" y="320" text-anchor="middle" class="axis">{chart.midTimeLabel}</text>
-        <text x="348" y="320" text-anchor="end" class="axis">{chart.endTimeLabel}</text>
+        {#each [24,48,72,96,120,144] as hour}
+          <text x={42+306*hour/144} y="334" text-anchor={hour===144?'end':'middle'} class="axis timeline-tick">+{hour} h</text>
+        {/each}
       </svg>
 
       {#if tooltip}
@@ -120,8 +120,6 @@
     {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}<button class="crossing-action" type="button" on:click={() => jumpToCrossing(Number(crossing.crossingTime))}>{crossing.direction === 'below' ? 'Snowline falls below this elevation' : 'Snowline rises above this elevation'} · {formatShortTime(crossing.crossingTime)} →</button>{/if}
     {#if chart.currentPhase?.confidence === 'low'}<div class="quality-note">Limited atmospheric detail at this elevation; type may differ.</div>{/if}
     {#if !chart.coverageComplete}<div class="quality-note">Some precipitation data is missing. Snow amounts may be incomplete.</div>{/if}
-    <div class="hint">{precipPeriodLabel(point.forecast)}</div>
-    <div class="hint">Atmospheric WBZ estimate; gaps are unresolved. Precipitation is required for snow.</div>
   {:else}
     <div class="empty">Wintry forecast unavailable.</div>
   {/if}
@@ -134,7 +132,7 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';
-  import { precipPeriodLabel, precipMmAt, formatPrecipMm, PRECIP_THRESHOLD_MM_H } from './precip';
+  import { precipMmAt, formatPrecipMm, PRECIP_THRESHOLD_MM_H } from './precip';
   import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
   import { terrainCrossingState } from './terrainCrossing';
   import { estimateNewSnowStep } from './snowAccum';
@@ -229,7 +227,7 @@
     const entries = samples.filter((v: any) => v.value !== null && Number.isFinite(v.value));
     const snow = entries.map((v: any) => Number(v.value)), scaleValues = terrain !== null && Number.isFinite(terrain) ? [...snow, terrain] : snow.length ? snow : [0];
     let min = Math.floor((Math.min(...scaleValues) - 150) / 100) * 100, max = Math.ceil((Math.max(...scaleValues) + 150) / 100) * 100; if (max - min < 600) { const mid = (min + max) / 2; min = Math.floor((mid - 300) / 100) * 100; max = Math.ceil((mid + 300) / 100) * 100; }
-    const left = 42, right = 348, top = 18, bottom = 130, t0 = p.times[0], t1 = p.times[p.times.length - 1];
+    const left = 42, right = 348, top = 18, bottom = 130, t0 = p.times[0], t1 = t0 + 144 * 3600_000;
     const x = (t: number) => left + (t - t0) / Math.max(1, t1 - t0) * (right - left), y = (v: number) => bottom - (v - min) / Math.max(1, max - min) * (bottom - top);
     let connected=false;
     const points=samples.map((v:any)=>{if(v.value===null){connected=false;return ''}const command=connected?'L':'M';connected=true;return `${command}${x(v.time).toFixed(1)},${y(v.value).toFixed(1)}`}).join(' ');
@@ -238,7 +236,7 @@
     const currentValue = snowlineAt(p, currentIndex), currentTime = p.times[currentIndex];
     const currentTerrainDifference = currentValue !== null && terrain !== null ? Math.round((terrain - currentValue) / 10) * 10 : null;
     const precipValues = p.times.map((_: number, i: number) => precipMmAt(p.forecast, i)), validPrecip = precipValues.filter((v: number | null): v is number => v !== null && Number.isFinite(v)), precipMax = validPrecip.length ? Math.max(PRECIP_THRESHOLD_MM_H, ...validPrecip) : 0;
-    const spacing = (right - left) / Math.max(1, p.times.length - 1), barWidth = Math.max(1.1, Math.min(4.5, spacing * .78));
+    const spacing = p.times.length > 1 ? x(p.times[1])-x(p.times[0]) : 306*3/144, barWidth = Math.max(1.1, Math.min(4.5, spacing * .78));
     const precipBars = precipValues.map((mm: number | null, i: number) => { const value = mm ?? 0, height = precipMax > 0 ? Math.min(30, value / precipMax * 30) : 0; return { x: x(p.times[i]) - barWidth / 2, y: 188 - height, width: barWidth, height, mm: value }; }).filter((b: Bar) => b.height > .1);
     const phases = p.times.map((_: number, i: number) => phaseAt(p, terrain, i));
 
@@ -248,7 +246,7 @@
       running = estimateNewSnowStep(precipValues[i], phases[i], running, dt).cumulativeCm;
       cumulativeNewSnow.push(running);
     }
-    const newSnowMax = Math.max(0, ...cumulativeNewSnow), snowTop = 274, snowBottom = 302;
+    const newSnowMax = Math.max(0, ...cumulativeNewSnow), snowTop = 288, snowBottom = 316;
     const snowY = (v: number) => snowBottom - (newSnowMax > 0 ? v / newSnowMax * (snowBottom - snowTop) : 0);
     const newSnowPoints = cumulativeNewSnow.map((v, i) => `${x(p.times[i]).toFixed(1)},${snowY(v).toFixed(1)}`).join(' ');
     const newSnowArea = cumulativeNewSnow.length ? `M ${x(p.times[0]).toFixed(1)} ${snowBottom} L ${newSnowPoints.replace(/,/g, ' ')} L ${x(p.times[p.times.length - 1]).toFixed(1)} ${snowBottom} Z` : '';
@@ -294,7 +292,9 @@
     if (!svgEl || !chart || !point?.times?.length) return;
     const rect = svgEl.getBoundingClientRect(), vx = (event.clientX - rect.left) / rect.width * 360;
     if (vx < 42 || vx > 348) { tooltip = null; return; }
-    const t0 = point.times[0], t1 = point.times[point.times.length - 1], idx = nearestIndex(point.times, t0 + (vx - 42) / 306 * (t1 - t0)), time = point.times[idx], x = 42 + (time - t0) / Math.max(1, t1 - t0) * 306;
+    const t0 = point.times[0], t1 = t0 + 144 * 3600_000, hoverTime = t0 + (vx - 42) / 306 * (t1 - t0);
+    if(hoverTime > point.times[point.times.length - 1]){tooltip=null;return}
+    const idx = nearestIndex(point.times, hoverTime), time = point.times[idx], x = 42 + (time - t0) / (t1 - t0) * 306;
     if (event.type === 'pointerdown') setTimeline(time);
     tooltip = { x, cssX: Math.max(92, Math.min(rect.width - 92, x / 360 * rect.width)), cssY: 44, snowline: (() => { const v = snowlineAt(point, idx); return v === null ? null : Math.round(v / 10) * 10; })(), precip: precipMmAt(point.forecast, idx), phase: phaseAt(point, terrainM, idx), newSnow: chart.cumulativeNewSnow[idx] ?? 0, timeLabel: formatTooltipTime(time) };
   }
@@ -305,7 +305,7 @@
     try {
       const clone = svgEl.cloneNode(true) as SVGSVGElement; clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); clone.setAttribute('width', '1080'); clone.setAttribute('height', '1002');
       const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-      style.textContent = 'text{font-family:Arial,sans-serif}.plot-bg,.band-bg{fill:#101b22;stroke:#29404d}.terrain-zone{fill:#17313a}.grid{stroke:#29404d}.axis{fill:#9fb0ba;font-size:8px}.section-label{fill:#dce8ee;font-size:7px;font-weight:700}.section-label tspan{fill:#72838d}.snowline-line{fill:none;stroke:#67d7ff;stroke-width:2.7}.terrain-line{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag{fill:#ffbd75;font-size:6px}.min24-line{stroke:#9fe9ff;stroke-dasharray:2 3}.min24-dot{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag{fill:#bdefff;font-size:6px}.precip-bar{fill:#3794b8}.precip-bar.wet{fill:#64d4f5}.phase-snow{fill:#f4f7fb}.phase-wet-snow{fill:#6bd47f}.phase-mix{fill:#f2d84f}.phase-rain{fill:#4f82ff}.phase-ice-pellets{fill:#a8753e}.phase-freezing-rain{fill:#a867e8}.phase-block{opacity:.94}.phase-legend-svg text{fill:#aebcc4;font-size:5.5px}.new-snow-line{fill:none;stroke:#82e398;stroke-width:2}.new-snow-area{fill:#82e398;opacity:.18}.now-line{stroke:#ff6759}.now-tag-bg{fill:#ff6759}.now-tag{fill:#fff;font-size:7px}.cursor{stroke:#dce8ee;stroke-dasharray:2 3}.current-dot{fill:#fff;stroke:#67d7ff;stroke-width:2}.crossing-line{stroke:#ffe05b;stroke-dasharray:3 3}.crossing-dot{fill:#111;stroke:#ffe05b;stroke-width:2}.empty-band{fill:#8596a2;font-size:7px}';
+      style.textContent = 'text{font-family:Arial,sans-serif}.plot-bg,.band-bg{fill:#101b22;stroke:#29404d}.terrain-zone{fill:#17313a}.grid{stroke:#29404d}.axis{fill:#9fb0ba;font-size:8px}.section-label{fill:#dce8ee;font-size:7px;font-weight:700}.section-label tspan{fill:#72838d}.snowline-line{fill:none;stroke:#67d7ff;stroke-width:2.7}.terrain-line{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag{fill:#ffbd75;font-size:6px}.min24-line{stroke:#9fe9ff;stroke-dasharray:2 3}.min24-dot{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag{fill:#bdefff;font-size:6px}.precip-bar{fill:#3794b8}.precip-bar.wet{fill:#64d4f5}.phase-snow{fill:#f4f7fb}.phase-wet-snow{fill:#6bd47f}.phase-mix{fill:#f2d84f}.phase-rain{fill:#4f82ff}.phase-ice-pellets{fill:#a8753e}.phase-freezing-rain{fill:#a867e8}.phase-block{opacity:.94}.phase-legend-svg text{fill:#d4dfe6;font-size:9px}.new-snow-line{fill:none;stroke:#82e398;stroke-width:2}.new-snow-area{fill:#82e398;opacity:.18}.now-line{stroke:#ff6759}.now-tag-bg{fill:#ff6759}.now-tag{fill:#fff;font-size:7px}.cursor{stroke:#dce8ee;stroke-dasharray:2 3}.current-dot{fill:#fff;stroke:#67d7ff;stroke-width:2}.crossing-line{stroke:#ffe05b;stroke-dasharray:3 3}.crossing-dot{fill:#111;stroke:#ffe05b;stroke-width:2}.empty-band{fill:#8596a2;font-size:7px}';
       clone.insertBefore(style, clone.firstChild);
       const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }), url = URL.createObjectURL(blob), img = new Image();
       await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = () => reject(); img.src = url; });
@@ -338,7 +338,7 @@
   .chart-shell{position:fixed;z-index:10020;width:min(430px,calc(100vw - 16px));padding:11px 12px 10px;border:1px solid rgba(98,213,255,.35);border-radius:14px;background:linear-gradient(180deg,rgba(15,24,31,.99),rgba(9,17,23,.99));color:white;box-shadow:0 16px 42px rgba(0,0,0,.56);backdrop-filter:blur(6px)}
   .chart-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.chart-title{min-width:0;flex:1}.chart-title b{display:block;font-size:15px}.chart-title small,.chart-title em{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal}.chart-title small{margin-top:3px;color:#a5b4bd;font-size:9px}.chart-title em{margin-top:2px;color:#70cef4;font-size:8px}.chart-actions{display:flex;gap:4px}.chart-actions button{height:26px;min-width:26px;padding:0 7px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:rgba(255,255,255,.075);color:#fff;font-size:12px;font-weight:800;cursor:pointer}.chart-actions button:hover{background:rgba(98,213,255,.15)}.png-button{font-size:8px!important}.drag-button{cursor:grab!important;touch-action:none}
   .forecast-tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;padding:3px;border-radius:8px;background:rgba(255,255,255,.035)}.forecast-tabs button{height:27px;border:0;border-radius:6px;background:transparent;color:#82939d;font-size:9px;font-weight:800;cursor:pointer}.forecast-tabs button.active{background:rgba(98,213,255,.13);color:#eaf7fc;box-shadow:inset 0 0 0 1px rgba(98,213,255,.22)}
-  .plot-wrap{position:relative;margin-top:5px}svg{display:block;width:100%;height:auto;overflow:visible;touch-action:none}.plot-bg,.band-bg{fill:rgba(255,255,255,.022);stroke:rgba(104,151,177,.22);stroke-width:1}.terrain-zone{fill:rgba(55,190,232,.085)}.grid{stroke:rgba(160,196,216,.13)}.axis{fill:#8fa1ac;font-size:8px;font-family:sans-serif}.section-label{fill:#cbd8df;font-size:6.8px;font-family:sans-serif;font-weight:800;letter-spacing:.35px}.section-label tspan{fill:#657681;font-weight:500}.snowline-title{fill:#cfeefb}.precip-title,.precip-axis{fill:#64d4f5}.phase-title{fill:#d9c75e}.snow-title,.snow-axis{fill:#82e398}.terrain-line{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag{fill:#ffbd75;font-size:6px;font-family:sans-serif}.snowline-line{fill:none;stroke:#65d5ff;stroke-width:2.7;stroke-linecap:round;stroke-linejoin:round}.min24-line{stroke:#9fe9ff;stroke-width:1;stroke-dasharray:2 3}.min24-dot{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag{fill:#bdefff;font-size:5.8px;font-family:sans-serif;font-weight:800}.now-line{stroke:#ff6658;stroke-width:1.25}.now-tag-bg{fill:#ff6658}.now-tag{fill:#fff;font-size:7px;font-family:sans-serif;font-weight:800}.cursor{stroke:#b9c6cd;stroke-width:1;stroke-dasharray:2 3}.current-dot{fill:#fff;stroke:#65d5ff;stroke-width:2.3}.crossing-line{stroke:#ffe05b;stroke-width:1.3;stroke-dasharray:3 3;cursor:pointer}.crossing-dot{fill:#12191f;stroke:#ffe05b;stroke-width:2.1;cursor:pointer}.inspect-line{stroke:#83939d}.precip-bar{fill:#3f9fbe;opacity:.72}.precip-bar.wet{fill:#67d6f5;opacity:.96}.phase-base{fill:#0b1419}.phase-block{opacity:.94}.phase-snow{fill:#f4f7fb}.phase-wet-snow{fill:#6bd47f}.phase-mix{fill:#f2d84f}.phase-rain{fill:#4f82ff}.phase-ice-pellets{fill:#a8753e}.phase-freezing-rain{fill:#a867e8}.phase-legend-svg text{fill:#aebcc4;font-size:5.5px;font-family:sans-serif}.new-snow-area{fill:#82e398;opacity:.16}.new-snow-line{fill:none;stroke:#82e398;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.empty-band{fill:#778993;font-size:7px;font-family:sans-serif}
+  .plot-wrap{position:relative;margin-top:5px}svg{display:block;width:100%;height:auto;overflow:visible;touch-action:none}.plot-bg,.band-bg{fill:rgba(255,255,255,.022);stroke:rgba(104,151,177,.22);stroke-width:1}.terrain-zone{fill:rgba(55,190,232,.085)}.grid{stroke:rgba(160,196,216,.13)}.axis{fill:#8fa1ac;font-size:8px;font-family:sans-serif}.section-label{fill:#cbd8df;font-size:6.8px;font-family:sans-serif;font-weight:800;letter-spacing:.35px}.section-label tspan{fill:#657681;font-weight:500}.snowline-title{fill:#cfeefb}.precip-title,.precip-axis{fill:#64d4f5}.phase-title{fill:#d9c75e}.snow-title,.snow-axis{fill:#82e398}.terrain-line{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag{fill:#ffbd75;font-size:6px;font-family:sans-serif}.snowline-line{fill:none;stroke:#65d5ff;stroke-width:2.7;stroke-linecap:round;stroke-linejoin:round}.min24-line{stroke:#9fe9ff;stroke-width:1;stroke-dasharray:2 3}.min24-dot{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag{fill:#bdefff;font-size:5.8px;font-family:sans-serif;font-weight:800}.now-line{stroke:#ff6658;stroke-width:1.25}.now-tag-bg{fill:#ff6658}.now-tag{fill:#fff;font-size:7px;font-family:sans-serif;font-weight:800}.cursor{stroke:#b9c6cd;stroke-width:1;stroke-dasharray:2 3}.current-dot{fill:#fff;stroke:#65d5ff;stroke-width:2.3}.crossing-line{stroke:#ffe05b;stroke-width:1.3;stroke-dasharray:3 3;cursor:pointer}.crossing-dot{fill:#12191f;stroke:#ffe05b;stroke-width:2.1;cursor:pointer}.inspect-line{stroke:#83939d}.precip-bar{fill:#3f9fbe;opacity:.72}.precip-bar.wet{fill:#67d6f5;opacity:.96}.phase-base{fill:#0b1419}.phase-block{opacity:.94}.phase-snow{fill:#f4f7fb}.phase-wet-snow{fill:#6bd47f}.phase-mix{fill:#f2d84f}.phase-rain{fill:#4f82ff}.phase-ice-pellets{fill:#a8753e}.phase-freezing-rain{fill:#a867e8}.phase-legend-svg text{fill:#d4dfe6;font-size:9px;font-family:sans-serif}.new-snow-area{fill:#82e398;opacity:.16}.new-snow-line{fill:none;stroke:#82e398;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.empty-band{fill:#778993;font-size:7px;font-family:sans-serif}
   .tooltip{position:absolute;z-index:4;min-width:176px;transform:translateX(-50%);padding:7px 9px;border-radius:9px;background:rgba(5,12,17,.99);border:1px solid rgba(98,213,255,.25);box-shadow:0 7px 20px rgba(0,0,0,.44);pointer-events:none}.tooltip>b{display:block;font-size:8.8px}.tooltip>strong{display:flex;align-items:center;gap:5px;margin:4px 0 5px;font-size:9.2px}.tip-phase-dot,.current-phase-dot{display:inline-block;width:8px;height:8px;border-radius:2px;flex:0 0 auto}.tip-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 9px}.tip-grid span{font-size:7.3px;color:#8fa0aa}.tip-grid b{color:#eaf3f7;font-weight:800}.text-snow{color:#f4f7fb}.text-wet-snow{color:#6bd47f}.text-mix{color:#f2d84f}.text-rain{color:#4f82ff}.text-ice-pellets{color:#c08a50}.text-freezing-rain{color:#bf83f4}
   .current-card{margin-top:3px;padding:7px;border:1px solid rgba(255,255,255,.07);border-left:3px solid rgba(255,255,255,.28);border-radius:9px;background:rgba(255,255,255,.028)}.active-snow{border-left-color:#f4f7fb}.active-wet-snow{border-left-color:#6bd47f}.active-mix{border-left-color:#f2d84f}.active-rain{border-left-color:#4f82ff}.active-ice-pellets{border-left-color:#a8753e}.active-freezing-rain{border-left-color:#a867e8}.current-type{text-align:center}.current-type b{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px}.current-type strong{display:block;margin-top:3px;color:#81dfff;font-size:7.3px}.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin-top:6px}.metrics span{padding:5px 2px;border-radius:7px;background:rgba(255,255,255,.035);text-align:center;min-width:0}.metrics small{display:block;color:#7f909a;font-size:5.8px}.metrics b{display:block;margin-top:1px;font-size:7px;white-space:nowrap}
   .outlook24{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin-top:6px;padding:6px 8px;border-radius:8px;background:rgba(98,213,255,.06);border:1px solid rgba(98,213,255,.11)}.outlook24>b{grid-row:1/3;color:#8fdfff;font-size:7px;text-transform:uppercase;letter-spacing:.3px}.outlook24 span{color:#dceaf0;font-size:7.5px;font-weight:700}.outlook24 button{justify-self:start;padding:2px 0;border:0;background:transparent;color:#f1d67d;font-size:7px;font-weight:800;cursor:pointer}.outlook24 button:hover{color:#fff2ae;text-decoration:underline}
