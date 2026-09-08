@@ -85,7 +85,8 @@ export function estimateNewSnowStep(
   previousCm: number,
   hours = 1,
 ): NewSnowStep {
-  const dt = Math.max(0.25, Math.min(6, Number(hours) || 1));
+  const dt = Number.isFinite(hours) ? Math.max(0, Math.min(6, hours)) : 0;
+  if (dt === 0) return { hourlyCm: 0, cumulativeCm: Math.max(0, previousCm) };
   let snowpack = Math.max(0, previousCm);
 
   if (!phase) {

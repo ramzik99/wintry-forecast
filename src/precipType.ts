@@ -88,7 +88,11 @@ function integrateSigned(points: ProfilePoint[], sign: 'positive' | 'negative', 
     const twB = a.wetBulbC + fraction * (b.wetBulbC - a.wetBulbC);
     const fa = sign === 'positive' ? Math.max(0, a.wetBulbC) : Math.max(0, -a.wetBulbC);
     const fb = sign === 'positive' ? Math.max(0, twB) : Math.max(0, -twB);
-    sum += 0.5 * (fa + fb) * (upper - a.heightM);
+    // A layer crossing zero contributes only on the selected side of the crossing.
+    const signedFraction = a.wetBulbC * twB < 0
+      ? (fa > 0 ? Math.abs(a.wetBulbC) : Math.abs(twB)) / (Math.abs(a.wetBulbC) + Math.abs(twB))
+      : 1;
+    sum += 0.5 * (fa + fb) * (upper - a.heightM) * signedFraction;
   }
   return sum;
 }

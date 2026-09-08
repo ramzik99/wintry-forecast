@@ -6,9 +6,20 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**200.0.3**
+**200.0.13**
 
-v200 is the convenience freeze: the plugin is feature-complete. Future releases should be limited to bug fixes, compatibility updates, scientific corrections, and small UI polish rather than new forecast metrics.
+v200 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+
+### 200.0.13 convenience and reliability
+
+- Tap a saved-place shortcut or the map for the local forecast; open Forecast, Save the place, or Copy a short summary.
+- Read the current/next wintry interval and estimated new snow. During an active interval, the amount is the estimated snow **remaining from the selected time**.
+- Missing precipitation and uncertain precipitation type are explicitly labelled. A missing forecast is never treated as dry weather.
+- Refresh checks current data; profiles expire after 15 minutes. Older responses cannot replace a newer model run, and viewport fields do not combine known different runs.
+- Unit changes immediately update the graph and sounding. Mobile windows scroll; forecast and sounding images can be saved.
+- The contour field and range never fall below −500 m. Internal cold-column diagnostics and terrain comparisons retain their original values.
+- Signed warm/cold-layer integration splits at zero before measuring area. This is an arithmetic correction, not a calibration of the empirical phase thresholds.
+- Cross-platform production builds use the same Node entry point on Windows and Unix.
 
 ## What it shows
 
@@ -69,7 +80,7 @@ Wet-bulb temperature is solved with a pressure-aware psychrometric relation. The
 
 That wet-bulb-zero height is used as the plugin's **thermal snowline proxy**. It is a rain/snow-boundary diagnostic, not proof that snowfall is occurring.
 
-If the lowest resolved atmospheric level is already at or below 0°C wet bulb, the lowest available level is used rather than pretending a lower crossing is resolved.
+If the lowest resolved atmospheric level is already below 0°C wet bulb, a bounded downward extrapolation keeps the diagnostic finite. Its status remains below the resolved profile. Display contours are clamped to −500 m; the raw estimate remains available for terrain comparisons.
 
 ## Terrain-aware precipitation type
 
@@ -109,12 +120,14 @@ This separation prevents the two point-selection systems from competing with eac
 
 The panel includes:
 
-- Place search using OpenStreetMap Nominatim
+- Explicitly submitted place search using OpenStreetMap Nominatim (typing only filters saved places)
 - Current device location
 - Locally saved favourite points
 - Clear and hide/show controls
 
-Saved places are stored locally in the browser/app environment.
+Saved places are stored locally in the browser/app environment; the first three are available as one-tap shortcuts.
+
+Search and user-requested reverse lookups share a paced client queue and in-memory cache. The public service prohibits autocomplete and applies a one-request-per-second limit to the whole application, not each user. A distributed deployment needs a shared rate-limited proxy or an appropriate provider before aggregate traffic exceeds that limit. See the [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/). Client pacing alone does not enforce an application-wide limit.
 
 ## Contour generation and performance
 

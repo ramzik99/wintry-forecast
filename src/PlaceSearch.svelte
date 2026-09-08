@@ -31,6 +31,12 @@
     </div>
   </form>
 
+  {#if !query && !open && favourites.length}
+    <div class="quick-places" aria-label="Saved places">
+      {#each favourites.slice(0,3) as place}<button type="button" on:click={() => chooseResult(place)} title={place.primary+', '+place.secondary}>★ {place.primary}</button>{/each}
+    </div>
+  {/if}
+
   {#if locationError}
     <div class="location-message">{locationError}</div>
   {/if}
@@ -56,7 +62,7 @@
         {/each}
         {#if !showFavourites && remoteResults.length}<div class="credit">Search © OpenStreetMap contributors</div>{/if}
       {:else if !searching}
-        <div class="empty">{showFavourites ? 'No saved places' : 'No places found'}</div>
+        <div class="empty">{showFavourites ? 'No saved places' : hasSearched ? 'No places found' : 'Press Go to search places'}</div>
       {/if}
     </div>
   {/if}
@@ -64,6 +70,7 @@
 
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { geocode } from './geocoding';
 
   type SearchResult = {
     lat: number;
@@ -75,10 +82,10 @@
   const dispatch = createEventDispatcher<{ select: SearchResult; clear: void }>();
   const STORAGE_KEY = 'snowline:favourites:v1';
   const FAVOURITES_CHANGED_EVENT = 'wintry:favourites-changed';
-  const SEARCH_DELAY_MS = 350;
 
   let query = '';
   let searching = false;
+  let hasSearched = false;
   let locating = false;
   let locationError = '';
   let open = false;
@@ -86,7 +93,6 @@
   let hasSelection = false;
   let remoteResults: SearchResult[] = [];
   let favourites: SearchResult[] = [];
-  let timer: ReturnType<typeof setTimeout> | null = null;
   let controller: AbortController | null = null;
   let requestId = 0;
 
@@ -155,10 +161,6 @@
   }
 
   function clearPendingSearch() {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
     controller?.abort();
     controller = null;
     requestId += 1;
@@ -218,19 +220,8 @@
   }
 
   function scheduleSearch() {
-    locationError = '';
-    showFavourites = false;
-    hasSelection = false;
-    if (timer) clearTimeout(timer);
-    controller?.abort();
-    remoteResults = [];
-    const searchText = query.trim();
-    open = searchText.length >= 1 || favourites.length > 0;
-    if (searchText.length < 2) {
-      searching = false;
-      return;
-    }
-    timer = setTimeout(runSearch, SEARCH_DELAY_MS);
+    clearPendingSearch();hasSearched=false;locationError='';showFavourites=false;hasSelection=false;remoteResults=[];
+    open=query.trim().length>0;
   }
 
   async function runSearch() {
@@ -241,17 +232,12 @@
     controller?.abort();
     controller = new AbortController();
     searching = true;
+    hasSearched = true;
     open = true;
 
     try {
       const params = new URLSearchParams({ q: searchText, format: 'jsonv2', limit: '5', addressdetails: '0' });
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
-        signal: controller.signal,
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const data = await response.json();
+      const data = await geocode('search', params, controller.signal);
       if (id === requestId) {
         remoteResults = Array.isArray(data)
           ? data.map((item: any) => {
@@ -263,7 +249,7 @@
           : [];
       }
     } catch (error: any) {
-      if (error?.name !== 'AbortError') console.warn('Wintry forecast place search failed', error);
+      if (error?.name !== 'AbortError' && id === requestId) locationError = 'Place search unavailable. Try again or tap the map.';
       if (id === requestId) remoteResults = [];
     } finally {
       if (id === requestId) searching = false;
@@ -271,11 +257,8 @@
   }
 
   function submitSearch() {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    if (visibleResults.length === 1) chooseResult(visibleResults[0]);
+    if(searching)return;
+    if (visibleResults.length === 1 && (showFavourites || remoteResults.length)) chooseResult(visibleResults[0]);
     else void runSearch();
   }
 
@@ -391,4 +374,5 @@
     .utility-row button { height: 32px; font-size: 9.3px; }
     .results { top: 78px; }
   }
+  .quick-places{display:flex;gap:5px;margin-top:7px}.quick-places button{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:7px 5px;font-size:10px;color:#ffe59b}
 </style>

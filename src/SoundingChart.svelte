@@ -6,6 +6,7 @@
       <em>{validLabel}</em>
     </div>{/if}
     <div class="actions">
+      <button class="png" type="button" on:click={downloadPng} disabled={pngBusy}>{pngBusy ? 'Saving…' : 'Save image'}</button>
       <button type="button" title="Zoom out" aria-label="Zoom out" on:click={() => zoomAtCentre(zoom / 1.25)}>−</button>
       <button class="zoom-readout" type="button" title="Fit sounding" aria-label="Fit sounding" on:click={resetZoom}>Fit</button>
       <button type="button" title="Zoom in" aria-label="Zoom in" on:click={() => zoomAtCentre(zoom * 1.25)}>+</button>
@@ -84,6 +85,8 @@
   import { terrainPrecipitationType } from './precipType';
   import { terrainDiagnostics } from './terrainDiagnostics';
   import { precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
+  import { conditionLabel } from './forecastStatus';
+  import { forecastIntervalIndex } from './forecastTime';
   import { formatElevation, formatTemperature, type UnitSystem } from './displayUnits';
 
   export let point: any;
@@ -121,7 +124,7 @@
     phaseLabel: string; phaseDetail: string; phaseKey: string | null;
   };
 
-  $: sounding = buildSounding(point, terrainM, timestamp);
+  $: sounding = buildSounding(point, terrainM, timestamp, units);
   $: validLabel = formatValid(point, timestamp);
 
   function nearestIndex(times: number[], target: number): number { let best = 0, dist = Infinity; times.forEach((t, i) => { const d = Math.abs(t - target); if (d < dist) { dist = d; best = i; } }); return best; }
@@ -257,9 +260,10 @@
     } catch (e) { console.warn('Wintry forecast sounding PNG failed', e); } finally { pngBusy = false; }
   }
 
-  function buildSounding(p: any, terrain: number | null, target: number): SoundingData | null {
+  function buildSounding(p: any, terrain: number | null, target: number, units: UnitSystem): SoundingData | null {
     if (!p?.times?.length) return null;
-    const idx = nearestIndex(p.times, target);
+    const idx = forecastIntervalIndex(p.times, target);
+    if(idx<0)return null;
     let profile: ProfilePoint[];
     try { profile = buildProfile(p.forecast, idx).filter(v => Number.isFinite(v.heightM) && Number.isFinite(v.tempC) && Number.isFinite(v.dewpointC) && Number.isFinite(v.wetBulbC)).sort((a, b) => a.heightM - b.heightM); } catch { return null; }
     if (profile.length < 3) return null;
@@ -291,11 +295,11 @@
     return {
       tempPoints, dewPoints, wetBulbPoints, nodes, tempGrid, pressureGrid, terrainY, snowlineY,
       surfaceTw: diagnostics ? `${diagnostics.extrapolated ? '~' : ''}${formatTemperature(diagnostics.wetBulbC,units)}` : '—',
-      snowline: snowlineM === null ? 'WBZ unresolved' : formatElevation(snowlineM,units),
+      snowline: snowlineM === null ? 'Unresolved' : (wbz.extrapolated?'~ ':'')+formatElevation(snowlineM,units),
       warmEnergy: phase ? `${Math.round(phase.meltingDegreeMetres)} °C·m` : '—',
       coldEnergy: phase ? `${Math.round(phase.refreezingDegreeMetres)} °C·m` : '—',
-      phaseLabel: phase ? `${phase.icon} ${phase.label}` : 'Dry',
-      phaseDetail: phase ? phase.detail : 'No meaningful precipitation at this time',
+      phaseLabel: phase ? `${phase.icon} ${phase.label}` : conditionLabel(precip,phase),
+      phaseDetail: phase ? phase.detail : conditionLabel(precip,phase),
       phaseKey: phase?.key ?? null,
     };
   }
@@ -325,4 +329,5 @@
   @media(max-width:520px){.sounding-shell{width:calc(100vw - 12px);padding:9px}.head small,.head em{max-width:125px}.stats b{font-size:6.3px}.sounding-viewport{max-height:55vh}.actions{gap:2px}.actions button{min-width:24px;height:26px}.actions .png{display:none!important}.actions .zoom-readout{min-width:38px}.phase-banner em{font-size:6.2px}}
 
   .hover-level{stroke:rgba(255,255,255,.58);stroke-width:1;stroke-dasharray:2 2}.hover-temp{fill:#0d171d;stroke:#ff765f;stroke-width:2}.hover-dew{fill:#0d171d;stroke:#72d98b;stroke-width:2}.hover-wet{fill:#0d171d;stroke:#69d4ff;stroke-width:2}.sounding-hover{position:absolute;z-index:6;top:78px;right:14px;display:grid;grid-template-columns:repeat(3,auto);gap:4px 8px;width:160px;max-width:calc(100% - 28px);box-sizing:border-box;padding:7px 8px;border:1px solid rgba(255,255,255,.16);border-radius:8px;background:rgba(5,10,14,.96);box-shadow:0 8px 22px rgba(0,0,0,.48);pointer-events:none}.sounding-hover b{grid-column:1/-1;color:#eaf5fa;font-size:8px}.sounding-hover span{color:#aebcc4;font-size:7px;font-weight:750}
+  .actions .png{display:inline-block!important;font-size:10px}.actions button{min-height:32px}.stats small{font-size:10px}.stats b{font-size:12px}.hint{font-size:10px}
 </style>

@@ -26,7 +26,8 @@
 
   onMount(() => {
     singleclick.on(config.name, selectLocation as any);
-    register(config.name, 'high');
+    if(plugin?.isEnabled?.())register(config.name, 'high');
+    else release(config.name, 'high');
   });
 
   onDestroy(() => {
