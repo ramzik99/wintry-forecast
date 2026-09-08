@@ -37,5 +37,27 @@ export function terrainHatchSegments(grid:HatchPoint[][], spacing=12):XY[][] {
     if(!a||!b||!d||!e||[a,b,d,e].some(p=>p.difference===null))continue;
     triangle([a,b,e]);triangle([a,e,d]);
   }
-  return segments;
+  // Join touching fragments on the same stripe. Keep genuine gaps (including
+  // missing terrain) open, and avoid darker overlaps at triangle boundaries.
+  const stripes = new Map<number, XY[][]>();
+  for (const segment of segments) {
+    const stripe = Math.round((segment[0][0] + segment[0][1]) / spacing);
+    const parts = stripes.get(stripe) ?? [];
+    parts.push(segment);
+    stripes.set(stripe, parts);
+  }
+  const joined: XY[][] = [];
+  for (const parts of stripes.values()) {
+    parts.sort((a,b) => a[0][0] - b[0][0]);
+    let current: XY[] | null = null;
+    for (const part of parts) {
+      if (current && part[0][0] <= current[1][0] + 1e-7) {
+        if (part[1][0] > current[1][0]) current[1] = part[1];
+      } else {
+        current = [part[0], part[1]];
+        joined.push(current);
+      }
+    }
+  }
+  return joined;
 }

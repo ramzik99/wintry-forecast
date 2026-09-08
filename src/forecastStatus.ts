@@ -1,6 +1,6 @@
 import { buildProfile } from './snowLevel';
 import { precipMmAt, PRECIP_THRESHOLD_MM_3H } from './precip';
-import { terrainPrecipitationType, type TerrainPrecipType } from './precipType';
+import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType } from './precipType';
 import { forecastIntervalHours } from './forecastTime';
 
 export type ForecastPoint = { times: number[]; forecast: Record<string, unknown> };
@@ -8,7 +8,7 @@ export type ForecastPoint = { times: number[]; forecast: Record<string, unknown>
 export function conditionLabel(precip: number | null, phase: TerrainPrecipType | null): string {
   if (precip === null || !Number.isFinite(precip)) return 'Precipitation unavailable';
   if (precip < PRECIP_THRESHOLD_MM_3H) return 'Dry';
-  return phase?.label ?? 'Precipitation · type uncertain';
+  return phase ? precipitationLabel(phase) : 'Precipitation · type uncertain';
 }
 
 /** Absence of an event is only meaningful over intervals we could classify. */

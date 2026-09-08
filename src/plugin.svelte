@@ -13,7 +13,7 @@
 
     <div class="hatch-legend"><span>╱╱╱</span> Terrain above estimated snowline</div>
     <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
-    <V21Panel {enabled} bind:unitSystem {activeRunTime} {lastChecked} busy={viewportLoading || probeLoading} on:refresh={refreshForecast} />
+    <V21Panel bind:unitSystem {activeRunTime} />
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
     {#if enabled && (viewportLoading || probeLoading)}
@@ -64,7 +64,7 @@
   import { terrainHatchSegments } from './terrainHatching';
   import { buildProfile, wetBulbZeroHeight, valueAt } from './snowLevel';
   import { precipPeriodLabel, formatPrecipMm, precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
-  import { terrainPrecipitationType, type TerrainPrecipType } from './precipType';
+  import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType } from './precipType';
   import { estimateNewSnowStep, formatNewSnowCm } from './snowAccum';
   import { alignSelectedPrecipFields, loadSelectedPrecipFields } from './selectedPrecip';
   import { prepareSnowlineContours } from './snowlineContours';
@@ -258,8 +258,8 @@
     const event=nextWintryEvent(point,terrainM,target);
     if(!event)return{text:noEventMessage(point,terrainM,target),jumpTime:null as number|null};
     const amount=event.incomplete?' · amount uncertain':event.newSnowCm>0.05?' · est. '+formatSnow(event.newSnowCm,unitSystem)+(event.activeNow?' remaining':''):'';
-    if(event.activeNow)return{text:event.dominantPhase.label+' until '+shortValid(event.endTime)+amount,jumpTime:null as number|null};
-    return{text:event.dominantPhase.label+' · '+shortValid(event.startTime)+amount,jumpTime:event.startTime};
+    if(event.activeNow)return{text:precipitationLabel(event.dominantPhase,event.confidence)+' until '+shortValid(event.endTime)+amount,jumpTime:null as number|null};
+    return{text:precipitationLabel(event.dominantPhase,event.confidence)+' · '+shortValid(event.startTime)+amount,jumpTime:event.startTime};
   }
   function labelGrid(args:LabelGridArgs){
     const terrain=metricTile('Terrain',formatElevation(args.terrain,unitSystem),'metric-terrain');
@@ -275,9 +275,9 @@
   function updatePersistentClickLabel(){if(!enabled){clearClickLayer();return}if(!clickedPoint||!clickedLatLon||!clickedPoint.times.length)return;clickedNextEventTime=null;const[lat,lon]=clickedLatLon,target=getStoreTimestamp(),first=clickedPoint.times[0],end=Math.min(clickedPoint.times.at(-1)!,first+MAX_FORECAST_HOURS*3600_000);if(target<first-30*60_000||target>end+30*60_000){showClickLabel(lat,lon,'Outside +144 h');return}const index=forecastIntervalIndex(clickedPoint.times,target);if(index<0){showClickLabel(lat,lon,'Forecast unavailable at this time');return}const valid=clickedPoint.times[index],profile=buildProfile(clickedPoint.forecast,index),slr=wetBulbZeroHeight(profile),snowline=slr.snowLevelM!==null&&Number.isFinite(slr.snowLevelM)?slr.snowLevelM:null;if(snowline===null){
       const precip=precipMmAt(clickedPoint.forecast,index),phase=clickedMapElevationM!==null?phaseAt(clickedPoint,index,clickedMapElevationM):null;
       const reason=slr.status==='below-lowest-level'?'WBZ is below the lowest resolved level or absent in a cold column':'No atmospheric crossing resolved';
-      const detail=`<div class="snowline-valid">${shortValid(valid)} · ${precipPeriodLabel(clickedPoint.forecast)}</div><div class="snowline-label-grid">${metricTile('Terrain',formatElevation(clickedMapElevationM,unitSystem),'metric-terrain')}${metricTile('Precip',formatPrecip(precip,unitSystem),'')}</div><div class="snowline-event-line">${reason}. ${phase?phase.label:precip!==null&&precip<PRECIP_THRESHOLD_MM_H?'Dry':'Precipitation type unavailable'}</div>`;
-      showClickLabel(lat,lon,phase?`${phase.icon} ${phase.label.toUpperCase()}`:precip!==null&&precip<PRECIP_THRESHOLD_MM_H?'DRY':'WBZ unresolved',detail);return
-    }const rounded=Math.round(snowline/10)*10,tendency=tendencyText(clickedPoint,index),precip=precipMmAt(clickedPoint.forecast,index),hasPrecip=precip!==null&&precip>=PRECIP_THRESHOLD_MM_H;if(clickedMapElevationM!==null&&Number.isFinite(clickedMapElevationM)){const terrain=Math.round(clickedMapElevationM/10)*10,difference=clickedMapElevationM-snowline,status=statusForDifference(difference),phase=hasPrecip?terrainPrecipitationType(profile,clickedMapElevationM):null,summary=compactEventSummary(clickedPoint,clickedMapElevationM,target);clickedNextEventTime=summary.jumpTime;const grid=labelGrid({valid:shortValid(valid),terrain,snowline:rounded,difference,precip,hasPrecip,eventLine:summary.text,canJump:summary.jumpTime!==null})+(slr.extrapolated?'<div class="forecast-quality">Snowline estimated below the resolved profile</div>':'')+(phase?.confidence==='low'?'<div class="forecast-quality">Precipitation type is uncertain</div>':'');if(phase){showClickLabel(lat,lon,`${phase.icon} ${phase.label.toUpperCase()}`,grid,colorForLevel(snowline),status);return}showClickLabel(lat,lon,conditionLabel(precip,phase).toUpperCase(),grid,colorForLevel(snowline),status);return}showClickLabel(lat,lon,formatElevation(rounded,unitSystem),`<div class="snowline-label-grid"><span><small>Valid</small><strong>${shortValid(valid)}</strong></span><span><small>Trend</small><strong>${tendency||'—'}</strong></span></div>`,colorForLevel(snowline),'neutral')}
+      const detail=`<div class="snowline-valid">${shortValid(valid)} · ${precipPeriodLabel(clickedPoint.forecast)}</div><div class="snowline-label-grid">${metricTile('Terrain',formatElevation(clickedMapElevationM,unitSystem),'metric-terrain')}${metricTile('Precip',formatPrecip(precip,unitSystem),'')}</div><div class="snowline-event-line">${reason}. ${phase?precipitationLabel(phase):precip!==null&&precip<PRECIP_THRESHOLD_MM_H?'Dry':'Precipitation type unavailable'}</div>`;
+      showClickLabel(lat,lon,phase?`${phase.icon} ${precipitationLabel(phase).toUpperCase()}`:precip!==null&&precip<PRECIP_THRESHOLD_MM_H?'DRY':'WBZ unresolved',detail);return
+    }const rounded=Math.round(snowline/10)*10,tendency=tendencyText(clickedPoint,index),precip=precipMmAt(clickedPoint.forecast,index),hasPrecip=precip!==null&&precip>=PRECIP_THRESHOLD_MM_H;if(clickedMapElevationM!==null&&Number.isFinite(clickedMapElevationM)){const terrain=Math.round(clickedMapElevationM/10)*10,difference=clickedMapElevationM-snowline,status=statusForDifference(difference),phase=hasPrecip?terrainPrecipitationType(profile,clickedMapElevationM):null,summary=compactEventSummary(clickedPoint,clickedMapElevationM,target);clickedNextEventTime=summary.jumpTime;const grid=labelGrid({valid:shortValid(valid),terrain,snowline:rounded,difference,precip,hasPrecip,eventLine:summary.text,canJump:summary.jumpTime!==null})+(slr.extrapolated?'<div class="forecast-quality">Snowline estimated below the resolved profile</div>':'')+(phase?.confidence==='low'?'<div class="forecast-quality">Limited atmospheric detail; type may differ</div>':'');if(phase){showClickLabel(lat,lon,`${phase.icon} ${precipitationLabel(phase).toUpperCase()}`,grid,colorForLevel(snowline),status);return}showClickLabel(lat,lon,conditionLabel(precip,phase).toUpperCase(),grid,colorForLevel(snowline),status);return}showClickLabel(lat,lon,formatElevation(rounded,unitSystem),`<div class="snowline-label-grid"><span><small>Valid</small><strong>${shortValid(valid)}</strong></span><span><small>Trend</small><strong>${tendency||'—'}</strong></span></div>`,colorForLevel(snowline),'neutral')}
 
   async function probeLocation(lat:number,lon:number,source:PointSource,placeName:string|null=null){
     if(!enabled||destroyed||!Number.isFinite(lat)||!Number.isFinite(lon))return;
@@ -288,7 +288,7 @@
     try{
       const[point,elev,fields]=await Promise.all([loadPoint(lat,lon,3),loadMapElevation(lat,lon),loadSelectedPrecipFields(lat,lon,FORECAST_DAYS)]);
       if(my!==clickGeneration||pointSource!==source||!enabled||destroyed)return;
-      if(!point||!point.times.length||!profileIsFresh(point.fetchedAt,point.runTime,activeRunTime)){showClickLabel(lat,lon,'Forecast unavailable','<div class="snowline-loading">Use Refresh to try again.</div>');return}
+      if(!point||!point.times.length||!profileIsFresh(point.fetchedAt,point.runTime,activeRunTime)){showClickLabel(lat,lon,'Forecast unavailable','<div class="snowline-loading">Select this place again to retry.</div>');return}
       const aligned=alignSelectedPrecipFields(fields,point.times);
       clickedPoint=Object.keys(aligned).length?{...point,forecast:{...point.forecast,...aligned}}:point;
       clickedMapElevationM=elev;clickedPoint.terrainM=elev;lastChecked=Date.now();
@@ -334,8 +334,8 @@
       const point=map.latLngToLayerPoint([v.lat,v.lon]),terrain=cache[r]?.[c]?.terrainM;
       return{x:point.x,y:point.y,difference:v.value!==null&&terrain!==null&&terrain!==undefined?terrain-v.value:null};
     }));
-    const lines=terrainHatchSegments(projected,18).map(line=>line.map(([x,y])=>map.layerPointToLatLng([x,y])));
-    if(lines.length)L.polyline(lines,{color:'#ff4fd8',weight:1,opacity:.45,interactive:false,smoothFactor:0}).addTo(layer);
+    const lines=terrainHatchSegments(projected,24).map(line=>line.map(([x,y])=>map.layerPointToLatLng([x,y])));
+    if(lines.length)L.polyline(lines,{color:'#ef70cf',weight:1.8,opacity:.65,interactive:false,lineCap:'butt',smoothFactor:0}).addTo(layer);
   }
   function interpolatedSnowline(p:CachedPoint,target:number):number|null{
     const i=nearestIndex(p.times,target),t=p.times[i];
@@ -382,7 +382,7 @@
   .refresh-error{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error button{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}
   :global(.forecast-quality){margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}
 
-  .hatch-legend{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend span{color:#ff4fd8;font-weight:700;margin-right:4px}
+  .hatch-legend{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend span{color:#ef70cf;font-weight:700;margin-right:4px}
   .snowline-panel{box-sizing:border-box;width:240px;max-width:calc(100vw - 28px);padding:8px;border-radius:9px;background:rgba(38,42,46,.96);color:white;box-shadow:0 4px 16px rgba(0,0,0,.28)}
   .top-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.top-controls{display:flex;align-items:center;gap:6px}.title{font-size:16px;font-weight:850;letter-spacing:-.2px}.switch{display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:1px solid rgba(255,255,255,.11);border-radius:7px;background:rgba(255,255,255,.035);font-size:9px;font-weight:850;white-space:nowrap;cursor:pointer}.switch input{appearance:none;-webkit-appearance:none;position:relative;margin:0;width:24px;height:14px;border:0;border-radius:8px;background:rgba(255,255,255,.16);cursor:pointer;transition:background .15s ease}.switch input:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#aebbc2;transition:transform .15s ease,background .15s ease}.switch input:checked{background:rgba(80,190,255,.35)}.switch input:checked:after{transform:translateX(10px);background:#8ee2ff}
   .hide-button,.info-button{width:24px;height:24px;padding:0;border:1px solid rgba(255,255,255,.10);border-radius:7px;background:rgba(255,255,255,.035);color:rgba(255,255,255,.74);font-size:15px;font-weight:800;cursor:pointer}.hide-button:hover,.info-button:hover{background:rgba(255,255,255,.075);color:#fff}.info-button{font-family:Georgia,serif;font-size:14px;font-style:italic}.info-button.active{border-color:rgba(80,190,255,.65);color:white}

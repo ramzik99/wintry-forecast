@@ -67,6 +67,15 @@ test('terrain timing stays continuous through a fully cold forecast interval', (
 
 const { terrainHatchSegments } = await import(moduleUrl('terrainHatching'));
 const { terrainPrecipitationType } = await import(moduleUrl('precipType'));
+const { precipitationLabel } = await import(moduleUrl('precipType'));
+test('low-confidence mountain snow is consistently qualified without changing its diagnosis',()=>{
+  const phase=terrainPrecipitationType([point(3500,1),point(5000,-10),point(7500,-25)],4790);
+  assert.equal(phase.key,'snow');assert.equal(phase.confidence,'low');
+  assert.equal(precipitationLabel(phase),'Snow possible');
+  assert.equal(precipitationLabel({...phase,confidence:'high'}),'Snow');
+  assert.equal(precipitationLabel({...phase,confidence:'high'},'low'),'Snow possible');
+  assert.equal(precipitationLabel({...phase,label:'Freezing rain'}),'Freezing rain possible');
+});
 const grid=(values)=>values.map((row,r)=>row.map((difference,c)=>({x:c*100,y:r*100,difference})));
 test('hatching covers positive terrain differences only',()=>{
   const lines=terrainHatchSegments(grid([[-100,100],[-100,100]]),10);
@@ -80,6 +89,22 @@ test('equal, lower and missing terrain remain unhatchable',()=>{
 test('hatching follows a changed forecast snowline',()=>{
   assert.ok(terrainHatchSegments(grid([[100,100],[100,100]])).length>0);
   assert.equal(terrainHatchSegments(grid([[-100,-100],[-100,-100]])).length,0);
+});
+
+test('hatch stripes join across triangle boundaries without duplicate overlaps',()=>{
+  const lines=terrainHatchSegments(grid([[100,100],[100,100]]),20);
+  const offsets=lines.map(line=>Math.round(line[0][0]+line[0][1]));
+  assert.equal(new Set(offsets).size,lines.length);
+  const diagonal=lines.find(line=>Math.abs(line[0][0]+line[0][1]-100)<1e-8);
+  assert.deepEqual(diagonal,[[0,100],[100,0]]);
+});
+
+test('joined hatching preserves missing-data gaps',()=>{
+  const values=Array.from({length:6},()=>[100,100,null,100,100]);
+  const lines=terrainHatchSegments(grid(values),20);
+  assert.ok(lines.some(line=>line[0][0]>=300));
+  assert.ok(lines.some(line=>line[1][0]<=100));
+  for(const line of lines)assert.ok(line[1][0]<=100||line[0][0]>=300);
 });
 test('cold mountain profile still diagnoses snow above the atmospheric WBZ',()=>{
   const p=[point(0,2),point(1000,-2),point(1800,-5),point(2600,-8)];

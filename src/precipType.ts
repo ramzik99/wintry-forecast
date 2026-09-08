@@ -21,6 +21,11 @@ export interface TerrainPrecipType {
   refreezingDegreeMetres: number;
 }
 
+/** Qualify a model estimate without discarding its best-supported phase. */
+export function precipitationLabel(phase: Pick<TerrainPrecipType, 'label' | 'confidence'>, confidence = phase.confidence): string {
+  return confidence === 'low' ? `${phase.label} possible` : phase.label;
+}
+
 const WARM_NODE_C = 0.2;
 const MIN_MELTING_DM = 150;
 const PARTIAL_MELTING_DM = 500;
