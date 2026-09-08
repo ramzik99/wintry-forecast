@@ -6,16 +6,15 @@
         on:input={scheduleSearch}
         on:keydown={handleKeydown}
         on:keyup|stopPropagation
-        on:focus={() => { if (visibleResults.length || favourites.length) open = true; }}
+        on:focus={() => { if (query.trim()) open = true; }}
+        on:compositionstart={() => { composing = true; clearPendingSearch(); }}
+        on:compositionend={() => { composing = false; scheduleSearch(); }}
         aria-label="Search places"
         placeholder="Search place…"
         title="Search a place, use your location, or tap the map"
         autocomplete="off"
         spellcheck="false"
       />
-      <button class="search-button" type="submit" aria-label="Search" title="Search" disabled={searching || query.trim().length < 2}>
-        {searching ? '…' : 'Go'}
-      </button>
     </div>
 
     <div class="utility-row" class:has-clear={query || open || hasSelection}>
@@ -34,11 +33,6 @@
     </div>
   </form>
 
-  {#if !query && !open && favourites.length}
-    <div class="quick-places" aria-label="Saved places">
-      {#each favourites.slice(0,3) as place}<button type="button" on:click={() => chooseResult(place)} title={place.primary+', '+place.secondary}>★ {place.primary}</button>{/each}
-    </div>
-  {/if}
 
   {#if locationError}
     <div class="location-message">{locationError}</div>
@@ -63,9 +57,9 @@
             >{isFavourite(result) ? '★' : '☆'}</button>
           </div>
         {/each}
-        {#if !showFavourites && remoteResults.length}<div class="credit">Search © OpenStreetMap contributors</div>{/if}
-      {:else if !searching}
-        <div class="empty">{showFavourites ? 'No saved places' : hasSearched ? 'No places found' : 'Press Go to search places'}</div>
+        {#if !showFavourites && remoteResults.length}<div class="credit">Search: Photon · © OpenStreetMap contributors</div>{/if}
+      {:else}
+        <div class="empty" role="status">{showFavourites ? 'No saved places' : locationError ? 'Try another place or tap the map' : searching || searchTimer ? 'Searching…' : hasSearched ? 'No places found' : 'Type at least 3 characters'}</div>
       {/if}
     </div>
   {/if}
@@ -73,7 +67,7 @@
 
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
-  import { geocode } from './geocoding';
+  import { autocompletePlaces } from './placeAutocomplete';
 
   type SearchResult = {
     lat: number;
@@ -98,28 +92,13 @@
   let favourites: SearchResult[] = [];
   let controller: AbortController | null = null;
   let requestId = 0;
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let composing = false;
 
-  $: favouriteMatches = query.trim()
-    ? favourites.filter(item => `${item.primary} ${item.secondary}`.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 6)
-    : favourites.slice(0, 10);
-
-  $: visibleResults = showFavourites
-    ? favouriteMatches
-    : mergeResults(favouriteMatches, remoteResults).slice(0, 8);
+  $: visibleResults = showFavourites ? favourites : remoteResults;
 
   function resultKey(item: SearchResult): string {
     return `${item.lat.toFixed(5)},${item.lon.toFixed(5)}`;
-  }
-
-  function mergeResults(first: SearchResult[], second: SearchResult[]): SearchResult[] {
-    const merged = new Map<string, SearchResult>();
-    for (const item of [...first, ...second]) merged.set(resultKey(item), item);
-    return [...merged.values()];
-  }
-
-  function splitName(name: string): { primary: string; secondary: string } {
-    const parts = name.split(',').map(part => part.trim()).filter(Boolean);
-    return { primary: parts[0] || 'Place', secondary: parts.slice(1, 3).join(', ') };
   }
 
   function loadFavourites() {
@@ -164,6 +143,8 @@
   }
 
   function clearPendingSearch() {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = null;
     controller?.abort();
     controller = null;
     requestId += 1;
@@ -225,11 +206,14 @@
   function scheduleSearch() {
     clearPendingSearch();hasSearched=false;locationError='';showFavourites=false;hasSelection=false;remoteResults=[];
     open=query.trim().length>0;
+    if (!composing && query.trim().length >= 3) searchTimer = setTimeout(() => { searchTimer = null; void runSearch(); }, 450);
   }
 
   async function runSearch() {
     const searchText = query.trim();
-    if (searchText.length < 2) return;
+    if (searchText.length < 3 || composing) return;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = null;
 
     const id = ++requestId;
     controller?.abort();
@@ -239,18 +223,8 @@
     open = true;
 
     try {
-      const params = new URLSearchParams({ q: searchText, format: 'jsonv2', limit: '5', addressdetails: '0' });
-      const data = await geocode('search', params, controller.signal);
-      if (id === requestId) {
-        remoteResults = Array.isArray(data)
-          ? data.map((item: any) => {
-              const lat = Number(item.lat);
-              const lon = Number(item.lon);
-              const { primary, secondary } = splitName(String(item.display_name ?? 'Place'));
-              return { lat, lon, primary, secondary };
-            }).filter((item: SearchResult) => Number.isFinite(item.lat) && Number.isFinite(item.lon))
-          : [];
-      }
+      const places = await autocompletePlaces(searchText, controller.signal);
+      if (id === requestId) remoteResults = places;
     } catch (error: any) {
       if (error?.name !== 'AbortError' && id === requestId) locationError = 'Place search unavailable. Try again or tap the map.';
       if (id === requestId) remoteResults = [];
@@ -260,7 +234,7 @@
   }
 
   function submitSearch() {
-    if(searching)return;
+    if(searching || composing)return;
     if (visibleResults.length === 1 && (showFavourites || remoteResults.length)) chooseResult(visibleResults[0]);
     else void runSearch();
   }
@@ -289,6 +263,7 @@
     event.stopPropagation();
     if (event.key === 'Escape' && open) {
       event.preventDefault();
+      clearPendingSearch();
       open = false;
       showFavourites = false;
     }
@@ -313,7 +288,7 @@
   .place-search { position: relative; margin-top: 5px; }
   form { display: flex; flex-direction: column; gap: 5px; }
 
-  .search-line { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 5px; }
+  .search-line { display: flex; }
   input, button {
     box-sizing: border-box;
     border: 1px solid rgba(255,255,255,0.14);
@@ -330,7 +305,6 @@
 
   button { cursor: pointer; }
   button:disabled { opacity: 0.34; cursor: default; }
-  .search-button { height: 28px; padding: 0; background:rgba(255,255,255,.055); font-size: 10px; line-height: 1; font-weight: 900; letter-spacing:.15px; }.search-button:not(:disabled):hover,.search-button:not(:disabled):focus{border-color:rgba(80,190,255,.52);background:rgba(80,190,255,.12);outline:none}
 
   .utility-row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 5px; }
   .utility-row.has-clear { grid-template-columns: 1.2fr 1fr 28px; }
@@ -355,7 +329,7 @@
   }
 
   .results {
-    position: absolute; z-index: 5000; left: 0; right: 0; top: calc(100% + 4px); overflow: hidden;
+    position: absolute; z-index: 5000; left: 0; right: 0; top: calc(100% + 4px); max-height: min(300px, 50vh); overflow-y: auto;
     border: 1px solid rgba(255,255,255,0.16); border-radius: 8px;
     background: rgba(18,21,25,0.985); box-shadow: 0 6px 18px rgba(0,0,0,0.42);
   }
@@ -373,5 +347,4 @@
   .credit { text-align: right; }
 
 
-  .quick-places{display:flex;gap:5px;margin-top:5px}.quick-places button{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;height:28px;padding:0 5px;font-size:10px;color:#ffe59b}
 </style>
