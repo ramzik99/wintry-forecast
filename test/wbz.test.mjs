@@ -126,3 +126,44 @@ test('a single three-hour snow interval contributes a full interval to event tot
  const e=nextWintryEvent(p,1000,0);
  assert.ok(e);assert.equal(e.endTime,3*h);assert.equal(e.newSnowCm,9);
 });
+
+const { prepareSnowlineContours } = await import(moduleUrl('snowlineContours'));
+const contourGrid = values => values.map((row, r) => row.map((value, c) => ({lat:70+r,lon:c,value})));
+
+test('contour display floors cold diagnostics at -500 m without changing raw terrain values',()=>{
+  const cold=wetBulbZeroHeight([point(100,-12),point(1100,-18)]);
+  assert.equal(cold.snowLevelM,-1900);
+  assert.equal(cold.status,'below-lowest-level');
+  const raw=contourGrid([[cold.snowLevelM,-500,-430],[-100,0,1000]]);
+  const original=structuredClone(raw);
+  const {field,levels}=prepareSnowlineContours(raw,100);
+  assert.deepEqual(field.map(row=>row.map(p=>p.value)),[[-500,-500,-430],[-100,0,1000]]);
+  assert.deepEqual(raw,original);
+  assert.equal(levels[0],-500);
+  assert.equal(levels.at(-1),1000);
+  assert.equal(cold.snowLevelM,-1900);
+});
+
+test('all zoom intervals respect the contour floor and retain zero and major levels',()=>{
+  for(const interval of [100,200,500]){
+    const {field,levels}=prepareSnowlineContours(contourGrid([[-1900,1200],[-800,1200]]),interval);
+    assert.equal(levels[0],-500);
+    assert.ok(levels.includes(0));
+    assert.ok(levels.includes(1000));
+    assert.ok(levels.every(level=>level>=-500));
+    assert.ok(levels.slice(1).every(level=>level%interval===0));
+    for(const level of [-2000,-1000,-600]) assert.deepEqual(contourPolylines(field,level),[]);
+    assert.ok(contourPolylines(field,0).length>0);
+  }
+  const {levels}=prepareSnowlineContours(contourGrid([[-430,0],[-430,0]]),200);
+  assert.deepEqual(levels,[-500,-400,-200,0]);
+});
+
+test('contour floor keeps missing samples missing and handles entirely cold or absent fields',()=>{
+  const {field,levels}=prepareSnowlineContours(contourGrid([[-1900,null],[NaN,Infinity]]),100);
+  assert.deepEqual(field.map(row=>row.map(p=>p.value)),[[-500,null],[null,null]]);
+  assert.deepEqual(levels,[-500]);
+  assert.deepEqual(contourPolylines(field,-600),[]);
+  assert.deepEqual(prepareSnowlineContours(contourGrid([[null,NaN]]),200).levels,[]);
+  assert.deepEqual(prepareSnowlineContours([],500),{field:[],levels:[]});
+});
