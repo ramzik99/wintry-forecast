@@ -86,6 +86,20 @@ test('cold mountain profile still diagnoses snow above the atmospheric WBZ',()=>
   assert.equal(terrainPrecipitationType(p,1200).key,'snow');
 });
 
+const { contourPolylines } = await import(moduleUrl('contours'));
+test('contours bridge a missing viewport sample instead of breaking around it',()=>{
+  const missing={lat:0,lon:0,value:null};
+  const field=[
+    [{lat:70,lon:0,value:0},missing,{lat:70,lon:2,value:4}],
+    [{lat:71,lon:0,value:0},missing,{lat:71,lon:2,value:4}],
+    [{lat:72,lon:0,value:0},missing,{lat:72,lon:2,value:4}],
+  ];
+  const lines=contourPolylines(field,1);
+  assert.equal(lines.length,1);
+  assert.ok(lines[0].length>=3);
+  assert.ok(lines[0].every(([lat,lon])=>lat>=70&&lat<=72&&lon>=0&&lon<=2));
+});
+
 const { alignPrecipIntervals } = await import(moduleUrl('precipIntervals'));
 const { formatPrecip } = await import(moduleUrl('displayUnits'));
 const { estimateNewSnowStep } = await import(moduleUrl('snowAccum'));
