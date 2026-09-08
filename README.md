@@ -12,7 +12,7 @@ v300 prioritizes quick, easy, reliable local snow forecasts. The point card give
 
 ### 300.0.3 simpler controls and cleaner hatching
 
-Removed the manual Refresh button and automatic-refresh status text. Refresh continues in the background using the existing schedule and retry handling. The installed version remains visible. Hatching uses softer, wider-spaced stripes with touching fragments joined across triangle boundaries, removing overlaps while preserving missing-data gaps.
+Removed the manual Refresh button and automatic-refresh status text. Refresh continues in the background using the existing schedule and retry handling. The installed version remains visible. Hatching uses bold, widely spaced diagonal stripes beneath contour lines and labels with touching fragments joined across triangle boundaries, removing overlaps while preserving missing-data gaps.
 
 ### 300.0.2 automatic refresh, version and clearer contours
 
