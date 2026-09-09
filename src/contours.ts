@@ -116,10 +116,11 @@ function interp(
  */
 export function contourSegments(
   grid: GridPoint[][],
-  level: number
+  level: number,
+  prepared = false,
 ): ContourSegment[] {
   const out: ContourSegment[] = [];
-  const source = continuousContourGrid(grid);
+  const source = prepared ? grid : continuousContourGrid(grid);
 
   for (let r = 0; r < source.length - 1; r++) {
     for (let c = 0; c < source[r].length - 1; c++) {
@@ -268,4 +269,10 @@ export function contourPolylines(
   level: number
 ): ContourPolyline[] {
   return stitchSegments(contourSegments(grid, level));
+}
+
+/** Reconstruct missing samples once per frame, rather than once per elevation. */
+export function contourLinesForLevels(grid: GridPoint[][], levels: number[]): Map<number, ContourPolyline[]> {
+  const source = continuousContourGrid(grid);
+  return new Map(levels.map(level => [level, stitchSegments(contourSegments(source, level, true))]));
 }

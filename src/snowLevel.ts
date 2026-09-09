@@ -227,7 +227,7 @@ export function valueAt(value: unknown, i: number): number | null {
 
   if (typeof x === 'number' && Number.isFinite(x)) return x;
 
-  if (typeof x === 'string') {
+  if (typeof x === 'string' && x.trim() !== '') {
     const n = Number(x);
     if (Number.isFinite(n)) return n;
   }

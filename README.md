@@ -6,9 +6,13 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**300.0.6**
+**1.0.0**
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+
+### 1.0.0 refinement release
+
+Version reset requested by the maintainer. Forecast time axes reject invalid samples without shifting data. Timeline inspection uses the active interval; phase bands and snow totals align with interval boundaries. Unknown gaps stay blank. Next-day image totals require full coverage of that day. Sounding confidence labels match the point card. Superseded location requests cannot replace a newer selection.
 
 ### 300.0.6 contour contrast
 
