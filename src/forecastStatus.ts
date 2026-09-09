@@ -21,7 +21,7 @@ export function noEventMessage(point: ForecastPoint, terrainM: number | null, fr
   const partialOutlook = () => {
     const hours = Math.floor((coveredUntil - fromTime) / 3600_000);
     return coveredUntil > fromTime
-      ? `No wintry precipitation for ${hours > 0 ? hours : '<1'} h · later data unavailable`
+      ? `No wintry precipitation for ${hours > 0 ? hours : '<1'} h`
       : 'Outlook unavailable · forecast data missing';
   };
   for (let i = 0; i < point.times.length && point.times[i] < end; i++) {

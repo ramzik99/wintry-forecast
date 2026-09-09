@@ -6,9 +6,13 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**300.0.4**
+**300.0.5**
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+
+### 300.0.5 concise outlook
+
+Removed the later-data warning text. Partial outlooks still state their supported duration, and unknown precipitation and unsupported snow totals remain unavailable.
 
 ### 300.0.4 forecast clarity
 
