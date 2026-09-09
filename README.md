@@ -6,11 +6,17 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**300.0.3**
+**300.0.4**
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
 
+### 300.0.4 forecast clarity
+
+Partial dry forecasts retain their valid information. Cumulative snow curves stop at the first unavailable interval instead of continuing through gaps. Duplicate missing-data notes are removed when the outlook already explains its coverage; exports no longer present a complete snow estimate for incomplete data. Includes the point-card footer removal and usable-outlook-window fix.
+
 ### 300.0.3 clearer forecasts and controls
+
+The point card no longer repeats the precipitation-period footer. When a later forecast gap prevents a complete outlook, the summary reports the verified no-wintry-precipitation window and distinguishes it from unavailable later data. Missing current data remains explicitly unavailable.
 
 The graph uses daily +24 through +144 h ticks from the first forecast sample, larger precipitation-type labels in two rows, and removes the bottom explanatory notes. Shorter forecasts leave the remaining horizon blank instead of stretching the data.
 
