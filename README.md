@@ -6,9 +6,13 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**300.0.5**
+**300.0.6**
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+
+### 300.0.6 contour contrast
+
+Contours use opaque elevation colours, stronger strokes and a contrasting dark or white casing for clearer visibility across map backgrounds.
 
 ### 300.0.5 concise outlook
 
