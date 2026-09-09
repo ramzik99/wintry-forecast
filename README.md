@@ -12,6 +12,8 @@ v300 prioritizes quick, easy, reliable local snow forecasts. The point card give
 
 ### 300.0.3 clearer forecasts and controls
 
+The point card no longer repeats the precipitation-period footer. When a later forecast gap prevents a complete outlook, the summary reports the verified no-wintry-precipitation window and distinguishes it from unavailable later data. Missing current data remains explicitly unavailable.
+
 The graph uses daily +24 through +144 h ticks from the first forecast sample, larger precipitation-type labels in two rows, and removes the bottom explanatory notes. Shorter forecasts leave the remaining horizon blank instead of stretching the data.
 
 Low-confidence precipitation estimates say “Snow possible” (or the corresponding type) consistently on the point card, forecast graph, event summary, copy and image export. The supporting note explains limited atmospheric detail instead of contradicting a definite headline. Event labels use the confidence of the whole event.

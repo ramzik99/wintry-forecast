@@ -254,7 +254,9 @@ test('no-event wording distinguishes complete dry coverage from missing data',()
   const p=snowEventPoint();p.forecast.__precipMm3h=[0,0,0];
   assert.equal(noEventMessage(p,1000,0),'No wintry precipitation in the available forecast');
   p.forecast.__precipMm3h[1]=null;
-  assert.match(noEventMessage(p,1000,0),/incomplete/);
+  assert.equal(noEventMessage(p,1000,0),'No wintry precipitation for 3 h · later data unavailable');
+  assert.equal(noEventMessage(p,1000,2*3600000),'No wintry precipitation for 1 h · later data unavailable');
+  assert.equal(noEventMessage(p,1000,3*3600000),'Outlook unavailable · forecast data missing');
   assert.equal(noEventMessage(p,null,0),'Wintry outlook unavailable');
   assert.equal(noEventMessage(p,1000,10*3600000),'Outside available forecast');
 });

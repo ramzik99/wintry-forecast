@@ -18,15 +18,21 @@ export function noEventMessage(point: ForecastPoint, terrainM: number | null, fr
     point.times.at(-1)! + forecastIntervalHours(point.times, point.times.length - 1) * 3600_000);
   if (fromTime >= end) return 'Outside available forecast';
   let coveredUntil = fromTime;
+  const partialOutlook = () => {
+    const hours = Math.floor((coveredUntil - fromTime) / 3600_000);
+    return coveredUntil > fromTime
+      ? `No wintry precipitation for ${hours > 0 ? hours : '<1'} h · later data unavailable`
+      : 'Outlook unavailable · forecast data missing';
+  };
   for (let i = 0; i < point.times.length && point.times[i] < end; i++) {
     const start = point.times[i], intervalEnd = Math.min(end, start + forecastIntervalHours(point.times, i) * 3600_000);
     if (intervalEnd <= fromTime) continue;
     const precip = precipMmAt(point.forecast, i);
     if (start > coveredUntil || precip === null ||
       (precip >= PRECIP_THRESHOLD_MM_3H && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM))) {
-      return 'Wintry outlook incomplete · some data missing';
+      return partialOutlook();
     }
     coveredUntil = intervalEnd;
   }
-  return coveredUntil >= end ? 'No wintry precipitation in the available forecast' : 'Wintry outlook incomplete · some data missing';
+  return coveredUntil >= end ? 'No wintry precipitation in the available forecast' : partialOutlook();
 }
