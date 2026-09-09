@@ -8,6 +8,6 @@ export function forecastCoverage(precip: (number|null)[], phases: unknown[], tim
   while(prefix<known.length&&known[prefix]&&(prefix===0||times[prefix]-times[prefix-1]<=3*3600_000))prefix++;
   const complete=prefix===known.length;
   const precipCount=precip.filter(value=>value!==null&&Number.isFinite(value)).length;
-  const note=complete?'':known.slice(prefix).some(Boolean)?'Forecast has gaps':'Later forecast unavailable';
+  const note=complete?'':known.slice(prefix).some(Boolean)?'Forecast has gaps':'';
   return {known,prefix,complete,precipCount,note:precipCount===0?'Forecast unavailable':note};
 }

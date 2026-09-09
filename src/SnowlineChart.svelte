@@ -119,7 +119,7 @@
     </div>
     {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}<button class="crossing-action" type="button" on:click={() => jumpToCrossing(Number(crossing.crossingTime))}>{crossing.direction === 'below' ? 'Snowline falls below this elevation' : 'Snowline rises above this elevation'} · {formatShortTime(crossing.crossingTime)} →</button>{/if}
     {#if chart.currentPhase?.confidence === 'low'}<div class="quality-note">Limited atmospheric detail at this elevation; type may differ.</div>{/if}
-    {#if event && !chart.coverageComplete}<div class="quality-note">{chart.coverageNote}</div>{/if}
+    {#if event && chart.coverageNote}<div class="quality-note">{chart.coverageNote}</div>{/if}
   {:else}
     <div class="empty">Wintry forecast unavailable.</div>
   {/if}
