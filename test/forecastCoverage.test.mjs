@@ -16,3 +16,10 @@ test('unknown phase and time gaps stop cumulative coverage while complete dry da
  assert.equal(forecastCoverage([0,0],[null,null],[0,10800000]).complete,true);
  assert.equal(forecastCoverage([null],[null],[0]).note,'Forecast unavailable');
 });
+
+test('empty, invalid and duplicate time axes cannot claim complete coverage',()=>{
+ assert.equal(forecastCoverage([],[],[]).complete,false);
+ assert.equal(forecastCoverage([0,0],[null,null],[0,0]).complete,false);
+ assert.equal(forecastCoverage([0,0],[null,null],[0,NaN]).complete,false);
+ assert.equal(forecastCoverage([-1],[null],[0]).complete,false);
+});

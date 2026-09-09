@@ -82,7 +82,7 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
   import { buildProfile, wetBulbZeroHeight, type ProfilePoint } from './snowLevel';
-  import { terrainPrecipitationType } from './precipType';
+  import { precipitationLabel, terrainPrecipitationType } from './precipType';
   import { terrainDiagnostics } from './terrainDiagnostics';
   import { precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
   import { conditionLabel } from './forecastStatus';
@@ -125,12 +125,14 @@
   };
 
   $: sounding = buildSounding(point, terrainM, timestamp, units);
+  $: { sounding; hoverNode = null; }
   $: validLabel = formatValid(point, timestamp);
 
-  function nearestIndex(times: number[], target: number): number { let best = 0, dist = Infinity; times.forEach((t, i) => { const d = Math.abs(t - target); if (d < dist) { dist = d; best = i; } }); return best; }
   function formatValid(p: any, target: number): string {
     if (!p?.times?.length) return 'Selected forecast time';
-    const t = p.times[nearestIndex(p.times, target)];
+    const index = forecastIntervalIndex(p.times, target);
+    if(index < 0)return 'Forecast time unavailable';
+    const t = p.times[index];
     return new Date(t).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   }
   function clampPosition(x: number, y: number) { const rect = shell?.getBoundingClientRect(); const w = rect?.width ?? 390, h = rect?.height ?? 520; return { x: Math.max(6, Math.min(window.innerWidth - w - 6, x)), y: Math.max(6, Math.min(window.innerHeight - h - 6, y)) }; }
@@ -280,10 +282,8 @@
     const nodes = profile.map(v => ({ tx:x(v.tempC), dx:x(v.dewpointC), wx:x(v.wetBulbC), y:y(v.heightM), pressure:v.pressureHpa, height:v.heightM, temp:v.tempC, dew:v.dewpointC, wet:v.wetBulbC }));
     const tempGrid: { x: number; value: number }[] = []; for (let t = Math.ceil(minT / 10) * 10; t <= maxT; t += 10) tempGrid.push({ x: x(t), value: t });
     const pressureLevels = [1000, 925, 850, 700, 500, 300, 200];
-    const pressureGrid = pressureLevels.map(level => {
-      const nearest = [...profile].sort((a, b) => Math.abs(a.pressureHpa - level) - Math.abs(b.pressureHpa - level))[0];
-      return { y: y(nearest.heightM), label: `${level}` };
-    });
+    const pressureGrid = profile.filter(node => pressureLevels.includes(node.pressureHpa))
+      .map(node => ({y:y(node.heightM),label:String(node.pressureHpa)}));
     const terrainY = terrain !== null && Number.isFinite(terrain) && terrain >= bottomH && terrain <= topH ? y(terrain) : null;
     const wbz = wetBulbZeroHeight(profile);
     const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM) ? wbz.snowLevelM : null;
@@ -298,7 +298,7 @@
       snowline: snowlineM === null ? 'Unresolved' : (wbz.extrapolated?'~ ':'')+formatElevation(snowlineM,units),
       warmEnergy: phase ? `${Math.round(phase.meltingDegreeMetres)} °C·m` : '—',
       coldEnergy: phase ? `${Math.round(phase.refreezingDegreeMetres)} °C·m` : '—',
-      phaseLabel: phase ? `${phase.icon} ${phase.label}` : conditionLabel(precip,phase),
+      phaseLabel: phase ? `${phase.icon} ${precipitationLabel(phase)}` : conditionLabel(precip,phase),
       phaseDetail: phase ? phase.detail : conditionLabel(precip,phase),
       phaseKey: phase?.key ?? null,
     };
@@ -311,6 +311,7 @@
   onDestroy(() => {
     plotPointers.clear();
     window.removeEventListener('pointermove', dragMove);
+    window.removeEventListener('pointerup', stopDrag);
     if (timestampListener !== null) try { store.off(timestampListener); } catch {}
   });
 </script>

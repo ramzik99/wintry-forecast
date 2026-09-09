@@ -148,6 +148,7 @@
     controller?.abort();
     controller = null;
     requestId += 1;
+    locating = false;
     searching = false;
   }
 
@@ -176,8 +177,10 @@
     }
 
     locating = true;
+    const id = requestId;
     navigator.geolocation.getCurrentPosition(
       position => {
+        if (id !== requestId) return;
         locating = false;
         const lat = Number(position.coords.latitude);
         const lon = Number(position.coords.longitude);
@@ -194,6 +197,7 @@
         });
       },
       error => {
+        if (id !== requestId) return;
         locating = false;
         if (error.code === 1) locationError = 'Location permission was denied.';
         else if (error.code === 2) locationError = 'Current location is unavailable.';

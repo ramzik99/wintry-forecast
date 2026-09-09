@@ -1,4 +1,5 @@
 import { buildProfile, wetBulbZeroHeight } from './snowLevel';
+import { forecastIntervalIndex } from './forecastTime';
 
 export type CrossingState = {
   summary: string;
@@ -27,7 +28,7 @@ function formatLead(hours: number): string {
 
 function formatUtc(time: number): string {
   const date = new Date(time);
-  const day = date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+  const day = date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', timeZone: 'UTC' });
   const hour = String(date.getUTCHours()).padStart(2, '0');
   const minute = String(date.getUTCMinutes()).padStart(2, '0');
   return `${day} ${hour}:${minute} UTC`;
@@ -49,27 +50,22 @@ function interpolateCrossingTime(
 export function terrainCrossingState(point: any, terrainM: number | null, targetTime: number): CrossingState | null {
   if (!point || !Array.isArray(point.times) || !point.times.length || terrainM === null || !Number.isFinite(terrainM)) return null;
 
-  let startIndex = 0;
-  let bestDistance = Infinity;
-  point.times.forEach((time: number, index: number) => {
-    const distance = Math.abs(time - targetTime);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      startIndex = index;
-    }
-  });
+  const startIndex = forecastIntervalIndex(point.times, targetTime);
+  if (startIndex < 0) return null;
 
   const current = snowlineAt(point, startIndex, terrainM);
   const unresolved: CrossingState = { summary: 'Terrain crossing unresolved',
     detail: 'The atmospheric profile does not resolve WBZ at every required time; no crossing time is inferred across gaps.',
     crossingIndex: null, crossingTime: null, direction: 'none' };
   if (current === null) return unresolved;
-  const currentBelowTerrain = current <= terrainM;
+  let currentBelowTerrain = current <= terrainM;
 
   let previousIndex = startIndex;
   let previousValue = current;
 
   for (let i = startIndex + 1; i < point.times.length; i++) {
+    if (point.times[i] > point.times[0] + 144 * 3600_000) break;
+    if (point.times[i] - point.times[previousIndex] > 3 * 3600_000) return unresolved;
     const value = snowlineAt(point, i, terrainM);
     if (value === null) return unresolved;
 
@@ -82,7 +78,13 @@ export function terrainCrossingState(point: any, terrainM: number | null, target
         value,
         terrainM,
       );
-      const leadHours = (crossingTime - point.times[startIndex]) / 3600_000;
+      if (crossingTime < targetTime) {
+        currentBelowTerrain = belowTerrain;
+        previousIndex = i;
+        previousValue = value;
+        continue;
+      }
+      const leadHours = (crossingTime - targetTime) / 3600_000;
 
       if (belowTerrain) {
         return {
@@ -109,15 +111,15 @@ export function terrainCrossingState(point: any, terrainM: number | null, target
 
   return currentBelowTerrain
     ? {
-        summary: 'Snowline below terrain through +144 h',
-        detail: 'Thermal snowline remains below local terrain through the available +144 h forecast; precipitation is still required for snowfall',
+        summary: 'Snowline below terrain in the available forecast',
+        detail: 'Thermal snowline remains below local terrain in the available forecast; precipitation is still required for snowfall',
         crossingIndex: null,
         crossingTime: null,
         direction: 'none',
       }
     : {
-        summary: 'Snowline above terrain through +144 h',
-        detail: 'Thermal snowline remains above local terrain through the available +144 h forecast',
+        summary: 'Snowline above terrain in the available forecast',
+        detail: 'Thermal snowline remains above local terrain in the available forecast',
         crossingIndex: null,
         crossingTime: null,
         direction: 'none',

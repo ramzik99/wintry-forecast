@@ -62,15 +62,16 @@
   import V21Panel from './V21Panel.svelte';
   import SnowlineChart from './SnowlineChart.svelte';
   import { terrainHatchSegments } from './terrainHatching';
-  import { buildProfile, wetBulbZeroHeight, valueAt } from './snowLevel';
+  import { buildProfile, wetBulbZeroHeight } from './snowLevel';
   import { formatPrecipMm, precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
   import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType } from './precipType';
   import { estimateNewSnowStep, formatNewSnowCm } from './snowAccum';
   import { alignSelectedPrecipFields, loadSelectedPrecipFields } from './selectedPrecip';
   import { prepareSnowlineContours } from './snowlineContours';
-  import { contourPolylines, type ContourPolyline, type GridPoint } from './contours';
+  import { contourLinesForLevels, type ContourPolyline, type GridPoint } from './contours';
   import { nextWintryEvent } from './eventOutlook';
   import { conditionLabel, noEventMessage } from './forecastStatus';
+  import { buildForecastTimes } from './forecastTimeline';
   import { forecastIntervalIndex } from './forecastTime';
   import { isOlderRun, profileIsFresh } from './forecastFreshness';
   import { automaticRefreshDue } from './automaticRefresh';
@@ -113,7 +114,6 @@
   function getStoreTimestamp(){try{const t=store.get('timestamp');if(typeof t==='number'&&Number.isFinite(t))return t}catch{}return Date.now()}
   function parseTime(v:unknown):number|null{if(typeof v==='number'&&Number.isFinite(v))return v>1e12?v:v>1e9?v*1000:null;if(typeof v==='string'){const p=Date.parse(v);if(Number.isFinite(p))return p}return null}
   function scalarNumber(v:unknown):number|null{if(typeof v==='number'&&Number.isFinite(v))return v;if(typeof v==='string'&&v.trim()!==''){const p=Number(v);if(Number.isFinite(p))return p}return null}
-  function buildForecastTimes(data:Record<string,unknown>,header:Record<string,unknown>){const hours=data.hours;if(hours==null)return[];const length=Number((hours as any).length);if(!Number.isFinite(length)||length<=0)return[];const raw:number[]=[];for(let i=0;i<length;i++){const v=valueAt(hours,i);if(v!==null)raw.push(v)}if(!raw.length)return[];let times:number[];if(raw[0]>1e12)times=raw;else if(raw[0]>1e9)times=raw.map(v=>v*1000);else{const ref=parseTime(header.refTime);if(ref===null)return[];times=raw.map(h=>ref+h*3600_000)}const end=times[0]+MAX_FORECAST_HOURS*3600_000;return times.filter(t=>t<=end+60_000)}
   function nearestIndex(times:number[],target:number){let best=0,d=Infinity;times.forEach((t,i)=>{const x=Math.abs(t-target);if(x<d){d=x;best=i}});return best}
   function extractPayload(payload:unknown){const r=payload as any;return{forecast:r?.data?.data&&typeof r.data.data==='object'?r.data.data as Record<string,unknown>:{},header:r?.data?.header&&typeof r.data.header==='object'?r.data.header as Record<string,unknown>:{}}}
   async function fetchMapElevation(lat:number,lon:number){try{const r=await getElevation(lat,lon) as any;for(const c of[r?.data,r?.data?.data,r?.value]){const e=scalarNumber(c);if(e!==null)return e}}catch(e){console.warn('Wintry forecast map elevation failed',lat,lon,e)}return null}
@@ -150,7 +150,8 @@
         const{forecast,header}=extractPayload(r);if(!Object.keys(forecast).length)return null;
         const runTime=parseTime(header.refTime);if(isOlderRun(runTime,activeRunTime))return null;
         invalidateForNewRun(runTime);
-        const p={lat,lon,forecast,header,times:buildForecastTimes(forecast,header),runTime,step,terrainM,fetchedAt:Date.now()};
+        const p={lat,lon,forecast,header,times:buildForecastTimes(forecast,runTime),runTime,step,terrainM,fetchedAt:Date.now()};
+        if(!p.times.length)return null;
         rememberProfile(p);return p;
       }catch(e){console.warn('Wintry forecast point request failed',lat,lon,e);return null}
     })();
@@ -231,7 +232,7 @@
     }catch{}
     return formatCoordinate(lat,lon);
   }
-  async function copyText(text:string){if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return}const t=document.createElement('textarea');t.value=text;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();document.execCommand('copy');t.remove()}
+  async function copyText(text:string){if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return}const t=document.createElement('textarea');t.value=text;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();const copied=document.execCommand('copy');t.remove();if(!copied)throw new Error('Copy failed')}
   function favouriteKey(lat:number,lon:number){return`${lat.toFixed(5)},${lon.toFixed(5)}`}
   function readFavourites():any[]{try{const raw=localStorage.getItem(FAVOURITES_STORAGE_KEY),p=raw?JSON.parse(raw):[];return Array.isArray(p)?p:[]}catch{return[]}}
   function isCurrentFavourite(){if(!clickedLatLon)return false;const k=favouriteKey(...clickedLatLon);return readFavourites().some(i=>Number.isFinite(Number(i?.lat))&&Number.isFinite(Number(i?.lon))&&favouriteKey(Number(i.lat),Number(i.lon))===k)}
@@ -297,7 +298,7 @@
   }
   export function isEnabled(){return enabled}
   export function selectMapPoint(lat:number,lon:number){if(!enabled||!Number.isFinite(lat)||!Number.isFinite(lon))return;void probeLocation(lat,lon,'map-click')}
-  function handlePlaceSelect(event:CustomEvent<PlaceSelection>){if(!enabled||!event?.detail)return;const{lat,lon,primary,secondary}=event.detail;if(!Number.isFinite(lat)||!Number.isFinite(lon))return;const name=[primary,secondary].map(v=>String(v??'').trim()).filter(Boolean).join(', ');pointSource='search';map.panTo([lat,lon],{animate:true});setTimeout(()=>{if(pointSource==='search')void probeLocation(lat,lon,'search',name||null)},120)}
+  function handlePlaceSelect(event:CustomEvent<PlaceSelection>){if(!enabled||!event?.detail)return;const{lat,lon,primary,secondary}=event.detail;if(!Number.isFinite(lat)||!Number.isFinite(lon))return;const name=[primary,secondary].map(v=>String(v??'').trim()).filter(Boolean).join(', ');pointSource='search';const selection=++clickGeneration;map.panTo([lat,lon],{animate:true});setTimeout(()=>{if(!destroyed&&selection===clickGeneration&&pointSource==='search')void probeLocation(lat,lon,'search',name||null)},120)}
   function handleV21Select(event:CustomEvent<PlaceSelection>){handlePlaceSelect(event)}
   function handleSearchClear(){if(pointSource==='search'&&!chartOpen)clearPointState(true)}
 
@@ -348,8 +349,9 @@
   }
   function renderFromCache(){if(!enabled||!cache.length)return;const target=getStoreTimestamp(),firstPoint=cache.flat().find((p):p is CachedPoint=>p!==null&&p.times.length>0);if(!firstPoint)return;const first=firstPoint.times[0],end=Math.min(firstPoint.times.at(-1)!,first+MAX_FORECAST_HOURS*3600_000);if(target<first-30*60_000||target>end+30*60_000){clearContours();return}const field:GridPoint[][]=[];for(let r=0;r<cache.length;r++){const row:GridPoint[]=[];for(let c=0;c<cache[r].length;c++){const p=cache[r][c];if(!p||!p.times.length){row.push({lat:0,lon:0,value:null});continue}row.push({lat:p.lat,lon:p.lon,value:interpolatedSnowline(p,target)})}field.push(row)}const interval=contourIntervalForZoom(),{field:contourField,levels}=prepareSnowlineContours(field,interval);if(!levels.length){clearContours();return}const next=L.layerGroup(),candidates:LabelCandidate[]=[];
     addTerrainHatching(field,next);
+    const linesByLevel=contourLinesForLevels(contourField,levels);
     for(const level of levels){
-      const lines=contourPolylines(contourField,level).filter(line=>line.length>=2);
+      const lines=linesByLevel.get(level)!.filter(line=>line.length>=2);
       if(!lines.length)continue;
       const is1000=level%1000===0,is500=level%500===0,color=colorForLevel(level),weight=is1000?3:is500?2.2:1.5;
       const common={interactive:false,lineCap:'round',lineJoin:'round',smoothFactor:.5};

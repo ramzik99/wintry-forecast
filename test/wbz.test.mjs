@@ -12,6 +12,45 @@ function moduleUrl(name, replacements = []) {
 }
 const coreUrl = moduleUrl('snowLevel');
 const { wetBulbZeroHeight, buildProfile } = await import(coreUrl);
+const { valueAt } = await import(coreUrl);
+const { buildForecastTimes, intervalEnd, coversWindow } = await import(moduleUrl('forecastTimeline'));
+const { contourLinesForLevels, contourPolylines: singleLevelLines } = await import(moduleUrl('contours'));
+
+test('blank weather fields stay missing while explicit numeric zero is retained',()=>{
+  for(const raw of ['', '  ', null, undefined, NaN])assert.equal(valueAt([raw],0),null);
+  assert.equal(valueAt(['0'],0),0);
+  assert.equal(valueAt([0],0),0);
+});
+
+test('forecast axes accept supported units without shifting data after an invalid timestamp',()=>{
+  const base=1800000000000,h=3600000;
+  const expected=[base,base+3*h,base+6*h];
+  assert.deepEqual(buildForecastTimes({hours:[0,3,6]},base),expected);
+  assert.deepEqual(buildForecastTimes({hours:expected},null),expected);
+  assert.deepEqual(buildForecastTimes({hours:expected.map(t=>t/1000)},null),expected);
+  for(const hours of [[0,null,6],[0,'',6],[0,6,3],[0,3,3]])assert.deepEqual(buildForecastTimes({hours},base),[]);
+  assert.deepEqual(buildForecastTimes({hours:[0,3]},null),[]);
+  assert.deepEqual(buildForecastTimes({hours:[0,144,147]},base),[base,base+144*h]);
+});
+
+test('daily totals require the full requested window but ignore missing data outside it',()=>{
+  const h=3600000,times=Array.from({length:50},(_,i)=>i*3*h),known=times.map(()=>true);
+  known[12]=false;
+  assert.equal(coversWindow(times,known,0,24*h),true);
+  assert.equal(coversWindow(times,known,24*h,48*h),false);
+  assert.equal(coversWindow([0,6*h],[true,true],0,9*h),false);
+  assert.equal(coversWindow(times,known,140*h,164*h),false);
+  assert.equal(intervalEnd(times,48),144*h);
+  assert.equal(intervalEnd([0,3*h],0),3*h);
+});
+
+test('batched contour preparation preserves geometry and leaves the input unchanged',()=>{
+  const field=[[0,null,400],[200,null,800],[400,600,1000]].map((row,r)=>row.map((value,c)=>({lat:70+r,lon:c,value})));
+  const original=structuredClone(field),levels=[0,200,500,800];
+  const lines=contourLinesForLevels(field,levels);
+  for(const level of levels)assert.deepEqual(lines.get(level),singleLevelLines(field,level));
+  assert.deepEqual(field,original);
+});
 const { terrainCrossingState } = await import(moduleUrl('terrainCrossing', [["'./snowLevel'", JSON.stringify(coreUrl)]]));
 const point = (heightM, wetBulbC) => ({heightM, wetBulbC, pressureHpa:850, level:'850h', tempC:wetBulbC, dewpointC:wetBulbC});
 
@@ -63,6 +102,18 @@ test('terrain timing stays continuous through a fully cold forecast interval', (
   const r=terrainCrossingState(p,800,0);
   assert.equal(r.direction,'below');
   assert.ok(r.crossingTime !== null);
+});
+
+test('crossing timing keeps a crossing after the midpoint and never bridges missing hours',()=>{
+  const h=3600000,p={times:[0,3*h,6*h],forecast:{
+    'temp-850h':[2,-2,2], 'dewpoint-850h':[2,-2,2], 'gh-850h':[1000,1000,1000],
+    'temp-700h':[-2,-4,-2], 'dewpoint-700h':[-2,-4,-2], 'gh-700h':[2000,2000,2000]}};
+  const upcoming=terrainCrossingState(p,300,2*h);
+  assert.equal(upcoming.direction,'below');assert.ok(upcoming.crossingTime>2*h);
+  const after=terrainCrossingState(p,300,2.8*h);
+  assert.equal(after.direction,'above');assert.ok(after.crossingTime>3*h);
+  p.times=[0,6*h,12*h];
+  assert.equal(terrainCrossingState(p,300,0).crossingTime,null);
 });
 
 const { terrainHatchSegments } = await import(moduleUrl('terrainHatching'));
