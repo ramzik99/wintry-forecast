@@ -351,11 +351,13 @@
     for(const level of levels){
       const lines=contourPolylines(contourField,level).filter(line=>line.length>=2);
       if(!lines.length)continue;
-      const is1000=level%1000===0,is500=level%500===0,color=colorForLevel(level),weight=is1000?2.8:is500?1.9:1;
+      const is1000=level%1000===0,is500=level%500===0,color=colorForLevel(level),weight=is1000?3:is500?2.2:1.5;
       const common={interactive:false,lineCap:'round',lineJoin:'round',smoothFactor:.5};
-      // Batch each elevation into two paths: a light halo and the coloured contour.
-      L.polyline(lines,{...common,color:'#f5fbff',weight:weight+1.8,opacity:is500?.72:.42}).addTo(next);
-      L.polyline(lines,{...common,color,weight,opacity:is1000?1:is500?.95:.78}).addTo(next);
+      // Contrast the casing with the elevation colour, including pale yellow and blue.
+      const [red,green,blue]=hexToRgb(color),brightness=.299*red+.587*green+.114*blue;
+      const casing=brightness>150?'#14212b':'#ffffff';
+      L.polyline(lines,{...common,color:casing,weight:weight+2,opacity:.95}).addTo(next);
+      L.polyline(lines,{...common,color,weight,opacity:1}).addTo(next);
       if(is1000||level===-500||(interval===100&&is500)){
         const ranked=lines.map(line=>({line,length:lineLength(line)})).filter(x=>x.length>=110).sort((a,b)=>b.length-a.length).slice(0,3);
         for(const {line,length} of ranked){const point=midpointAlongLine(line);if(point)candidates.push({point,level,color,length,isMajor:is1000})}
