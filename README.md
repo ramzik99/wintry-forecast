@@ -6,9 +6,13 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**301.0.0**
+**301.0.1**
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
+
+### 301.0.1 ROYGBIV contours
+
+Contours progress from red at -500 m through orange (500 m), yellow (1500 m), green (2500 m), blue (3500 m), indigo (4500 m), and violet (6000 m). Colours interpolate between fixed elevations and keep contrasting outlines and elevation labels.
 
 ### 301.0.0 refinement release
 
