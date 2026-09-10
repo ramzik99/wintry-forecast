@@ -103,15 +103,15 @@
   let freshnessTimer:ReturnType<typeof setInterval>|null=null;
   let lastRefreshAttempt = Date.now();
 
-  // Fixed elevation scale: red at the lowest contours through violet at the highest.
+  // Fixed elevation scale: violet at the lowest contours through red at the highest.
   const COLOUR_STOPS:ColourStop[]=[
-    {value:-500,color:'#f44336'}, // red
-    {value:500,color:'#ff9800'},  // orange
-    {value:1500,color:'#ffeb3b'}, // yellow
+    {value:-500,color:'#b04de8'}, // violet
+    {value:500,color:'#4b3fbf'},  // indigo
+    {value:1500,color:'#2196f3'}, // blue
     {value:2500,color:'#32c75a'}, // green
-    {value:3500,color:'#2196f3'}, // blue
-    {value:4500,color:'#4b3fbf'}, // indigo
-    {value:6000,color:'#b04de8'}  // violet
+    {value:3500,color:'#ffeb3b'}, // yellow
+    {value:4500,color:'#ff9800'}, // orange
+    {value:6000,color:'#f44336'}  // red
   ];
 
   function contourIntervalForZoom(){const z=Number(map.getZoom?.()??6);return z<=4?500:z<=7?200:100}
