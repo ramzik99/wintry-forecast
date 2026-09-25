@@ -9,7 +9,7 @@
   $: days = available.filter((t,i) => i === 0 || new Date(t).toDateString() !== new Date(available[i-1]).toDateString());
   $: label = new Date(timestamp).toLocaleString([], {weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
   function select(time: number) { if(Number.isFinite(time)) { store.set('timestamp',time); timestamp=time; } }
-  function now() { if(available.length) select(available.reduce((a,b) => Math.abs(b-Date.now()) < Math.abs(a-Date.now()) ? b : a)); }
+  function now() { if(available.length) select(Math.max(available[0],Math.min(available[available.length-1],Date.now()))); }
   onMount(() => { timestamp=Number(store.get('timestamp')) || Date.now(); listener=store.on('timestamp',(t: number) => timestamp=Number(t)); });
   onDestroy(() => { if(listener !== null) store.off(listener); });
 </script>
