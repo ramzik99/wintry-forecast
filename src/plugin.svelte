@@ -14,6 +14,12 @@
     <div class="hatch-legend"><span>╱╱╱</span> Terrain above estimated snowline</div>
     <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
     <V21Panel bind:unitSystem {activeRunTime} />
+    {#if clickedPoint}
+      <div class="point-tools"><strong>{clickedPlaceName || 'Selected point'}</strong><div><button type="button" on:click={() => {forecastTab='graph';chartOpen=true}}>Forecast</button><button type="button" on:click={() => {forecastTab='sounding';chartOpen=true}}>Sounding</button></div></div>
+      <TimeNavigator times={clickedPoint.times.filter(t => t <= (clickedPoint?.times[0] ?? 0) + MAX_FORECAST_HOURS*3600_000)} />
+    {:else}
+      <div class="start-hint">Search a place or tap the map to explore its winter forecast.</div>
+    {/if}
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
     {#if enabled && (viewportLoading || probeLoading)}
@@ -60,6 +66,7 @@
   import { getElevation, getMeteogramForecastData } from '@windy/fetch';
   import PlaceSearch from './PlaceSearch.svelte';
   import V21Panel from './V21Panel.svelte';
+  import TimeNavigator from './TimeNavigator.svelte';
   import SnowlineChart from './SnowlineChart.svelte';
   import { terrainHatchSegments } from './terrainHatching';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';
@@ -422,4 +429,6 @@
   :global(.snowline-event-line){font-size:11px;line-height:1.4;padding:8px}
   :global(.snowline-compact-relation),:global(.snowline-compact-relation strong){font-size:10px!important;line-height:1.3}
   .title{font-size:13px;white-space:nowrap}.top-row,.top-controls{gap:3px}
+  .snowline-panel{width:320px;padding:14px;border:1px solid #355363;border-radius:16px;background:linear-gradient(155deg,#142b3b,#0c1822);max-height:calc(100dvh - 90px);overflow-y:auto}
+  .title{font-size:18px}.top-controls{gap:4px}.hide-button,.info-button{width:30px;height:34px}.switch{height:34px;font-size:11px}.hatch-legend{font-size:11px;margin:9px 0}.start-hint{font-size:12px;line-height:1.5;color:#b5cbd7;padding-top:12px}.point-tools{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools strong{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools>div{display:flex;gap:8px;margin-top:9px}.point-tools button{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel :global(button:focus-visible){outline:2px solid #8de4ff;outline-offset:2px}.status-pill{font-size:12px;padding:8px}.info-body{font-size:13px;line-height:1.55}
 </style>

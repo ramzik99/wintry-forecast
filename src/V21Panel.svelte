@@ -1,8 +1,8 @@
 <div class="v21-panel">
   <div class="meta-row">
     <div class="units" role="group" aria-label="Display units">
-      <button type="button" class:active={unitSystem === 'metric'} on:click={() => setUnits('metric')}>Metric</button>
-      <button type="button" class:active={unitSystem === 'imperial'} on:click={() => setUnits('imperial')}>Imperial</button>
+      <button type="button" aria-pressed={unitSystem === 'metric'} class:active={unitSystem === 'metric'} on:click={() => setUnits('metric')}>Metric</button>
+      <button type="button" aria-pressed={unitSystem === 'imperial'} class:active={unitSystem === 'imperial'} on:click={() => setUnits('imperial')}>Imperial</button>
     </div>
     <span class="freshness" title={freshnessLabel}>{freshnessLabel}</span>
   </div>
@@ -51,4 +51,5 @@
   .units button { height: 26px; padding: 0 4px; border: 0; background: rgba(255,255,255,.04); color: #a8b6bf; font-size: 9px; font-weight: 800; cursor: pointer; }
   .units button.active { background: rgba(80,190,255,.16); color: #dff7ff; }
   .freshness { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #a8b6bf; font-size: 9px; font-weight: 700; white-space: nowrap; }
+  .units button{height:32px;font-size:11px;padding:0 7px}.freshness{font-size:11px}.release-row{font-size:10px;margin-top:6px}
 </style>

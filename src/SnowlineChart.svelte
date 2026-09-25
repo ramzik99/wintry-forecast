@@ -14,6 +14,7 @@
   </div>
   <div class="forecast-tabs" role="tablist" aria-label="Forecast view"><button class:active={tab === 'graph'} type="button" role="tab" aria-selected={tab === 'graph'} on:click={() => tab = 'graph'}>Forecast</button><button class:active={tab === 'sounding'} type="button" role="tab" aria-selected={tab === 'sounding'} on:click={() => tab = 'sounding'}>Sounding</button></div>
 
+  <TimeNavigator times={(point?.times ?? []).filter(t => t <= point.times[0] + 144*3600_000)} />
   {#if tab === 'graph'}
   {#if chart}
     <div class="plot-wrap">
@@ -143,6 +144,7 @@
   import { forecastIntervalIndex, forecastIntervalHours } from './forecastTime';
   import { formatElevation, formatPrecip, formatSnow, type UnitSystem } from './displayUnits';
   import SoundingChart from './SoundingChart.svelte';
+  import TimeNavigator from './TimeNavigator.svelte';
 
   export let point: any;
   export let terrainM: number | null = null;
@@ -355,4 +357,5 @@
   .outlook24{display:flex;flex-direction:column;gap:5px}.outlook24>b{font-size:10px}.outlook24 span,.outlook24 button{font-size:12px;line-height:1.4}
   .crossing-action{width:100%;margin-top:7px;padding:9px;border:1px solid #35515c;border-radius:8px;background:#172932;color:#b7e6f8;text-align:left;font-size:11px;cursor:pointer}
   .quality-note{margin-top:6px;color:#edc881;font-size:11px;line-height:1.4}.hint{font-size:10px;line-height:1.35}
+  .forecast-tabs button{height:40px;font-size:13px}.chart-title small{font-size:12px}.chart-title em{font-size:11px}.chart-actions button{min-height:36px;min-width:36px}.tooltip>b,.tooltip>strong{font-size:12px}.tip-grid span{font-size:11px}.current-card{padding:12px}.metrics b{font-size:18px}.section-label{font-size:8px}.terrain-tag{font-size:8px}button:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}
 </style>

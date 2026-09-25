@@ -351,4 +351,5 @@
   .credit { text-align: right; }
 
 
+  .search-line input{height:42px;font-size:14px;padding:0 10px}.utility-row button{height:40px;font-size:12px}.result-main{font-size:13px}.result-sub{font-size:11px;line-height:1.4}.result{min-height:44px}.location-message,.empty,.credit{font-size:11px;line-height:1.4}.star{min-width:36px}.utility-row.has-clear{grid-template-columns:1.2fr 1fr 36px}
 </style>
