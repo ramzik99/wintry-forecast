@@ -6,11 +6,11 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**1000.0.3**
+**1000.0.4**
 
-Concise location panel with direct Forecast and Sounding access and larger, readable controls. Use Windy's existing timeline to change forecast time; the duplicate slider and day shortcuts have been removed from both views.
+Compact 260 px desktop / 250 px phone-width panel, with location settings collapsed after selection. Forecast and Sounding remain directly accessible. The panel sits on the left above the timeline, away from right-side map controls, and can minimize to a small button. Use Windy's existing timeline to change forecast time; the duplicate slider and day shortcuts have been removed from both views.
 
-[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.3/plugin.min.js) · [Release notes and verification](V1000.md)
+[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.4/plugin.min.js) · [Release notes and verification](V1000.md)
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
 
