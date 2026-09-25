@@ -6,7 +6,11 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**301.0.2**
+**1000.0.2**
+
+Larger controls, direct Forecast and Sounding access, synchronized time navigation with day shortcuts, and a scrollable panel positioned above Windy's map controls. Now returns to the current time within available coverage.
+
+[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.2/plugin.min.js) · [Release notes and verification](V1000.md)
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
 
