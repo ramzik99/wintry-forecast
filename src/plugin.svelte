@@ -16,7 +16,6 @@
     <V21Panel bind:unitSystem {activeRunTime} />
     {#if clickedPoint}
       <div class="point-tools"><strong>{clickedPlaceName || 'Selected point'}</strong><div><button type="button" on:click={() => {forecastTab='graph';chartOpen=true}}>Forecast</button><button type="button" on:click={() => {forecastTab='sounding';chartOpen=true}}>Sounding</button></div></div>
-      <TimeNavigator times={clickedPoint.times.filter(t => t <= (clickedPoint?.times[0] ?? 0) + MAX_FORECAST_HOURS*3600_000)} />
     {:else}
       <div class="start-hint">Search a place or tap the map to explore its winter forecast.</div>
     {/if}
@@ -66,7 +65,6 @@
   import { getElevation, getMeteogramForecastData } from '@windy/fetch';
   import PlaceSearch from './PlaceSearch.svelte';
   import V21Panel from './V21Panel.svelte';
-  import TimeNavigator from './TimeNavigator.svelte';
   import SnowlineChart from './SnowlineChart.svelte';
   import { terrainHatchSegments } from './terrainHatching';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';

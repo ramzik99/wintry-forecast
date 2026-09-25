@@ -14,7 +14,6 @@
   </div>
   <div class="forecast-tabs" role="tablist" aria-label="Forecast view"><button class:active={tab === 'graph'} type="button" role="tab" aria-selected={tab === 'graph'} on:click={() => tab = 'graph'}>Forecast</button><button class:active={tab === 'sounding'} type="button" role="tab" aria-selected={tab === 'sounding'} on:click={() => tab = 'sounding'}>Sounding</button></div>
 
-  <TimeNavigator times={(point?.times ?? []).filter(t => t <= point.times[0] + 144*3600_000)} />
   {#if tab === 'graph'}
   {#if chart}
     <div class="plot-wrap">
@@ -144,7 +143,6 @@
   import { forecastIntervalIndex, forecastIntervalHours } from './forecastTime';
   import { formatElevation, formatPrecip, formatSnow, type UnitSystem } from './displayUnits';
   import SoundingChart from './SoundingChart.svelte';
-  import TimeNavigator from './TimeNavigator.svelte';
 
   export let point: any;
   export let terrainM: number | null = null;
