@@ -5,20 +5,21 @@
     <div class="top-row">
       <div class="title">Wintry forecast</div>
       <div class="top-controls">
-        <button class="info-button" class:active={infoOpen} type="button" aria-label="How Wintry forecast works" title="How it works" on:click={() => infoOpen = true}>i</button>
         <button class="hide-button" type="button" aria-label="Hide Wintry forecast panel" title="Hide" on:click={() => panelHidden = true}>−</button>
         <label class="switch"><input type="checkbox" aria-label="Show snowline contours" bind:checked={enabled} on:change={toggleEnabled} /><span>{enabled ? 'On' : 'Off'}</span></label>
       </div>
     </div>
 
-    <div class="hatch-legend"><span>╱╱╱</span> Terrain above estimated snowline</div>
-    <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
-    <V21Panel bind:unitSystem {activeRunTime} />
     {#if clickedPoint}
       <div class="point-tools"><strong>{clickedPlaceName || 'Selected point'}</strong><div><button type="button" on:click={() => {forecastTab='graph';chartOpen=true}}>Forecast</button><button type="button" on:click={() => {forecastTab='sounding';chartOpen=true}}>Sounding</button></div></div>
-    {:else}
-      <div class="start-hint">Search a place or tap the map to explore its winter forecast.</div>
     {/if}
+    <details class="panel-options" open={!clickedPoint}>
+      <summary>{clickedPoint ? 'Change place · settings' : 'Choose a place'}</summary>
+      <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
+      <V21Panel bind:unitSystem {activeRunTime} />
+      <div class="hatch-legend"><span>╱╱╱</span> Terrain above estimated snowline</div>
+      <button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button>
+    </details>
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
     {#if enabled && (viewportLoading || probeLoading)}
@@ -428,8 +429,10 @@
   :global(.snowline-event-line){font-size:11px;line-height:1.4;padding:8px}
   :global(.snowline-compact-relation),:global(.snowline-compact-relation strong){font-size:10px!important;line-height:1.3}
   .title{font-size:13px;white-space:nowrap}.top-row,.top-controls{gap:3px}
-  .snowline-panel{position:fixed;right:16px;bottom:170px;z-index:10005;width:320px;padding:14px;border:1px solid #355363;border-radius:16px;background:linear-gradient(155deg,#142b3b,#0c1822);max-height:calc(100dvh - 230px);overflow-y:auto;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}
-  .show-panel{position:fixed;right:16px;bottom:170px;z-index:10005}
-  @media(max-width:600px){.snowline-panel{right:8px;bottom:120px;max-height:calc(100dvh - 180px);max-width:calc(100vw - 16px)}.show-panel{right:8px;bottom:120px}}
+  .snowline-panel{position:fixed;left:12px;bottom:84px;z-index:10005;width:260px;padding:10px;border:1px solid #355363;border-radius:12px;background:linear-gradient(155deg,#142b3b,#0c1822);max-height:calc(100dvh - 160px);overflow-y:auto;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}
+  .show-panel{position:fixed;left:12px;bottom:84px;z-index:10005}
+  @media(max-width:600px){.snowline-panel{left:8px;bottom:130px;width:250px;max-height:calc(100dvh - 210px);max-width:calc(100vw - 76px)}.show-panel{left:8px;bottom:130px}}
   .title{font-size:18px}.top-controls{gap:4px}.hide-button,.info-button{width:30px;height:34px}.switch{height:34px;font-size:11px}.hatch-legend{font-size:11px;margin:9px 0}.start-hint{font-size:12px;line-height:1.5;color:#b5cbd7;padding-top:12px}.point-tools{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools strong{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools>div{display:flex;gap:8px;margin-top:9px}.point-tools button{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel :global(button:focus-visible){outline:2px solid #8de4ff;outline-offset:2px}.status-pill{font-size:12px;padding:8px}.info-body{font-size:13px;line-height:1.55}
+  .title{font-size:15px;white-space:nowrap}.top-row{gap:5px}.hide-button{width:30px;height:32px}.switch{height:32px;padding:0 5px;font-size:10px}.point-tools{margin-top:7px;padding:0;background:none}.point-tools strong{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools>div{gap:6px;margin-top:6px}.point-tools button{min-height:36px;font-size:12px}.panel-options{margin-top:7px;border-top:1px solid #304655}.panel-options summary{padding:9px 0;cursor:pointer;font-size:11px;color:#a9c4d3}.panel-options summary:focus-visible{outline:2px solid #8de4ff}.hatch-legend{font-size:10px;margin:6px 0}.help-link{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill{font-size:10px;padding:4px}.panel-options :global(.results){position:static;margin-top:5px;max-height:180px}.panel-options :global(.search-line input){height:36px;font-size:12px}.panel-options :global(.utility-row button){height:36px;font-size:11px}
+  @media(pointer:coarse){.hide-button,.switch{min-height:40px}.point-tools button{min-height:44px}.panel-options summary{min-height:24px;padding:10px 0}.panel-options :global(.utility-row button){height:44px}}
 </style>
