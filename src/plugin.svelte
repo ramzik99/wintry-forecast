@@ -429,9 +429,41 @@
   :global(.snowline-event-line){font-size:11px;line-height:1.4;padding:8px}
   :global(.snowline-compact-relation),:global(.snowline-compact-relation strong){font-size:10px!important;line-height:1.3}
   .title{font-size:13px;white-space:nowrap}.top-row,.top-controls{gap:3px}
-  .snowline-panel{position:fixed;left:12px;bottom:84px;z-index:10005;width:260px;padding:10px;border:1px solid #355363;border-radius:12px;background:linear-gradient(155deg,#142b3b,#0c1822);max-height:calc(100dvh - 160px);overflow-y:auto;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}
-  .show-panel{position:fixed;left:12px;bottom:84px;z-index:10005}
-  @media(max-width:600px){.snowline-panel{left:8px;bottom:130px;width:250px;max-height:calc(100dvh - 210px);max-width:calc(100vw - 76px)}.show-panel{left:8px;bottom:130px}}
+  /* Keep the map centre free and leave room for Windy's bottom timeline.
+     Hosts can override the clearance when their bottom controls change. */
+  .info-overlay{z-index:10030}
+  .snowline-panel,.show-panel{
+    position:fixed;
+    left:max(16px,env(safe-area-inset-left,0px));
+    bottom:calc(var(--wintry-bottom-clearance,84px) + env(safe-area-inset-bottom,0px));
+    z-index:10005;
+    box-sizing:border-box;
+    max-width:calc(100vw - 32px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px));
+  }
+  .snowline-panel{
+    width:280px;padding:10px;border:1px solid #355363;border-radius:12px;
+    background:linear-gradient(155deg,#142b3b,#0c1822);
+    max-height:calc(100vh - var(--wintry-bottom-clearance,84px) - 80px - env(safe-area-inset-bottom,0px) - env(safe-area-inset-top,0px));
+    max-height:calc(100dvh - var(--wintry-bottom-clearance,84px) - 80px - env(safe-area-inset-bottom,0px) - env(safe-area-inset-top,0px));
+    overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+    scrollbar-width:thin;scrollbar-color:#47677a #142b3b;
+  }
+  @media(max-width:600px){
+    .snowline-panel,.show-panel{
+      left:max(12px,env(safe-area-inset-left,0px));
+      right:max(12px,env(safe-area-inset-right,0px));
+      bottom:calc(var(--wintry-bottom-clearance,88px) + env(safe-area-inset-bottom,0px));
+      margin-inline:auto;
+      max-width:calc(100vw - 24px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px));
+    }
+    .snowline-panel{
+      width:440px;border-radius:16px;padding:10px 12px;
+      max-height:min(45vh,calc(100vh - var(--wintry-bottom-clearance,88px) - 64px - env(safe-area-inset-bottom,0px) - env(safe-area-inset-top,0px)));
+      max-height:min(45dvh,calc(100dvh - var(--wintry-bottom-clearance,88px) - 64px - env(safe-area-inset-bottom,0px) - env(safe-area-inset-top,0px)));
+    }
+    .show-panel{width:max-content;min-height:44px}
+    .top-row{flex-wrap:wrap}
+  }
   .title{font-size:18px}.top-controls{gap:4px}.hide-button,.info-button{width:30px;height:34px}.switch{height:34px;font-size:11px}.hatch-legend{font-size:11px;margin:9px 0}.start-hint{font-size:12px;line-height:1.5;color:#b5cbd7;padding-top:12px}.point-tools{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools strong{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools>div{display:flex;gap:8px;margin-top:9px}.point-tools button{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel :global(button:focus-visible){outline:2px solid #8de4ff;outline-offset:2px}.status-pill{font-size:12px;padding:8px}.info-body{font-size:13px;line-height:1.55}
   .title{font-size:15px;white-space:nowrap}.top-row{gap:5px}.hide-button{width:30px;height:32px}.switch{height:32px;padding:0 5px;font-size:10px}.point-tools{margin-top:7px;padding:0;background:none}.point-tools strong{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools>div{gap:6px;margin-top:6px}.point-tools button{min-height:36px;font-size:12px}.panel-options{margin-top:7px;border-top:1px solid #304655}.panel-options summary{padding:9px 0;cursor:pointer;font-size:11px;color:#a9c4d3}.panel-options summary:focus-visible{outline:2px solid #8de4ff}.hatch-legend{font-size:10px;margin:6px 0}.help-link{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill{font-size:10px;padding:4px}.panel-options :global(.results){position:static;margin-top:5px;max-height:180px}.panel-options :global(.search-line input){height:36px;font-size:12px}.panel-options :global(.utility-row button){height:36px;font-size:11px}
   @media(pointer:coarse){.hide-button,.switch{min-height:40px}.point-tools button{min-height:44px}.panel-options summary{min-height:24px;padding:10px 0}.panel-options :global(.utility-row button){height:44px}}
