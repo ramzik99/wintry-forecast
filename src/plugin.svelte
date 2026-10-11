@@ -85,8 +85,10 @@
   import { onDestroy, onMount } from 'svelte';
   import { map } from '@windy/map';
   import store from '@windy/store';
-  import { createFullRenderingParams } from '@windy/renderUtils';
+  import { createFullRenderingParams, getDataZoom } from '@windy/renderUtils';
   import { TileLayerInterpolator } from '@windy/tileInterpolator';
+  import { tileLayerSource } from '@windy/tileLayerSource';
+  import { applyUrlTemplate } from '@windy/tileHelpers';
   import { hasForecastLightning, stormSpacing } from './thunderstorms';
   import { getElevation, getMeteogramForecastData } from '@windy/fetch';
   import PlaceSearch from './PlaceSearch.svelte';
@@ -481,20 +483,23 @@
     if(key===stormKey)return;
     clearStorms();stormKey=key;const epoch=stormEpoch,abort=stormAbort=new AbortController();
     stormStatus='⚡ Reading ECMWF lightning…';
-    // Windy's tile upload queue advances on render frames, including on an idle base map.
-    const repaint=setInterval(()=>{if(!abort.signal.aborted)(map as any).maplibreMap?.triggerRepaint?.()},100);
+    const tiles=new Map<string,Promise<any>>();
     const deadline=setTimeout(()=>{abort.abort();if(epoch===stormEpoch){stormKey='';stormStatus='⚡ ECMWF lightning unavailable'}},12000);
     try{
       const params=await createFullRenderingParams('thunder',{product:'ecmwf',overlay:'thunder',level:'surface',acRange:3} as any,target);
       if(epoch!==stormEpoch||abort.signal.aborted)return;
-      console.info('Wintry lightning params ready',params.layer,params.fullPath);
       const sample:any=await new Promise(resolve=>(stormInterpolator??=new TileLayerInterpolator()).createFun(resolve));
       const points=metricGrid(b,stormSpacing(zoom,(b.south+b.north)/2),80).points;
       const next=L.layerGroup();let known=0,count=0;
+      const dataZoom=getDataZoom(params,Math.round(Math.max(2,Math.min(10,zoom)))+1),scale=2**dataZoom;
       await mapLimit(points,6,async p=>{
         if(epoch!==stormEpoch||abort.signal.aborted)return;
+        // The interpolator waits for existing tiles; start each distinct thunder tile first.
+        const phi=p.lat*Math.PI/180;
+        const url=applyUrlTemplate(params.fullPath,{z:dataZoom,x:Math.floor((p.lon+180)/360*scale),y:Math.floor((1-Math.log(Math.tan(phi)+1/Math.cos(phi))/Math.PI)/2*scale)});
+        let pending=tiles.get(url);if(!pending){pending=tileLayerSource.get(url,abort.signal);tiles.set(url,pending)}
+        const token=await pending;if(!token?.value?.valid||abort.signal.aborted)return;
         const raw=await sample({lat:p.lat,lon:p.lon},abort,params);
-        if(known===0)console.info('Wintry lightning first tile sample',raw);
         const density=Array.isArray(raw)?raw[0]:raw;
         if(typeof density==='number'&&Number.isFinite(density)&&density>=0)known++;
         if(!hasForecastLightning(density)||epoch!==stormEpoch||abort.signal.aborted)return;
@@ -509,7 +514,7 @@
       if(epoch!==stormEpoch||abort.signal.aborted)return;
       stormKey='';stormStatus='⚡ ECMWF lightning unavailable';
       console.warn('Wintry ECMWF lightning unavailable',error);
-    }finally{clearInterval(repaint);clearTimeout(deadline)}
+    }finally{clearTimeout(deadline);for(const pending of tiles.values())void pending.then(token=>{if(token)tileLayerSource.free(token)},()=>{})}
   }
   function renderFromCache(){
     void renderStorms();
