@@ -79,6 +79,13 @@ Search starts after three characters and a 450 ms typing pause. Photon provides 
 
 ### Map
 
+- Precipitation shading preserves the existing six type colours and uses three
+  intensity opacities: light `<0.5`, moderate `>=0.5 and <3`, heavy `>=3 mm/3h`.
+  Zero precipitation is unshaded, and unknown precipitation or phase stays blank.
+- Shading and contours share the adaptive viewport grid, with finer sampling at
+  higher zoom. Separate **Contours** and **Shading** controls retain their settings.
+- Terrain-above-snowline hatching appears only over known dry samples. It is part
+  of the contour layer and disappears when contours are hidden.
 - Adaptive **snowline contours** that follow Windy's forecast time
 - Approximate contour spacing of 500 m at broad scales, 200 m regionally, and 100 m locally
 - Decluttered contour labels

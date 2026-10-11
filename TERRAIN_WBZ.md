@@ -10,7 +10,17 @@ Diagonal hatching marks positive terrain-minus-WBZ on the viewport sampling grid
 Each cell is split into triangles; the positive region is interpolated and clipped
 before drawing diagonal strokes. Missing terrain or unresolved WBZ leaves a gap.
 Hatching updates with the forecast time and viewport and is removed with contours.
-Hatching is not gated by precipitation. Existing precipitation-type and snow-amount calculations remain separate.
+Hatching is restricted to samples with known zero precipitation. Wet samples,
+including light positive amounts, and missing precipitation leave gaps. Cells
+with any wet or unknown corner are excluded from hatching. Existing point
+precipitation-type and snow-amount calculations remain separate.
+
+Precipitation shading uses the same zoom-dependent viewport grid as contours.
+Each known wet sample uses the existing precipitation-type colour with light
+(<0.5 mm/3h), moderate (>=0.5 and <3 mm/3h) or heavy (>=3 mm/3h) opacity.
+The amounts are normalized three-hour equivalents. Sample tiles have discrete
+type/intensity colours; shading does not invent values across missing samples.
+Contours (including dry-terrain hatching) and shading have separate saved toggles.
 
 The viewport grid cannot resolve every ridge or valley. Hatching is an approximate
 sampled comparison, not a high-resolution terrain mask. A cold lowest profile level
