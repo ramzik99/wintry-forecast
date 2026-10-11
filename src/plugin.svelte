@@ -107,7 +107,7 @@
   import { precipitationShade, dryTerrainDifference, PRECIP_TYPE_COLOURS } from './precipShading';
   import { precipitationIconSvg } from './precipIcons';
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
-  import { weatherInterpolator, weightedScalar, blendedProfile, visibleRasterTiles, tileLocation, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
+  import { weatherInterpolator, weightedScalar, blendedProfile, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles } from './terrainTiles';
   import { buildProfile, wetBulbZeroHeight, wetBulbFromDewpoint } from './snowLevel';
   import { formatPrecipMm, precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
@@ -445,7 +445,7 @@
     const i=forecastIntervalIndex(p.times,target);
     return i<0?null:precipMmAt(p.forecast,i);
   }
-  function rasterZoom(){return Math.max(0,Math.floor((map as any).maplibreMap?.getZoom?.()??map.getZoom()));}
+  function rasterZoom(){const b=currentBounds();return viewportRasterZoom(map.getSize().x,b.west,b.east,map.getZoom());}
   function queueRasterPaint(){
     if(rasterTimer||destroyed||!enabled)return;
     rasterTimer=setTimeout(()=>{rasterTimer=null;void paintShading(getStoreTimestamp());},350);

@@ -1,7 +1,13 @@
 import type { ProfilePoint } from './snowLevel';
 
 export type Weighted<T> = { value:T; weight:number };
-export const TILE_SIZE=256, RASTER_SAMPLES=48;
+export const TILE_SIZE=256, RASTER_SAMPLES=64;
+/** Infer physical Web-Mercator zoom from viewport geometry, independent of wrapper zoom conventions. */
+export function viewportRasterZoom(width:number,west:number,east:number,fallback:number){
+  const span=east-west;
+  const zoom=width>0&&span>0?Math.log2(width*360/(TILE_SIZE*span)):fallback;
+  return Math.max(0,Math.min(22,Math.ceil(Number.isFinite(zoom)?zoom:fallback)));
+}
 export function mercatorY(lat:number){return Math.log(Math.tan(Math.PI/4+Math.max(-85,Math.min(85,lat))*Math.PI/360));}
 export function tilePosition(lat:number,lon:number,z:number){const n=2**z;return{x:(lon+180)/360*n,y:(1-mercatorY(lat)/Math.PI)/2*n};}
 export function tileLocation(x:number,y:number,z:number){const n=2**z;return{lat:Math.atan(Math.sinh(Math.PI*(1-2*y/n)))*180/Math.PI,lon:x/n*360-180};}

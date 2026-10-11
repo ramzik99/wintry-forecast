@@ -4,9 +4,18 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const compile=name=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(readFileSync(new URL(`../src/${name}.ts`,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
 const rasterURL=compile('shadingRaster');
-const {weatherInterpolator,weightedScalar,blendedProfile,tileLocation,tilePosition,visibleRasterTiles}=await import(rasterURL);
+const {weatherInterpolator,weightedScalar,blendedProfile,tileLocation,tilePosition,visibleRasterTiles,viewportRasterZoom,RASTER_SAMPLES}=await import(rasterURL);
 const terrainJS=ts.transpileModule(readFileSync(new URL('../src/terrainTiles.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace("'./shadingRaster'",JSON.stringify(rasterURL));
 const {decodeTerrarium,terrainTileZoom,TerrainTiles}=await import('data:text/javascript;base64,'+Buffer.from(terrainJS).toString('base64'));
+
+test('viewport geometry keeps diagnosis pixels fine despite wrapper zoom and fractional zoom',()=>{
+  for(const physical of [3,5.25,9.25,12.5,17]){
+    const width=1536,span=width*360/(256*2**physical),z=viewportRasterZoom(width,10,10+span,2);
+    const tilePixels=256*2**(physical-z);
+    assert.ok(tilePixels/RASTER_SAMPLES<=4.001);assert.ok(z>=physical-1e-8);
+  }
+  assert.equal(viewportRasterZoom(0,10,10,8),8);
+});
 
 test('weather amounts are continuous across sample ownership boundaries',()=>{
   const grid=[[{lat:0,lon:0,v:0},{lat:0,lon:1,v:4}],[{lat:1,lon:0,v:0},{lat:1,lon:1,v:4}]],sample=weatherInterpolator(grid);
