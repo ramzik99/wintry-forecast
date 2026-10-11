@@ -80,7 +80,7 @@ Search starts after three characters and a 450 ms typing pause. Photon provides 
 ### Map
 
 - Precipitation shading uses blue snow, cyan wet snow, orange mix, green rain,
-  brown ice pellets and red freezing rain and uses three
+  purple ice pellets and red freezing rain and uses three
   intensity opacities: light `<0.5`, moderate `>=0.5 and <3`, heavy `>=3 mm/3h`.
   Zero precipitation is unshaded, and unknown precipitation or phase stays blank.
 - Weather profiles start at nominal 9 km locally, with coarser broad overviews.
