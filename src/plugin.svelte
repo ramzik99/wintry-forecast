@@ -41,13 +41,14 @@
       <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
       <V21Panel bind:unitSystem {activeRunTime} />
       {#if showContours}<div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>{/if}
-      <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading} on:click={() => {clearStorms();void renderStorms();refreshForecast()}}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
+
     </details>
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
     {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading)}
       <div class="status-pill" role="status" aria-live="polite"><span class="status-dot"></span>{probeLoading ? 'Reading point…' : 'Updating…'}</div>
     {/if}
+    <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading} on:click={() => {clearStorms();void renderStorms();refreshForecast()}}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
   </div>
 {/if}
 
@@ -681,7 +682,7 @@
   @media(max-width:600px){.panel-head{margin-inline:-12px;padding-inline:12px}}
   .layer-controls{gap:6px;margin-top:10px}.layer-controls label{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls label.active{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls label:focus-within{outline:2px solid #8de4ff;outline-offset:2px}
   .shade-types{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 8px;font-size:11px;margin-top:8px}.shade-types span{min-height:22px;white-space:normal;line-height:1.2;gap:6px}.shade-types :global(svg){width:19px;height:19px;flex:none}
-  .shade-legend{font-size:10px;line-height:1.5;margin-top:8px}.shade-legend small{font-size:10px}.storm-legend{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button:disabled{opacity:.45;cursor:default}.panel-footer .help-link{min-height:34px}.status-pill{font-size:11px;min-height:22px}.status-dot{flex-shrink:0}
+  .shade-legend{font-size:10px;line-height:1.5;margin-top:8px}.shade-legend small{font-size:10px}.storm-legend{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer{position:sticky;bottom:-10px;z-index:3;background:#102330;border-top:1px solid #304655;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button:disabled{opacity:.45;cursor:default}.panel-footer .help-link{min-height:34px}.status-pill{font-size:11px;min-height:22px}.status-dot{flex-shrink:0}
   @media(prefers-reduced-motion:reduce){.status-dot{animation:none}}
   @media(pointer:coarse){.layer-controls label,.refresh-button,.panel-footer .help-link{min-height:44px}
 .hide-button,.switch{min-height:40px}.point-tools button{min-height:44px}.panel-options summary{min-height:24px;padding:10px 0}.panel-options :global(.utility-row button){height:44px}}
