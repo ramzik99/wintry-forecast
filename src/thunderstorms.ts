@@ -3,7 +3,13 @@ export const LIGHTNING_DISPLAY_THRESHOLD = 0.025;
 export function hasForecastLightning(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value >= LIGHTNING_DISPLAY_THRESHOLD;
 }
-/** 72 screen pixels, with a minimum model-scale separation; capped separately at 80 samples. */
+/** Screen spacing adapts at every zoom; the raw ECMWF field retains its native resolution. */
 export function stormSpacing(zoom: number, latitude: number): number {
-  return Math.max(9000,72*40075016.686*Math.cos(latitude*Math.PI/180)/(256*2**zoom));
+  return 72*40075016.686*Math.cos(latitude*Math.PI/180)/(256*2**zoom);
+}
+
+/** A zoomed viewport may show only the corner of a model-scale cell.
+ * Sample its visible footprint so the forecast symbol stays on screen. */
+export function stormSamplePoint(bounds:[number,number][]):{lat:number;lon:number}{
+  return {lat:(bounds[0][0]+bounds[2][0])/2,lon:(bounds[0][1]+bounds[1][1])/2};
 }

@@ -215,8 +215,8 @@ Missing owners remain blank.
 Up to 12 profile requests run concurrently. Partial shading appears before all
 requests finish. Fine terrain loads with 8 workers and cached elevations; cancellation
 stops obsolete work. The six type colours and three intensity levels are batched into
-at most 18 canvas polygon groups. Lightning remains at model scale or coarser and
-has its own cancellable, bounded tile sampling.
+at most 18 canvas polygon groups. Lightning uses zoom-adaptive display spacing and its own cancellable, bounded
+tile sampling; the underlying ECMWF field remains at its native resolution.
 
 ## Interpretation
 
@@ -290,3 +290,7 @@ The panel has larger layer controls, matching icon legends, an independent Icons
 legend, a manual Refresh button, and a general Updating status covering weather,
 terrain and lightning work. Map coordinates are wrapped before forecast requests
 when navigating across the date line.
+
+At every zoom, lightning samples use the visible footprint of each display
+cell so symbols stay inside the map even in very small viewports.
+This changes symbol placement and sampling, not the ECMWF forecast resolution.

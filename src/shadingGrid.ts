@@ -23,7 +23,7 @@ export function metricGrid(bounds:ViewBounds,metres:number,budget:number,padded=
     const x=(ix.west+c)*step,y=(ix.south+r)*step;
     const south=Math.max(bounds.south,latitude(y)),north=Math.min(bounds.north,latitude(y+step));
     const west=Math.max(bounds.west,longitude(x)),east=Math.min(bounds.east,longitude(x+step));
-    points.push({lat:latitude(y+(padded?0:step/2)),lon:longitude(x+(padded?0:step/2)),r,c,bounds:[[south,west],[south,east],[north,east],[north,west]]});
+    points.push({lat:padded?latitude(y):latitude((project(south)+project(north))/2),lon:padded?longitude(x):(west+east)/2,r,c,bounds:[[south,west],[south,east],[north,east],[north,west]]});
   }
   return {rows,cols,points,metres:step*cos};
 }

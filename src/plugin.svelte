@@ -73,7 +73,7 @@
       <div class="info-body">
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
         <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Light &lt;0.5, moderate 0.5–&lt;3 and heavy ≥3 mm/3h use progressively stronger opacity. The display starts near 9 km locally and refines terrain beyond zoom 8. Broad views use a denser overview at zoom 5 and below, with progressive loading. Rainfall amounts retain the sampled ECMWF scale; finer terrain changes precipitation type. Cached weather appears first while local terrain refines. Contours, shading and precipitation icons can be hidden independently. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
-        <div><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbols stay spaced on screen and do not refine with terrain. Missing data displays no symbols.</div>
+        <div><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div>
         <div><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div>
         <div><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div>
         <div><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Precipitation is shown as three-hour totals. New snow uses these intervals, precipitation type and an estimated snow-to-water ratio, with simple settling and melt.</div>
@@ -93,7 +93,7 @@
   import { TileLayerInterpolator } from '@windy/tileInterpolator';
   import { tileLayerSource } from '@windy/tileLayerSource';
   import { applyUrlTemplate } from '@windy/tileHelpers';
-  import { hasForecastLightning, stormSpacing } from './thunderstorms';
+  import { hasForecastLightning, stormSpacing, stormSamplePoint } from './thunderstorms';
   import { getElevation, getMeteogramForecastData } from '@windy/fetch';
   import PlaceSearch from './PlaceSearch.svelte';
   import V21Panel from './V21Panel.svelte';
@@ -510,7 +510,7 @@
       const params=await createFullRenderingParams('thunder',{product:'ecmwf',overlay:'thunder',level:'surface',acRange:3} as any,target);
       if(epoch!==stormEpoch||abort.signal.aborted)return;
       const sample:any=await new Promise(resolve=>(stormInterpolator??=new TileLayerInterpolator()).createFun(resolve));
-      const points=metricGrid(b,stormSpacing(zoom,(b.south+b.north)/2),80).points;
+      const points=metricGrid(b,stormSpacing(zoom,(b.south+b.north)/2),80,false,Math.SQRT2).points.map(cell=>stormSamplePoint(cell.bounds));
       const next=L.layerGroup();let known=0,count=0;
       const dataZoom=getDataZoom(params,Math.round(Math.max(2,Math.min(10,zoom)))+1),scale=2**dataZoom;
       await mapLimit(points,6,async p=>{

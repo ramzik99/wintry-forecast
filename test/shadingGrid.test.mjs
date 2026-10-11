@@ -48,3 +48,10 @@ test('low zoom overview adds spatial detail within a bounded weather budget',()=
   const local=viewportWeatherGrid({south:31.9,north:32.3,west:35.6,east:36},10);
   assert.equal(local.metres,9000);
 });
+
+test('every display type samples the visible portion of clipped terrain cells',()=>{
+  const b={south:31.6999,north:31.7001,west:36.1999,east:36.2001};
+  for(const metres of [9000,1000,100,10])for(const cell of metricGrid(b,metres,512).points){
+    assert.ok(cell.lat>=b.south&&cell.lat<=b.north&&cell.lon>=b.west&&cell.lon<=b.east);
+  }
+});
