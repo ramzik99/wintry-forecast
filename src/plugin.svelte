@@ -481,6 +481,9 @@
     if(key===stormKey)return;
     clearStorms();stormKey=key;const epoch=stormEpoch,abort=stormAbort=new AbortController();
     stormStatus='⚡ Reading ECMWF lightning…';
+    // Windy's tile upload queue advances on render frames, including on an idle base map.
+    const repaint=setInterval(()=>{if(!abort.signal.aborted)(map as any).maplibreMap?.triggerRepaint?.()},100);
+    const deadline=setTimeout(()=>{abort.abort();if(epoch===stormEpoch){stormKey='';stormStatus='⚡ ECMWF lightning unavailable'}},12000);
     try{
       const params=await createFullRenderingParams('thunder',{product:'ecmwf',overlay:'thunder',level:'surface',acRange:3} as any,target);
       if(epoch!==stormEpoch||abort.signal.aborted)return;
@@ -504,7 +507,7 @@
       if(epoch!==stormEpoch||abort.signal.aborted)return;
       stormKey='';stormStatus='⚡ ECMWF lightning unavailable';
       console.warn('Wintry ECMWF lightning unavailable',error);
-    }
+    }finally{clearInterval(repaint);clearTimeout(deadline)}
   }
   function renderFromCache(){
     void renderStorms();
