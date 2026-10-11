@@ -38,6 +38,8 @@ export function weatherInterpolator<T extends {lat:number;lon:number}>(grid:(T|n
   };
 }
 export function weightedScalar<T>(values:Weighted<T>[],read:(p:T)=>number|null){let sum=0;for(const v of values){const n=read(v.value);if(n===null||!Number.isFinite(n))return null;sum+=v.weight*n;}return sum;}
+/** Fractional wet coverage softens wet/dry edges without blending phase colours or intensity bands. */
+export function wetCoverage<T>(values:Weighted<T>[],read:(p:T)=>number|null){return weightedScalar(values,p=>{const n=read(p);return n===null||!Number.isFinite(n)?null:n>0?1:0;});}
 
 /** Interpolate continuous T/Td/height by pressure, then calculate Tw; never mix categorical colours. */
 export function blendedProfile(values:Weighted<ProfilePoint[]>[],wetBulb:(t:number,td:number,p:number)=>number):ProfilePoint[]{

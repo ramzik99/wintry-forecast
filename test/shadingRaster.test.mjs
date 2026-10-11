@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const compile=name=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(readFileSync(new URL(`../src/${name}.ts`,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
 const rasterURL=compile('shadingRaster');
-const {weatherInterpolator,weightedScalar,blendedProfile,tileLocation,tilePosition,visibleRasterTiles,viewportRasterZoom,RASTER_SAMPLES}=await import(rasterURL);
+const {weatherInterpolator,weightedScalar,wetCoverage,blendedProfile,tileLocation,tilePosition,visibleRasterTiles,viewportRasterZoom,RASTER_SAMPLES}=await import(rasterURL);
 const terrainJS=ts.transpileModule(readFileSync(new URL('../src/terrainTiles.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace("'./shadingRaster'",JSON.stringify(rasterURL));
 const {decodeTerrarium,terrainTileZoom,TerrainTiles}=await import('data:text/javascript;base64,'+Buffer.from(terrainJS).toString('base64'));
 
@@ -24,6 +24,12 @@ test('weather amounts are continuous across sample ownership boundaries',()=>{
   grid[1][1]=null;assert.equal(sample(.5,.5),null);assert.equal(sample(-1,.5),null);
   assert.equal(weightedScalar([{value:{v:NaN},weight:1}],p=>p.v),null);
 });
+test('wet coverage fades smoothly into dry cells and preserves unknown coverage',()=>{
+  const sample=weatherInterpolator([[{lat:0,lon:0,v:0},{lat:0,lon:1,v:1}],[{lat:1,lon:0,v:0},{lat:1,lon:1,v:1}]]);
+  for(const lon of [0,.1,.5,.9,1])assert.ok(Math.abs(wetCoverage(sample(.5,lon),p=>p.v)-lon)<1e-9);
+  assert.equal(wetCoverage([{value:null,weight:1}],p=>p),null);
+});
+
 test('interpolate T/Td before Tw and retain only pressure levels shared by all corners',()=>{
   const p=(t,td,h,level='850h')=>({level,pressureHpa:850,heightM:h,tempC:t,dewpointC:td,wetBulbC:-99});
   const result=blendedProfile([{value:[p(2,1,1500),p(1,0,1000,'900h')],weight:.25},{value:[p(6,3,1700)],weight:.75}],(t,td)=>t+td);

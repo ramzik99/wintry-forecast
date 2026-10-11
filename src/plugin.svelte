@@ -107,7 +107,7 @@
   import { precipitationShade, dryTerrainDifference, PRECIP_TYPE_COLOURS } from './precipShading';
   import { precipitationIconSvg } from './precipIcons';
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
-  import { weatherInterpolator, weightedScalar, blendedProfile, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
+  import { weatherInterpolator, weightedScalar, wetCoverage, blendedProfile, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles } from './terrainTiles';
   import { buildProfile, wetBulbZeroHeight, wetBulbFromDewpoint } from './snowLevel';
   import { formatPrecipMm, precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
@@ -477,7 +477,7 @@
       const detailed=terrainTiles.sample(lat,lon,z),terrain=detailed??weightedScalar(neighbours,p=>p.terrainM);
       if(terrain===null)return null;if(detailed===null)fallback=true;
       const profile=blendedProfile(neighbours.map(v=>({value:profiles.get(v.value)!,weight:v.weight})),wetBulbFromDewpoint);
-      const phase=terrainPrecipitationType(profile,terrain);if(!phase)return null;return{phase,shade};
+      const phase=terrainPrecipitationType(profile,terrain);if(!phase)return null;return{phase,shade,coverage:wetCoverage(neighbours,p=>amounts.get(p)??null)??0};
     }
     try{
       if(showShading){
@@ -490,7 +490,7 @@
             const p=tileLocation(tile.x+(x+.5)/RASTER_SAMPLES,tile.y+(y+.5)/RASTER_SAMPLES,z);
             if(p.lat<b.south||p.lat>b.north||p.lon<b.west||p.lon>b.east)continue;
             const result=diagnose(p.lat,p.lon);if(!result)continue;wet=true;const rgb=hexToRgb(PRECIP_TYPE_COLOURS[result.phase.key]),i=(y*RASTER_SAMPLES+x)*4;
-            image.data[i]=rgb[0];image.data[i+1]=rgb[1];image.data[i+2]=rgb[2];image.data[i+3]=Math.round(result.shade.opacity*255);
+            image.data[i]=rgb[0];image.data[i+1]=rgb[1];image.data[i+2]=rgb[2];image.data[i+3]=Math.round(result.shade.opacity*result.coverage*255);
           }
           if(wet){
             ctx.putImageData(image,0,0);const full=document.createElement('canvas');full.width=TILE_SIZE;full.height=TILE_SIZE;const fc=full.getContext('2d');
