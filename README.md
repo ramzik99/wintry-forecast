@@ -85,7 +85,10 @@ Search starts after three characters and a 450 ms typing pause. Photon provides 
   Zero precipitation is unshaded, and unknown precipitation or phase stays blank.
 - Weather profiles start at nominal 9 km locally, with coarser broad overviews.
   Terrain refines beyond zoom 8 while reusing those profiles and precipitation totals.
-  Separate **Contours**, **Shading** and **⚡ Storms** controls retain their settings.
+  Separate **Contours**, **Shading**, **Icons** and **⚡ Storms** controls retain their settings.
+- Precipitation icons use the same terrain-aware phase as shading, with matching
+  colours. They reuse existing wet samples (no extra weather requests), stay spaced
+  across the screen and are capped at 80 markers. Dry and missing samples stay blank.
 - Lightning symbols use raw ECMWF `thunder/lightdens` forecast tiles through Windy's
   tile interpolator, independently of the selected base layer. They show forecast
   activity, not observed strikes. The display threshold is 0.025 native density

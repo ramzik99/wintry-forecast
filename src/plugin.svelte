@@ -13,6 +13,7 @@
     <div class="layer-controls" role="group" aria-label="Map layers">
       <label><input type="checkbox" bind:checked={showContours} on:change={toggleMapLayers} /> Contours</label>
       <label><input type="checkbox" bind:checked={showShading} on:change={toggleMapLayers} /> Shading</label>
+      <label><input type="checkbox" bind:checked={showIcons} on:change={toggleMapLayers} /> Icons</label>
       <label><input type="checkbox" bind:checked={showThunder} on:change={toggleMapLayers} /> ⚡ Storms</label>
     </div>
     {#if showShading}
@@ -68,7 +69,7 @@
       </div>
       <div class="info-body">
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
-        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Light &lt;0.5, moderate 0.5–&lt;3 and heavy ≥3 mm/3h use progressively stronger opacity. The display starts near 9 km locally and refines terrain beyond zoom 8. Broad views use a coarser overview to load quickly. Rainfall amounts retain the sampled ECMWF scale; finer terrain changes precipitation type. Cached weather appears first while local terrain refines. Contours and shading can be hidden independently.</div>
+        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Light &lt;0.5, moderate 0.5–&lt;3 and heavy ≥3 mm/3h use progressively stronger opacity. The display starts near 9 km locally and refines terrain beyond zoom 8. Broad views use a coarser overview to load quickly. Rainfall amounts retain the sampled ECMWF scale; finer terrain changes precipitation type. Cached weather appears first while local terrain refines. Contours, shading and precipitation icons can be hidden independently. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbols stay spaced on screen and do not refine with terrain. Missing data displays no symbols.</div>
         <div><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div>
         <div><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div>
@@ -96,6 +97,7 @@
   import SnowlineChart from './SnowlineChart.svelte';
   import { terrainHatchSegments } from './terrainHatching';
   import { precipitationShade, dryTerrainDifference, PRECIP_TYPE_COLOURS } from './precipShading';
+  import { precipitationIconSvg } from './precipIcons';
   import { metricGrid, terrainSpacing, nearestWeatherSample } from './shadingGrid';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';
   import { formatPrecipMm, precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
@@ -129,10 +131,10 @@
   const MAX_CONCURRENT = 12, CONTOUR_STEP_H = 1, FORECAST_DAYS = 6, MAX_FORECAST_HOURS = 144, PROFILE_CACHE_MAX = 1600, MIN_VALID_FRACTION = 0.32, POSITION_NEAR_SNOWLINE_METRES = 100, TENDENCY_HOURS = 1, MAX_VIEWPORT_LATITUDE = 85;
   const FAVOURITES_STORAGE_KEY = 'snowline:favourites:v1', FAVOURITES_CHANGED_EVENT = 'wintry:favourites-changed', PREFS_STORAGE_KEY='wintry:prefs:v1';
 
-  let showContours=true, showShading=true, showThunder=true;
+  let showContours=true, showShading=true, showIcons=true, showThunder=true;
   let stormInterpolator:any=null;
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
-  let shadingLayer:any=null, shadingRenderer:any=null;
+  let shadingLayer:any=null, shadingRenderer:any=null, precipIconLayer:any=null;
   let terrainGeneration=0, terrainJobKey='', shadingCells:{lat:number;lon:number;bounds:[number,number][];source:CachedPoint;terrainM:number|null}[]=[];
   const PRECIP_PANE='wintry-precip-shading';
   let enabled=true, panelHidden=false, infoOpen=false, chartOpen=false, forecastTab:'graph'|'sounding'='graph', viewportLoading=false, refreshQueued=false, probeLoading=false, unitSystem:UnitSystem='metric', prefsReady=false;
@@ -215,7 +217,7 @@
     return grid;
   }
   async function refreshViewport(){
-    if(!enabled||destroyed||(!showContours&&!showShading))return;
+    if(!enabled||destroyed||(!showContours&&!showShading&&!showIcons))return;
     if(viewportLoading){refreshQueued=true;return}
     refreshQueued=false;const my=++generation;viewportLoading=true;
     const{points,rows,cols}=buildViewportPoints();
@@ -264,7 +266,8 @@
     void refreshViewport();
   }
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
-  function clearShading(){terrainGeneration++;terrainJobKey='';shadingCells=[];if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
+  function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null}
+  function clearShading(){clearPrecipIcons();terrainGeneration++;terrainJobKey='';shadingCells=[];if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
   function clearPointState(closeChart=true){clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function statusColor(s:ProbeStatus){return s==='above'?'#46d9ff':s==='below'?'#ff9d3d':s==='near'?'#ffe45c':'#fff'}
@@ -426,7 +429,7 @@
     return i<0?null:precipMmAt(p.forecast,i);
   }
   function renderPrecipitation(target:number){
-    if(!showShading){clearShading();terrainGeneration++;terrainJobKey='';return;}
+    if(!showShading&&!showIcons){clearShading();terrainGeneration++;terrainJobKey='';return;}
     if(!shadingRenderer){
       const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);
       pane.style.zIndex='390';pane.style.pointerEvents='none';
@@ -447,17 +450,20 @@
       const work=shadingCells.filter(cell=>cell.terrainM===null&&precipitationShade(mapPrecipAt(cell.source,target)));
       let painted=Date.now();
       void mapLimit(work,8,async cell=>{
-        if(epoch!==terrainGeneration||destroyed||!enabled||!showShading)return;
+        if(epoch!==terrainGeneration||destroyed||!enabled||(!showShading&&!showIcons))return;
         cell.terrainM=await loadMapElevation(cell.lat,cell.lon);
         if(epoch===terrainGeneration&&Date.now()-painted>250){painted=Date.now();paintShading(getStoreTimestamp());}
-      }).then(()=>{if(epoch===terrainGeneration&&!destroyed&&enabled&&showShading)paintShading(getStoreTimestamp());});
+      }).then(()=>{if(epoch===terrainGeneration&&!destroyed&&enabled&&(showShading||showIcons))paintShading(getStoreTimestamp());});
     }
     paintShading(target);
   }
   function paintShading(target:number){
-    if(!enabled||!showShading||destroyed)return;
+    if(!enabled||(!showShading&&!showIcons)||destroyed)return;
     const next=L.layerGroup(),groups=new Map<string,{colour:string;opacity:number;polygons:[number,number][][]}>();
     const profiles=new Map<CachedPoint,ReturnType<typeof buildProfile>>();
+    const size=map.getSize();let spacing=72;
+    while(Math.ceil(size.x/spacing)*Math.ceil(size.y/spacing)>80)spacing+=8;
+    const icons=new Map<string,{cell:typeof shadingCells[number];phase:TerrainPrecipType;distance:number}>();
     for(const cell of shadingCells){
       const p=cell.source,shade=precipitationShade(mapPrecipAt(p,target));
       if(!shade||!profileIsFresh(p.fetchedAt,p.runTime,activeRunTime))continue;
@@ -467,10 +473,21 @@
       const groupKey=`${phase.key}:${shade.opacity}`;
       let group=groups.get(groupKey);if(!group){group={colour:PRECIP_TYPE_COLOURS[phase.key],opacity:shade.opacity,polygons:[]};groups.set(groupKey,group);}
       group.polygons.push(cell.bounds);
+      if(showIcons){
+        const point=map.latLngToContainerPoint([cell.lat,cell.lon]);
+        if(point.x<16||point.y<16||point.x>size.x-16||point.y>size.y-16)continue;
+        const col=Math.floor(point.x/spacing),row=Math.floor(point.y/spacing),key=`${row}:${col}`;
+        const distance=(point.x-(col+.5)*spacing)**2+(point.y-(row+.5)*spacing)**2;
+        const previous=icons.get(key);if(!previous||distance<previous.distance)icons.set(key,{cell,phase,distance});
+      }
     }
     // At most 18 draw layers rather than hundreds of separate Leaflet objects.
-    for(const group of groups.values())L.polygon(group.polygons,{renderer:shadingRenderer,pane:PRECIP_PANE,stroke:false,fillColor:group.colour,fillOpacity:group.opacity,interactive:false,smoothFactor:0}).addTo(next);
+    if(showShading)for(const group of groups.values())L.polygon(group.polygons,{renderer:shadingRenderer,pane:PRECIP_PANE,stroke:false,fillColor:group.colour,fillOpacity:group.opacity,interactive:false,smoothFactor:0}).addTo(next);
     next.addTo(map);const old=shadingLayer;shadingLayer=next;if(old)try{map.removeLayer(old)}catch{}
+    const iconLayer=L.layerGroup();
+    for(const {cell,phase} of icons.values())L.marker([cell.lat,cell.lon],{interactive:false,keyboard:false,zIndexOffset:1000,
+      icon:L.divIcon({className:'wintry-precip-icon',html:`<span role="img" aria-label="${phase.label}">${precipitationIconSvg(phase.key)}</span>`,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(iconLayer);
+    iconLayer.addTo(map);const previousIcons=precipIconLayer;precipIconLayer=iconLayer;if(previousIcons)try{map.removeLayer(previousIcons)}catch{}
   }
   function clearStorms(){
     stormEpoch++;stormAbort?.abort();stormAbort=null;stormKey='';
@@ -555,18 +572,18 @@
   }
   function toggleMapLayers(){
     void renderStorms();
-    if(!showContours)clearContours();if(!showShading)clearShading();
+    if(!showContours)clearContours();if(!showShading)clearShading();if(!showIcons)clearPrecipIcons();
     if(!enabled)return;
     if(cache.length)renderFromCache();
-    if((showContours||showShading)&&!cache.length)void refreshViewport();
+    if((showContours||showShading||showIcons)&&!cache.length)void refreshViewport();
   }
-  function loadPreferences(){try{const p=JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY)||'{}');if(typeof p.enabled==='boolean')enabled=p.enabled;if(typeof p.showContours==='boolean')showContours=p.showContours;if(typeof p.showShading==='boolean')showShading=p.showShading;if(typeof p.showThunder==='boolean')showThunder=p.showThunder;if(typeof p.panelHidden==='boolean')panelHidden=p.panelHidden;if(p.forecastTab==='graph'||p.forecastTab==='sounding')forecastTab=p.forecastTab}catch{}unitSystem=loadUnitSystem();prefsReady=true}
-  function persistPreferences(){if(!prefsReady)return;try{localStorage.setItem(PREFS_STORAGE_KEY,JSON.stringify({enabled,panelHidden,forecastTab,showContours,showShading,showThunder}))}catch{}}
+  function loadPreferences(){try{const p=JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY)||'{}');if(typeof p.enabled==='boolean')enabled=p.enabled;if(typeof p.showContours==='boolean')showContours=p.showContours;if(typeof p.showShading==='boolean')showShading=p.showShading;if(typeof p.showIcons==='boolean')showIcons=p.showIcons;if(typeof p.showThunder==='boolean')showThunder=p.showThunder;if(typeof p.panelHidden==='boolean')panelHidden=p.panelHidden;if(p.forecastTab==='graph'||p.forecastTab==='sounding')forecastTab=p.forecastTab}catch{}unitSystem=loadUnitSystem();prefsReady=true}
+  function persistPreferences(){if(!prefsReady)return;try{localStorage.setItem(PREFS_STORAGE_KEY,JSON.stringify({enabled,panelHidden,forecastTab,showContours,showShading,showIcons,showThunder}))}catch{}}
   function refreshUnitDependentUi(){if(renderedUnitSystem===unitSystem)return;renderedUnitSystem=unitSystem;if(!enabled)return;if(cache.length&&!viewportLoading)renderFromCache();updatePersistentClickLabel()}
-  $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showThunder;persistPreferences()}
+  $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showIcons;showThunder;persistPreferences()}
   $: if(prefsReady){unitSystem;refreshUnitDependentUi()}
 
-  function handleMapNavigation(){if(!enabled)return;clearStorms();terrainGeneration++;terrainJobKey='';if(cache.length&&showShading)renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
+  function handleMapNavigation(){if(!enabled)return;clearStorms();terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
   function toggleEnabled(){
     if(enabled){register(config.name,'high');void renderStorms();refreshViewport();return}
     release(config.name,'high');generation++;refreshEpoch++;pendingProfiles.clear();viewportLoading=false;refreshQueued=false;
@@ -580,7 +597,10 @@
   .storm-legend{font-size:9px;color:#f5df91;margin-top:5px}
   :global(.wintry-storm-symbol){background:none!important;border:0!important;pointer-events:none!important}
   :global(.wintry-storm-symbol span){font-size:23px;color:#ffe04b;text-shadow:0 1px 2px #111,0 0 3px #111;line-height:28px}
-  .layer-controls{display:flex;gap:14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls label{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls input{accent-color:#67d7ff;margin:0;width:15px;height:15px}
+  :global(.wintry-precip-icon){background:none!important;border:0!important;pointer-events:none!important}
+  :global(.wintry-precip-icon span){display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}
+  :global(.wintry-precip-icon svg){width:25px;height:25px;padding:1.5px}
+  .layer-controls{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls label{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls input{accent-color:#67d7ff;margin:0;width:15px;height:15px}
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
   .shade-types{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 3px;margin-top:5px;font-size:9px;color:#d7e3e9}.shade-types span{display:flex;align-items:center;gap:4px;white-space:nowrap}.shade-types i{display:inline-block;flex:none;width:8px;height:8px;border-radius:1px}
 
