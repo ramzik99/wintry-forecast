@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const js=ts.transpileModule(readFileSync(new URL('../src/thunderstorms.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
-const {hasForecastLightning,stormSpacing,stormSamplePoint}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+const {hasForecastLightning,stormSpacing,stormSamplePoint,lightningTileZoomIndex}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+test('lightning preloads the same tile zoom as Windys MapLibre interpolator',()=>{
+  for(const [raw,expected] of [[1,3],[2,3],[5,6],[6,7],[7,8],[9,10],[10,11],[16,11]])assert.equal(lightningTileZoomIndex(raw),expected);
+});
 test('raw lightning threshold excludes missing, invalid, negative and weak signals',()=>{
   for(const v of [null,undefined,'1',NaN,Infinity,-1,0,.0249])assert.equal(hasForecastLightning(v),false);
   for(const v of [.025,.1,2])assert.equal(hasForecastLightning(v),true);

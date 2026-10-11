@@ -93,7 +93,7 @@
   import { TileLayerInterpolator } from '@windy/tileInterpolator';
   import { tileLayerSource } from '@windy/tileLayerSource';
   import { applyUrlTemplate } from '@windy/tileHelpers';
-  import { hasForecastLightning, stormSpacing, stormSamplePoint } from './thunderstorms';
+  import { hasForecastLightning, stormSpacing, stormSamplePoint, lightningTileZoomIndex } from './thunderstorms';
   import { getElevation, getMeteogramForecastData } from '@windy/fetch';
   import PlaceSearch from './PlaceSearch.svelte';
   import V21Panel from './V21Panel.svelte';
@@ -512,7 +512,8 @@
       const sample:any=await new Promise(resolve=>(stormInterpolator??=new TileLayerInterpolator()).createFun(resolve));
       const points=metricGrid(b,stormSpacing(zoom,(b.south+b.north)/2),80,false,Math.SQRT2).points.map(cell=>stormSamplePoint(cell.bounds));
       const next=L.layerGroup();let known=0,count=0;
-      const dataZoom=getDataZoom(params,Math.round(Math.max(2,Math.min(10,zoom)))+1),scale=2**dataZoom;
+      const mapLibreZoom=(map as any).maplibreMap?.getZoom?.()??zoom-1;
+      const dataZoom=getDataZoom(params,lightningTileZoomIndex(mapLibreZoom)),scale=2**dataZoom;
       await mapLimit(points,6,async p=>{
         if(epoch!==stormEpoch||abort.signal.aborted)return;
         // The interpolator waits for existing tiles; start each distinct thunder tile first.

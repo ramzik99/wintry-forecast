@@ -1,5 +1,9 @@
 /** Windy's raw ECMWF thunder/lightdens field, never CAPE or observed strikes. */
 export const LIGHTNING_DISPLAY_THRESHOLD = 0.025;
+/** Match Windy's TileLayerInterpolator: its zoom comes from the 512 px MapLibre map. */
+export function lightningTileZoomIndex(mapLibreZoom: number): number {
+  return Math.round(Math.max(2, Math.min(10, mapLibreZoom))) + 1;
+}
 export function hasForecastLightning(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value >= LIGHTNING_DISPLAY_THRESHOLD;
 }
