@@ -2,8 +2,8 @@ import type { TerrainPrecipTypeKey } from './precipType';
 
 // Same colours as the forecast's precipitation-type legend.
 export const PRECIP_TYPE_COLOURS: Record<TerrainPrecipTypeKey, string> = {
-  snow: '#f4f7fb', 'wet-snow': '#6bd47f', mix: '#f2d84f',
-  rain: '#4f82ff', 'ice-pellets': '#a8753e', 'freezing-rain': '#a867e8',
+  snow: '#378bff', 'wet-snow': '#32d5ef', mix: '#ff9f32',
+  rain: '#35c76f', 'ice-pellets': '#a8753e', 'freezing-rain': '#ef4444',
 };
 export const PRECIP_SHADES = [
   { label: 'Light', opacity: 0.22 },

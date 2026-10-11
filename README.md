@@ -79,11 +79,18 @@ Search starts after three characters and a 450 ms typing pause. Photon provides 
 
 ### Map
 
-- Precipitation shading preserves the existing six type colours and uses three
+- Precipitation shading uses blue snow, cyan wet snow, orange mix, green rain,
+  brown ice pellets and red freezing rain and uses three
   intensity opacities: light `<0.5`, moderate `>=0.5 and <3`, heavy `>=3 mm/3h`.
   Zero precipitation is unshaded, and unknown precipitation or phase stays blank.
-- Shading and contours share the adaptive viewport grid, with finer sampling at
-  higher zoom. Separate **Contours** and **Shading** controls retain their settings.
+- Weather profiles start at nominal 9 km locally, with coarser broad overviews.
+  Terrain refines beyond zoom 8 while reusing those profiles and precipitation totals.
+  Separate **Contours**, **Shading** and **⚡ Storms** controls retain their settings.
+- Lightning symbols use raw ECMWF `thunder/lightdens` forecast tiles through Windy's
+  tile interpolator, independently of the selected base layer. They show forecast
+  activity, not observed strikes. The display threshold is 0.025 native density
+  units; missing data stays blank. At most 80 spaced samples and 6 concurrent
+  tile reads reuse Windy's tile cache. No CAPE-based lightning diagnosis is used.
 - Terrain-above-snowline hatching appears only over known dry samples. It is part
   of the contour layer and disappears when contours are hidden.
 - Adaptive **snowline contours** that follow Windy's forecast time
@@ -194,16 +201,18 @@ Automatic place search uses [Photon](https://github.com/komoot/photon), which su
 
 The plugin does not download a complete ECMWF gridded snowline field. It samples vertical profiles across the visible map and reconstructs contours using marching squares.
 
-Sampling density increases with zoom:
+Weather samples use a globally anchored metric grid: nominal 9 km locally,
+coarsened when needed to stay within 225 viewport nodes. Contours use these profiles.
+Terrain shading uses up to 512 cells, halving nominal spacing each zoom beyond 8
+while maintaining at least 12 screen pixels between samples. It reuses the nearest
+weather profile and rainfall amount; this does not create higher-resolution rainfall.
+Missing owners remain blank.
 
-| Zoom | Sampling grid |
-| --- | --- |
-| ≤ 4 | 9 × 15 |
-| 5–6 | 13 × 21 |
-| 7–8 | 17 × 27 |
-| 9+ | 19 × 31 |
-
-Up to **12 profile requests** are processed concurrently. Profiles are cached, viewport refreshes are queued, and precipitation-field discovery is cached per forecast object.
+Up to 12 profile requests run concurrently. Partial shading appears before all
+requests finish. Fine terrain loads with 8 workers and cached elevations; cancellation
+stops obsolete work. The six type colours and three intensity levels are batched into
+at most 18 canvas polygon groups. Lightning remains at model scale or coarser and
+has its own cancellable, bounded tile sampling.
 
 ## Interpretation
 
