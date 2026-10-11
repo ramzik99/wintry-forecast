@@ -294,3 +294,11 @@ when navigating across the date line.
 At every zoom, lightning samples use the visible footprint of each display
 cell so symbols stay inside the map even in very small viewports.
 This changes symbol placement and sampling, not the ECMWF forecast resolution.
+
+## Tiled precipitation preview (11 October 2026)
+
+Shading uses globally anchored 256-pixel raster tiles, with 48 diagnosis samples per axis (about 5.3 screen pixels per sample). Bilinear interpolation of precipitation and pressure-level temperature/dew point/height replaces nearest-neighbour weather blocks. Wet bulb is recalculated before phase classification; category colours and three intensity bands remain discrete. Missing forecast corners remain transparent.
+
+Mapzen Terrarium elevation tiles are decoded locally and interpolated across tile boundaries. Terrain data zoom follows the physical map zoom minus two, capped at 14; original terrain resolution varies by location. Four concurrent terrain requests, pending-request sharing, a 64-tile decoded LRU (16 MiB), ten-second timeout and failure cooldown keep work bounded. Cached weather terrain supplies an explicitly identified coarse fallback. Point forecasts continue using Windy elevation. Timeline changes reuse the DEM cache and invalidate old shaded output. Raster work yields between tiles and cancels stale render jobs. Icons reuse the same interpolation and terrain diagnosis.
+
+Terrain endpoint: https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png . See [terrain attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md); credits are included in How it works. Weather samples still target 9 km locally and use bounded overview sampling; this preview does not download every native ECMWF cell globally. Forecast accuracy has not yet been validated against observations.
