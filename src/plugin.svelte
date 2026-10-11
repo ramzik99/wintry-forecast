@@ -487,12 +487,14 @@
     try{
       const params=await createFullRenderingParams('thunder',{product:'ecmwf',overlay:'thunder',level:'surface',acRange:3} as any,target);
       if(epoch!==stormEpoch||abort.signal.aborted)return;
+      console.info('Wintry lightning params ready',params.layer,params.fullPath);
       const sample:any=await new Promise(resolve=>(stormInterpolator??=new TileLayerInterpolator()).createFun(resolve));
       const points=metricGrid(b,stormSpacing(zoom,(b.south+b.north)/2),80).points;
       const next=L.layerGroup();let known=0,count=0;
       await mapLimit(points,6,async p=>{
         if(epoch!==stormEpoch||abort.signal.aborted)return;
         const raw=await sample({lat:p.lat,lon:p.lon},abort,params);
+        if(known===0)console.info('Wintry lightning first tile sample',raw);
         const density=Array.isArray(raw)?raw[0]:raw;
         if(typeof density==='number'&&Number.isFinite(density)&&density>=0)known++;
         if(!hasForecastLightning(density)||epoch!==stormEpoch||abort.signal.aborted)return;
