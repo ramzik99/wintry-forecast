@@ -205,8 +205,9 @@ Automatic place search uses [Photon](https://github.com/komoot/photon), which su
 The plugin does not download a complete ECMWF gridded snowline field. It samples vertical profiles across the visible map and reconstructs contours using marching squares.
 
 Weather samples use a globally anchored metric grid: nominal 9 km locally,
-coarsened when needed to stay within 225 viewport nodes. Contours use these profiles.
-Terrain shading uses up to 512 cells, halving nominal spacing each zoom beyond 8
+coarsened when needed to stay within 225 viewport nodes, or 450 at zoom 5 and
+below for a denser overview. Contours use these profiles.
+Terrain shading uses up to 512 cells (1024 at zoom 5 and below), halving nominal spacing each zoom beyond 8
 while maintaining at least 12 screen pixels between samples. It reuses the nearest
 weather profile and rainfall amount; this does not create higher-resolution rainfall.
 Missing owners remain blank.
@@ -284,3 +285,8 @@ This prevents accidental re-publication of an old Windy version.
 ## Author
 
 Ramzi Kandah
+
+The panel has larger layer controls, matching icon legends, an independent Icons
+legend, a manual Refresh button, and a general Updating status covering weather,
+terrain and lightning work. Map coordinates are wrapped before forecast requests
+when navigating across the date line.

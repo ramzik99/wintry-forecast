@@ -15,8 +15,8 @@ including light positive amounts, and missing precipitation leave gaps. Cells
 with any wet or unknown corner are excluded from hatching. Existing point
 precipitation-type and snow-amount calculations remain separate.
 
-Weather profiles use a nominal 9 km local grid (225-node budget, coarser overview).
-Terrain shading refines beyond zoom 8 (512-cell budget), reusing source profiles
+Weather profiles use a nominal 9 km local grid (225-node budget, 450 at zoom 5 and below).
+Terrain shading refines beyond zoom 8 (512-cell budget, 1024 at zoom 5 and below), reusing source profiles
 and precipitation amounts. Fine terrain changes phase, not rainfall resolution.
 Each known wet sample uses the existing precipitation-type colour with light
 (<0.5 mm/3h), moderate (>=0.5 and <3 mm/3h) or heavy (>=3 mm/3h) opacity.

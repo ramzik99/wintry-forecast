@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const js=ts.transpileModule(readFileSync(new URL('../src/shadingGrid.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
-const {metricGrid,terrainSpacing,nearestWeatherSample}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+const {metricGrid,terrainSpacing,nearestWeatherSample,wrappedLongitude,viewportWeatherGrid}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
 const local={south:31.9,north:32.3,west:35.6,east:36};
 test('local weather stays nominal 9 km while terrain halves beyond zoom 8',()=>{
   assert.equal(metricGrid(local,9000,225,true).metres,9000);
@@ -33,4 +33,18 @@ test('missing weather cells and out-of-coverage terrain stay blank',()=>{
   const p=grid[1][1];assert.equal(nearestWeatherSample(grid,p.lat,p.lon),p);
   grid[1][1]=null;assert.equal(nearestWeatherSample(grid,p.lat,p.lon),null);
   assert.equal(nearestWeatherSample(grid,0,0),null);
+});
+
+test('wrapped map longitudes remain valid for forecast APIs',()=>{
+  assert.equal(wrappedLongitude(182.5),-177.5);assert.equal(wrappedLongitude(-182.5),177.5);
+  assert.ok(Math.abs(wrappedLongitude(36.2)-36.2)<1e-10);assert.equal(wrappedLongitude(540),-180);
+});
+
+test('low zoom overview adds spatial detail within a bounded weather budget',()=>{
+  const b={south:5,north:55,west:0,east:80};
+  const old=metricGrid(b,9000,225,true),dense=viewportWeatherGrid(b,4);
+  assert.ok(dense.metres<old.metres);assert.ok(dense.points.length>old.points.length);
+  assert.ok(dense.points.length<=450);
+  const local=viewportWeatherGrid({south:31.9,north:32.3,west:35.6,east:36},10);
+  assert.equal(local.metres,9000);
 });

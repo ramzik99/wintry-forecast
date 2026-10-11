@@ -6,7 +6,7 @@ const latitude=(y:number)=>(2*Math.atan(Math.exp(y/R))-Math.PI/2)*180/Math.PI;
 const longitude=(x:number)=>x/R*180/Math.PI;
 
 /** Global anchors survive small pans and zooms; the budget coarsens broad overviews. */
-export function metricGrid(bounds:ViewBounds,metres:number,budget:number,padded=false){
+export function metricGrid(bounds:ViewBounds,metres:number,budget:number,padded=false,coarsen=2){
   const mid=(bounds.south+bounds.north)/2;
   // Fixed latitude bands keep adjacent viewports on the same cacheable lattice.
   const band=Math.round(mid/5)*5,cos=Math.max(.087,Math.cos(band*Math.PI/180));
@@ -16,7 +16,7 @@ export function metricGrid(bounds:ViewBounds,metres:number,budget:number,padded=
   const indices=()=>({west:Math.floor(x0/step),east:Math.ceil(x1/step),south:Math.floor(y0/step),north:Math.ceil(y1/step)});
   let ix=indices();
   const count=()=>padded?(ix.east-ix.west+1)*(ix.north-ix.south+1):(ix.east-ix.west)*(ix.north-ix.south);
-  while(count()>budget){step*=2;ix=indices();}
+  while(count()>budget){step*=coarsen;ix=indices();}
   const rows=ix.north-ix.south+(padded?1:0),cols=ix.east-ix.west+(padded?1:0);
   const points:{lat:number;lon:number;r:number;c:number;bounds:[number,number][]}[]=[];
   for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
@@ -47,3 +47,9 @@ export function nearestWeatherSample<T extends {lat:number;lon:number}>(grid:(T|
   if(rr<0||rr>grid.length-1||cc<0||cc>grid[0].length-1)return null;
   return grid[Math.round(rr)]?.[Math.round(cc)]??null;
 }
+
+/** API coordinates stay valid when a map viewport crosses the date line. */
+export function wrappedLongitude(lon:number):number{return ((lon+180)%360+360)%360-180;}
+
+/** Broad maps get a denser overview while local grids retain their 9 km target. */
+export function viewportWeatherGrid(bounds:ViewBounds,zoom:number){return metricGrid(bounds,9000,zoom<=5?450:225,true,zoom<=5?Math.SQRT2:2);}

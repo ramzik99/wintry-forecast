@@ -2,6 +2,7 @@
   <button class="show-panel" type="button" aria-label="Show Wintry forecast panel" on:click={() => panelHidden = false}>❄ Wintry forecast</button>
 {:else}
   <div class="snowline-panel">
+    <div class="panel-head">
     <div class="top-row">
       <div class="title">Wintry forecast</div>
       <div class="top-controls">
@@ -11,23 +12,24 @@
     </div>
 
     <div class="layer-controls" role="group" aria-label="Map layers">
-      <label><input type="checkbox" bind:checked={showContours} on:change={toggleMapLayers} /> Contours</label>
-      <label><input type="checkbox" bind:checked={showShading} on:change={toggleMapLayers} /> Shading</label>
-      <label><input type="checkbox" bind:checked={showIcons} on:change={toggleMapLayers} /> Icons</label>
-      <label><input type="checkbox" bind:checked={showThunder} on:change={toggleMapLayers} /> ⚡ Storms</label>
+      <label class:active={showContours} title="Estimated snowline contours and dry-terrain hatching"><input type="checkbox" bind:checked={showContours} on:change={toggleMapLayers} /> Contours</label>
+      <label class:active={showShading} title="Precipitation type and intensity colours"><input type="checkbox" bind:checked={showShading} on:change={toggleMapLayers} /> Shading</label>
+      <label class:active={showIcons} title="Precipitation-type symbols"><input type="checkbox" bind:checked={showIcons} on:change={toggleMapLayers} /> Icons</label>
+      <label class:active={showThunder} title="ECMWF forecast lightning symbols"><input type="checkbox" bind:checked={showThunder} on:change={toggleMapLayers} /> ⚡ Storms</label>
     </div>
-    {#if showShading}
-      <div class="shade-legend" aria-label="Precipitation shading intensity">
+    </div>
+    {#if showShading || showIcons}
+      {#if showShading}<div class="shade-legend" aria-label="Precipitation shading intensity">
         <span>Light &lt;0.5</span><span>Moderate 0.5–&lt;3</span><span>Heavy ≥3</span>
         <small>mm/3h · colour indicates precipitation type</small>
-      </div>
+      </div>{/if}
       <div class="shade-types" aria-label="Precipitation type colours">
-        <span><i style={`background:${PRECIP_TYPE_COLOURS.snow}`}></i>Snow</span>
-        <span><i style={`background:${PRECIP_TYPE_COLOURS['wet-snow']}`}></i>Wet snow</span>
-        <span><i style={`background:${PRECIP_TYPE_COLOURS.mix}`}></i>Mix</span>
-        <span><i style={`background:${PRECIP_TYPE_COLOURS.rain}`}></i>Rain</span>
-        <span><i style={`background:${PRECIP_TYPE_COLOURS['ice-pellets']}`}></i>Ice pellets</span>
-        <span><i style={`background:${PRECIP_TYPE_COLOURS['freezing-rain']}`}></i>Freezing rain</span>
+        <span>{@html precipitationIconSvg('snow')}Snow</span>
+        <span>{@html precipitationIconSvg('wet-snow')}Wet snow</span>
+        <span>{@html precipitationIconSvg('mix')}Mix</span>
+        <span>{@html precipitationIconSvg('rain')}Rain</span>
+        <span>{@html precipitationIconSvg('ice-pellets')}Ice pellets</span>
+        <span>{@html precipitationIconSvg('freezing-rain')}Freezing rain</span>
       </div>
     {/if}
     {#if showThunder}<div class="storm-legend" role="status">{stormStatus}</div>{/if}
@@ -38,13 +40,13 @@
       <summary>{clickedPoint ? 'Change place · settings' : 'Choose a place'}</summary>
       <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
       <V21Panel bind:unitSystem {activeRunTime} />
-      <div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>
-      <button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button>
+      {#if showContours}<div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>{/if}
+      <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading} on:click={() => {clearStorms();void renderStorms();refreshForecast()}}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
     </details>
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
-    {#if enabled && (viewportLoading || probeLoading)}
-      <div class="status-pill"><span class="status-dot"></span>{probeLoading ? 'Reading point…' : 'Updating contours…'}</div>
+    {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading)}
+      <div class="status-pill" role="status" aria-live="polite"><span class="status-dot"></span>{probeLoading ? 'Reading point…' : 'Updating…'}</div>
     {/if}
   </div>
 {/if}
@@ -69,7 +71,7 @@
       </div>
       <div class="info-body">
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
-        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Light &lt;0.5, moderate 0.5–&lt;3 and heavy ≥3 mm/3h use progressively stronger opacity. The display starts near 9 km locally and refines terrain beyond zoom 8. Broad views use a coarser overview to load quickly. Rainfall amounts retain the sampled ECMWF scale; finer terrain changes precipitation type. Cached weather appears first while local terrain refines. Contours, shading and precipitation icons can be hidden independently. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
+        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Light &lt;0.5, moderate 0.5–&lt;3 and heavy ≥3 mm/3h use progressively stronger opacity. The display starts near 9 km locally and refines terrain beyond zoom 8. Broad views use a denser overview at zoom 5 and below, with progressive loading. Rainfall amounts retain the sampled ECMWF scale; finer terrain changes precipitation type. Cached weather appears first while local terrain refines. Contours, shading and precipitation icons can be hidden independently. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbols stay spaced on screen and do not refine with terrain. Missing data displays no symbols.</div>
         <div><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div>
         <div><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div>
@@ -98,7 +100,7 @@
   import { terrainHatchSegments } from './terrainHatching';
   import { precipitationShade, dryTerrainDifference, PRECIP_TYPE_COLOURS } from './precipShading';
   import { precipitationIconSvg } from './precipIcons';
-  import { metricGrid, terrainSpacing, nearestWeatherSample } from './shadingGrid';
+  import { metricGrid, terrainSpacing, nearestWeatherSample, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';
   import { formatPrecipMm, precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
   import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType } from './precipType';
@@ -132,6 +134,7 @@
   const FAVOURITES_STORAGE_KEY = 'snowline:favourites:v1', FAVOURITES_CHANGED_EVENT = 'wintry:favourites-changed', PREFS_STORAGE_KEY='wintry:prefs:v1';
 
   let showContours=true, showShading=true, showIcons=true, showThunder=true;
+  let terrainLoading=false, stormLoading=false;
   let stormInterpolator:any=null;
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
   let shadingLayer:any=null, shadingRenderer:any=null, precipIconLayer:any=null;
@@ -166,7 +169,7 @@
   function scalarNumber(v:unknown):number|null{if(typeof v==='number'&&Number.isFinite(v))return v;if(typeof v==='string'&&v.trim()!==''){const p=Number(v);if(Number.isFinite(p))return p}return null}
   function nearestIndex(times:number[],target:number){let best=0,d=Infinity;times.forEach((t,i)=>{const x=Math.abs(t-target);if(x<d){d=x;best=i}});return best}
   function extractPayload(payload:unknown){const r=payload as any;return{forecast:r?.data?.data&&typeof r.data.data==='object'?r.data.data as Record<string,unknown>:{},header:r?.data?.header&&typeof r.data.header==='object'?r.data.header as Record<string,unknown>:{}}}
-  async function fetchMapElevation(lat:number,lon:number){try{const r=await getElevation(lat,lon) as any;for(const c of[r?.data,r?.data?.data,r?.value]){const e=scalarNumber(c);if(e!==null)return e}}catch(e){console.warn('Wintry forecast map elevation failed',lat,lon,e)}return null}
+  async function fetchMapElevation(lat:number,lon:number){try{const r=await getElevation(lat,wrappedLongitude(lon)) as any;for(const c of[r?.data,r?.data?.data,r?.value]){const e=scalarNumber(c);if(e!==null)return e}}catch(e){console.warn('Wintry forecast map elevation failed',lat,lon,e)}return null}
   function profileKey(lat:number,lon:number,step:number){return`${step}:${lat.toFixed(4)},${lon.toFixed(4)}`}
   function invalidateForNewRun(run:number|null){
     if(run===null||isOlderRun(run,activeRunTime))return;
@@ -196,7 +199,7 @@
     if(pending)return pending;
     const request=(async()=>{
       try{
-        const [r,terrainM]=await Promise.all([getMeteogramForecastData(MODEL,{lat,lon,step,days:FORECAST_DAYS}),loadMapElevation(lat,lon)]);
+        const [r,terrainM]=await Promise.all([getMeteogramForecastData(MODEL,{lat,lon:wrappedLongitude(lon),step,days:FORECAST_DAYS}),loadMapElevation(lat,lon)]);
         if(destroyed||epoch!==refreshEpoch)return null;
         const{forecast,header}=extractPayload(r);if(!Object.keys(forecast).length)return null;
         const runTime=parseTime(header.refTime);if(isOlderRun(runTime,activeRunTime))return null;
@@ -212,7 +215,7 @@
   async function mapLimit<T,R>(items:T[],limit:number,fn:(x:T)=>Promise<R>){const out=new Array<R>(items.length);let next=0;async function worker(){while(true){const i=next++;if(i>=items.length)return;out[i]=await fn(items[i])}}await Promise.all(Array.from({length:Math.min(limit,items.length)},worker));return out}
   function currentBounds(){const b=map.getBounds();return{south:Math.max(-85,b.getSouth()),north:Math.min(85,b.getNorth()),west:b.getWest(),east:b.getEast()}}
   function buildViewportPoints(){
-    const grid=metricGrid(currentBounds(),9000,225,true);
+    const grid=viewportWeatherGrid(currentBounds(),Number(map.getZoom?.()??6));
     const mid=map.getCenter();grid.points.sort((a,b)=>(a.lat-mid.lat)**2+(a.lon-mid.lng)**2-((b.lat-mid.lat)**2+(b.lon-mid.lng)**2));
     return grid;
   }
@@ -229,7 +232,7 @@
         if(result&&!result.precipChecked&&my===generation){
           result.precipChecked=true;
           if(!result.times.some((_,i)=>precipMmAt(result.forecast,i)!==null)){
-            const fields=await loadSelectedPrecipFields(p.lat,p.lon,FORECAST_DAYS);
+            const fields=await loadSelectedPrecipFields(p.lat,wrappedLongitude(p.lon),FORECAST_DAYS);
             if(my===generation&&profileIsFresh(result.fetchedAt,result.runTime,activeRunTime)){
               Object.assign(result.forecast,alignSelectedPrecipFields(fields,result.times,result.runTime));
             }
@@ -267,7 +270,7 @@
   }
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null}
-  function clearShading(){clearPrecipIcons();terrainGeneration++;terrainJobKey='';shadingCells=[];if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
+  function clearShading(){terrainLoading=false;clearPrecipIcons();terrainGeneration++;terrainJobKey='';shadingCells=[];if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
   function clearPointState(closeChart=true){clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function statusColor(s:ProbeStatus){return s==='above'?'#46d9ff':s==='below'?'#ff9d3d':s==='near'?'#ffe45c':'#fff'}
@@ -363,7 +366,7 @@
     clickedLatLon=[lat,lon];clickedPlaceName=placeName;pointSource=source;probeLoading=true;
     showClickLabel(lat,lon,'Loading forecast…','<div class="snowline-loading">Checking snow, timing and amounts</div>');
     try{
-      const[point,elev,fields]=await Promise.all([loadPoint(lat,lon,3),loadMapElevation(lat,lon),loadSelectedPrecipFields(lat,lon,FORECAST_DAYS)]);
+      const[point,elev,fields]=await Promise.all([loadPoint(lat,lon,3),loadMapElevation(lat,lon),loadSelectedPrecipFields(lat,wrappedLongitude(lon),FORECAST_DAYS)]);
       if(my!==clickGeneration||pointSource!==source||!enabled||destroyed)return;
       if(!point||!point.times.length||!profileIsFresh(point.fetchedAt,point.runTime,activeRunTime)){showClickLabel(lat,lon,'Forecast unavailable','<div class="snowline-loading">Select this place again to retry.</div>');return}
       const aligned=alignSelectedPrecipFields(fields,point.times,point.runTime);
@@ -436,7 +439,7 @@
       shadingRenderer=L.canvas({pane:PRECIP_PANE,padding:.2});
     }
     const b=currentBounds(),z=Number(map.getZoom?.()??6),mid=(b.south+b.north)/2;
-    const grid=metricGrid(b,terrainSpacing(z,mid),512);
+    const grid=metricGrid(b,terrainSpacing(z,mid),z<=5?1024:512,false,z<=5?Math.SQRT2:2);
     const sourceKey=cache.flat().filter(Boolean).map(p=>`${p!.lat},${p!.lon},${p!.fetchedAt}`).join(';');
     const key=`${generation}:${target}:${z}:${b.south}:${b.north}:${b.west}:${b.east}:${sourceKey}`;
     if(key!==terrainJobKey){
@@ -448,12 +451,12 @@
       }).filter((cell):cell is typeof shadingCells[number]=>cell.source!==null);
       // Terrain requests only for wet cells. Profiles/amounts are reused, never fetched per fine cell.
       const work=shadingCells.filter(cell=>cell.terrainM===null&&precipitationShade(mapPrecipAt(cell.source,target)));
-      let painted=Date.now();
+      terrainLoading=work.length>0;let painted=Date.now();
       void mapLimit(work,8,async cell=>{
         if(epoch!==terrainGeneration||destroyed||!enabled||(!showShading&&!showIcons))return;
         cell.terrainM=await loadMapElevation(cell.lat,cell.lon);
         if(epoch===terrainGeneration&&Date.now()-painted>250){painted=Date.now();paintShading(getStoreTimestamp());}
-      }).then(()=>{if(epoch===terrainGeneration&&!destroyed&&enabled&&(showShading||showIcons))paintShading(getStoreTimestamp());});
+      }).then(()=>{if(epoch===terrainGeneration){terrainLoading=false;if(!destroyed&&enabled&&(showShading||showIcons))paintShading(getStoreTimestamp());}});
     }
     paintShading(target);
   }
@@ -490,7 +493,7 @@
     iconLayer.addTo(map);const previousIcons=precipIconLayer;precipIconLayer=iconLayer;if(previousIcons)try{map.removeLayer(previousIcons)}catch{}
   }
   function clearStorms(){
-    stormEpoch++;stormAbort?.abort();stormAbort=null;stormKey='';
+    stormLoading=false;stormEpoch++;stormAbort?.abort();stormAbort=null;stormKey='';
     if(stormLayer)try{map.removeLayer(stormLayer)}catch{}stormLayer=null;
   }
   async function renderStorms(){
@@ -499,9 +502,9 @@
     const key=[target,zoom,b.south,b.north,b.west,b.east].join(':');
     if(key===stormKey)return;
     clearStorms();stormKey=key;const epoch=stormEpoch,abort=stormAbort=new AbortController();
-    stormStatus='⚡ Reading ECMWF lightning…';
+    stormLoading=true;stormStatus='⚡ Forecast lightning';
     const tiles=new Map<string,Promise<any>>();
-    const deadline=setTimeout(()=>{abort.abort();if(epoch===stormEpoch){stormKey='';stormStatus='⚡ ECMWF lightning unavailable'}},12000);
+    const deadline=setTimeout(()=>{abort.abort();if(epoch===stormEpoch){stormKey='';stormStatus='⚡ ECMWF lightning unavailable';stormLoading=false}},12000);
     try{
       const params=await createFullRenderingParams('thunder',{product:'ecmwf',overlay:'thunder',level:'surface',acRange:3} as any,target);
       if(epoch!==stormEpoch||abort.signal.aborted)return;
@@ -512,11 +515,11 @@
       await mapLimit(points,6,async p=>{
         if(epoch!==stormEpoch||abort.signal.aborted)return;
         // The interpolator waits for existing tiles; start each distinct thunder tile first.
-        const phi=p.lat*Math.PI/180;
-        const url=applyUrlTemplate(params.fullPath,{z:dataZoom,x:Math.floor((p.lon+180)/360*scale),y:Math.floor((1-Math.log(Math.tan(phi)+1/Math.cos(phi))/Math.PI)/2*scale)});
+        const phi=p.lat*Math.PI/180,lon=wrappedLongitude(p.lon);
+        const url=applyUrlTemplate(params.fullPath,{z:dataZoom,x:Math.floor((lon+180)/360*scale),y:Math.floor((1-Math.log(Math.tan(phi)+1/Math.cos(phi))/Math.PI)/2*scale)});
         let pending=tiles.get(url);if(!pending){pending=tileLayerSource.get(url,abort.signal);tiles.set(url,pending)}
         const token=await pending;if(!token?.value?.valid||abort.signal.aborted)return;
-        const raw=await sample({lat:p.lat,lon:p.lon},abort,params);
+        const raw=await sample({lat:p.lat,lon},abort,params);
         const density=Array.isArray(raw)?raw[0]:raw;
         if(typeof density==='number'&&Number.isFinite(density)&&density>=0)known++;
         if(!hasForecastLightning(density)||epoch!==stormEpoch||abort.signal.aborted)return;
@@ -531,7 +534,7 @@
       if(epoch!==stormEpoch||abort.signal.aborted)return;
       stormKey='';stormStatus='⚡ ECMWF lightning unavailable';
       console.warn('Wintry ECMWF lightning unavailable',error);
-    }finally{clearTimeout(deadline);for(const pending of tiles.values())void pending.then(token=>{if(token)tileLayerSource.free(token)},()=>{})}
+    }finally{if(epoch===stormEpoch)stormLoading=false;clearTimeout(deadline);for(const pending of tiles.values())void pending.then(token=>{if(token)tileLayerSource.free(token)},()=>{})}
   }
   function renderFromCache(){
     void renderStorms();
@@ -583,7 +586,7 @@
   $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showIcons;showThunder;persistPreferences()}
   $: if(prefsReady){unitSystem;refreshUnitDependentUi()}
 
-  function handleMapNavigation(){if(!enabled)return;clearStorms();terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
+  function handleMapNavigation(){if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
   function toggleEnabled(){
     if(enabled){register(config.name,'high');void renderStorms();refreshViewport();return}
     release(config.name,'high');generation++;refreshEpoch++;pendingProfiles.clear();viewportLoading=false;refreshQueued=false;
@@ -674,5 +677,12 @@
   }
   .title{font-size:18px}.top-controls{gap:4px}.hide-button,.info-button{width:30px;height:34px}.switch{height:34px;font-size:11px}.hatch-legend{font-size:11px;margin:9px 0}.start-hint{font-size:12px;line-height:1.5;color:#b5cbd7;padding-top:12px}.point-tools{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools strong{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools>div{display:flex;gap:8px;margin-top:9px}.point-tools button{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel :global(button:focus-visible){outline:2px solid #8de4ff;outline-offset:2px}.status-pill{font-size:12px;padding:8px}.info-body{font-size:13px;line-height:1.55}
   .title{font-size:15px;white-space:nowrap}.top-row{gap:5px}.hide-button{width:30px;height:32px}.switch{height:32px;padding:0 5px;font-size:10px}.point-tools{margin-top:7px;padding:0;background:none}.point-tools strong{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools>div{gap:6px;margin-top:6px}.point-tools button{min-height:36px;font-size:12px}.panel-options{margin-top:7px;border-top:1px solid #304655}.panel-options summary{padding:9px 0;cursor:pointer;font-size:11px;color:#a9c4d3}.panel-options summary:focus-visible{outline:2px solid #8de4ff}.hatch-legend{font-size:10px;margin:6px 0}.help-link{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill{font-size:10px;padding:4px}.panel-options :global(.results){position:static;margin-top:5px;max-height:180px}.panel-options :global(.search-line input){height:36px;font-size:12px}.panel-options :global(.utility-row button){height:36px;font-size:11px}
-  @media(pointer:coarse){.hide-button,.switch{min-height:40px}.point-tools button{min-height:44px}.panel-options summary{min-height:24px;padding:10px 0}.panel-options :global(.utility-row button){height:44px}}
+  .panel-head{position:sticky;top:-10px;z-index:3;margin:-10px -10px 0;padding:10px 10px 6px;background:linear-gradient(155deg,#142b3b,#102330);border-bottom:1px solid #304655}
+  @media(max-width:600px){.panel-head{margin-inline:-12px;padding-inline:12px}}
+  .layer-controls{gap:6px;margin-top:10px}.layer-controls label{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls label.active{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls label:focus-within{outline:2px solid #8de4ff;outline-offset:2px}
+  .shade-types{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 8px;font-size:11px;margin-top:8px}.shade-types span{min-height:22px;white-space:normal;line-height:1.2;gap:6px}.shade-types :global(svg){width:19px;height:19px;flex:none}
+  .shade-legend{font-size:10px;line-height:1.5;margin-top:8px}.shade-legend small{font-size:10px}.storm-legend{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button:disabled{opacity:.45;cursor:default}.panel-footer .help-link{min-height:34px}.status-pill{font-size:11px;min-height:22px}.status-dot{flex-shrink:0}
+  @media(prefers-reduced-motion:reduce){.status-dot{animation:none}}
+  @media(pointer:coarse){.layer-controls label,.refresh-button,.panel-footer .help-link{min-height:44px}
+.hide-button,.switch{min-height:40px}.point-tools button{min-height:44px}.panel-options summary{min-height:24px;padding:10px 0}.panel-options :global(.utility-row button){height:44px}}
 </style>
