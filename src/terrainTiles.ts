@@ -26,7 +26,7 @@ export class TerrainTiles {
     const existing=this.pending.get(key);if(existing)return existing;
     if(Date.now()-(this.failed.get(key)??0)<30_000)return Promise.resolve(false);
     const promise=(async()=>{
-      if(this.active>=4)await new Promise<void>(resolve=>this.waiting.push(resolve));
+      while(this.active>=4&&this.alive)await new Promise<void>(resolve=>this.waiting.push(resolve));
       if(!this.alive)return false;this.active++;
       const abort=new AbortController();this.controllers.add(abort);const timer=setTimeout(()=>abort.abort(),10_000);
       try{
