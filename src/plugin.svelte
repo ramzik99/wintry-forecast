@@ -38,9 +38,16 @@
       <summary>{clickedPoint ? 'Change place · settings' : 'Choose a place'}</summary>
       <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
       {#if showContours}<div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>{/if}
+      <div class="data-status" aria-label="Map data status">
+        <b>Data status</b>
+        <span>{mapDataStatus || 'Forecast data not loaded'}</span>
+        <span>Precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer.</span>
+        <span>Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</span>
+      </div>
 
     </details>
     <V21Panel bind:unitSystem {activeRunTime} />
+    {#if enabled && !viewportLoading && mapDataMissing}<div class="storm-legend" role="status">Some forecast data is missing · blank areas may be unknown</div>{/if}
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
     {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
@@ -135,6 +142,7 @@
   import { register, release } from '@windy/singleclick';
   import config from './pluginConfig';
   import { PreparedMapCache } from './preparedMapCache';
+  import { boundedRequest } from './boundedRequest';
   import { geocode } from './geocoding';
   import { formatElevation, formatPrecip, formatSnow, loadUnitSystem, type UnitSystem } from './displayUnits';
 
@@ -193,6 +201,7 @@
   const pendingProfiles = new Map<string,Promise<CachedPoint|null>>();
   const forecastRequests=new Set<AbortController>();
   let refreshEpoch=0, lastChecked:number|null=null, refreshError='', destroyed=false;
+  let mapDataStatus='',mapDataMissing=false;
   let placeAbort:AbortController|null=null;
   let freshnessTimer:ReturnType<typeof setInterval>|null=null;
   let lastRefreshAttempt = Date.now();
@@ -217,7 +226,7 @@
   function scalarNumber(v:unknown):number|null{if(typeof v==='number'&&Number.isFinite(v))return v;if(typeof v==='string'&&v.trim()!==''){const p=Number(v);if(Number.isFinite(p))return p}return null}
   function nearestIndex(times:number[],target:number){let best=0,d=Infinity;times.forEach((t,i)=>{const x=Math.abs(t-target);if(x<d){d=x;best=i}});return best}
   function extractPayload(payload:unknown){const r=payload as any;return{forecast:r?.data?.data&&typeof r.data.data==='object'?r.data.data as Record<string,unknown>:{},header:r?.data?.header&&typeof r.data.header==='object'?r.data.header as Record<string,unknown>:{}}}
-  async function fetchMapElevation(lat:number,lon:number){const abort=new AbortController();forecastRequests.add(abort);const timer=setTimeout(()=>abort.abort(),15_000);try{const r=await getElevation(lat,wrappedLongitude(lon),{abortSignal:abort.signal}) as any;for(const c of[r?.data,r?.data?.data,r?.value]){const e=scalarNumber(c);if(e!==null)return e}}catch(e){if(!abort.signal.aborted)console.warn('Wintry forecast map elevation failed',lat,lon,e)}finally{clearTimeout(timer);forecastRequests.delete(abort)}return null}
+  async function fetchMapElevation(lat:number,lon:number){const abort=new AbortController();forecastRequests.add(abort);try{const r=await boundedRequest(signal=>getElevation(lat,wrappedLongitude(lon),{abortSignal:signal}),15_000,abort.signal) as any;for(const c of[r?.data,r?.data?.data,r?.value]){const e=scalarNumber(c);if(e!==null)return e}}catch(e){if((e as Error)?.name!=='AbortError')console.warn('Wintry forecast map elevation failed',lat,lon,e)}finally{forecastRequests.delete(abort)}return null}
   function profileKey(lat:number,lon:number,step:number){return`${step}:${lat.toFixed(4)},${lon.toFixed(4)}`}
   function invalidateForNewRun(run:number|null){
     if(run===null||isOlderRun(run,activeRunTime))return;
@@ -253,7 +262,7 @@
     const request=(async()=>{
       const abort=new AbortController();forecastRequests.add(abort);const timer=setTimeout(()=>abort.abort(),20_000);
       try{
-        const [r,terrainM]=await Promise.all([getMeteogramForecastData(MODEL,{lat,lon:wrappedLongitude(lon),step},undefined,{abortSignal:abort.signal}),loadMapElevation(lat,lon)]);
+        const [r,terrainM]=await Promise.all([boundedRequest(signal=>getMeteogramForecastData(MODEL,{lat,lon:wrappedLongitude(lon),step},undefined,{abortSignal:signal}),20_000,abort.signal),loadMapElevation(lat,lon)]);
         if(destroyed||epoch!==refreshEpoch)return null;
         const{forecast,header}=extractPayload(r);if(!Object.keys(forecast).length)return null;
         const runTime=parseTime(header.refTime);if(isOlderRun(runTime,activeRunTime))return null;
@@ -304,7 +313,7 @@
       if(my!==generation||!enabled||destroyed)return;
       const sameRun=(p:CachedPoint|null)=>p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime);
       const valid=results.filter(x=>x.result?.times.length&&sameRun(x.result)).length;
-      if(valid<Math.max(4,Math.floor(points.length*MIN_VALID_FRACTION))){cache=[];clearContours();clearShading();refreshError='Map forecast unavailable.';return}
+      if(valid<Math.max(4,Math.floor(points.length*MIN_VALID_FRACTION))){cache=[];clearContours();clearShading();mapDataStatus='Forecast unavailable for this area';mapDataMissing=false;refreshError='Map forecast unavailable.';return}
       const next:(CachedPoint|null)[][]=Array.from({length:rows},()=>Array(cols).fill(null));
       for(const x of results)if(sameRun(x.result))next[x.r][x.c]=x.result;
       cache=next;weatherRevision++;frameCache.clear();lastChecked=Date.now();refreshError='';renderFromCache();
@@ -763,8 +772,12 @@
   }
   function renderFromCache(){
     void renderStorms();
-    if(!enabled||!cache.length){clearContours();clearShading();return}
+    if(!enabled||!cache.length){mapDataStatus='';mapDataMissing=false;clearContours();clearShading();return}
     const target=getStoreTimestamp(),firstPoint=cache.flat().find((p):p is CachedPoint=>p!==null&&p.times.length>0);
+    const samples=cache.flat(),fresh=samples.filter((p):p is CachedPoint=>!!p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)&&forecastIntervalIndex(p.times,target)>=0);
+    const known=fresh.filter(p=>mapPrecipAt(p,target)!==null).length;
+    mapDataStatus=`Profiles ${fresh.length} / ${samples.length} · precipitation ${known} / ${samples.length} samples`;
+    mapDataMissing=fresh.length<samples.length||((showShading||showIcons)&&precipDetailAvailable&&known<samples.length);
     if(!firstPoint){clearContours();clearShading();return}
     const first=firstPoint.times[0],end=Math.min(firstPoint.times.at(-1)!,first+MAX_FORECAST_HOURS*3600_000);
     if(target<first-30*60_000||target>end+30*60_000){clearContours();clearShading();return}
@@ -839,6 +852,7 @@
   .prepare-ring{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress),#324857 0)}
   .prepare-ring span{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
   .loading-stage{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}
+  .data-status{display:flex;flex-direction:column;gap:5px;padding:8px 0;font-size:10px;line-height:1.4;color:#b5cad8}.data-status b{color:#dff5ff}
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
   .shade-types{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 3px;margin-top:5px;font-size:9px;color:#d7e3e9}.shade-types span{display:flex;align-items:center;gap:4px;white-space:nowrap}.shade-types i{display:inline-block;flex:none;width:8px;height:8px;border-radius:1px}
 
