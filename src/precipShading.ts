@@ -6,10 +6,11 @@ export const PRECIP_TYPE_COLOURS: Record<TerrainPrecipTypeKey, string> = {
   rain: '#35c76f', 'ice-pellets': '#a477e8', 'freezing-rain': '#ef4444',
 };
 export const PRECIP_SHADES = [
-  { label: 'Light', opacity: 0.22 },
-  { label: 'Moderate', opacity: 0.46 },
-  { label: 'Heavy', opacity: 0.72 },
+  { label: 'Light', tone: 0.38 },
+  { label: 'Moderate', tone: 0 },
+  { label: 'Heavy', tone: -0.25 },
 ] as const;
+export const PRECIP_SHADING_OPACITY = 0.55;
 
 /** Zero, missing and invalid precipitation never produce a wet overlay. */
 export function precipitationShade(mm3h: number | null) {
