@@ -5,15 +5,15 @@ import ts from 'typescript';
 const source=readFileSync(new URL('../src/precipShading.ts',import.meta.url),'utf8');
 const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const {precipitationShade,dryTerrainDifference,viewportGridForZoom,sampleTileBounds,PRECIP_TYPE_COLOURS}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
-test('exact intensity boundaries retain three shades with no dry or missing fill',()=>{
+test('one type colour is retained at every positive amount with no dry or missing fill',()=>{
   for(const p of [null,NaN,Infinity,-1,0])assert.equal(precipitationShade(p),null);
-  for(const [p,name] of [[.01,'Light'],[.499,'Light'],[.5,'Moderate'],[2.999,'Moderate'],[3,'Heavy'],[50,'Heavy']])assert.equal(precipitationShade(p).label,name);
-  assert.ok(precipitationShade(.1).tone>precipitationShade(1).tone&&precipitationShade(1).tone>precipitationShade(3).tone);
+  for(const p of [.01,.499,.5,2.999,3,50])assert.equal(precipitationShade(p).tone,0);
+  assert.equal(precipitationShade(.1),precipitationShade(50));
   assert.equal(PRECIP_TYPE_COLOURS.rain,'#0099b6');assert.equal(PRECIP_TYPE_COLOURS.snow,'#b2b2b2');
 });
-test('overview uses one tone until zoom 8 while preserving missing and dry gaps',()=>{
+test('the same type tone applies at every zoom while preserving missing and dry gaps',()=>{
   assert.equal(precipitationShade(.1,7.99).tone,precipitationShade(10,7.99).tone);
-  assert.ok(precipitationShade(.1,8).tone>precipitationShade(10,8).tone);
+  assert.equal(precipitationShade(.1,8).tone,precipitationShade(10,8).tone);
   assert.equal(precipitationShade(0,7),null);assert.equal(precipitationShade(null,8),null);
 });
 

@@ -5,19 +5,14 @@ export const PRECIP_TYPE_COLOURS: Record<TerrainPrecipTypeKey, string> = {
   snow: '#b2b2b2', 'wet-snow': '#569456', mix: '#95a109',
   rain: '#0099b6', 'ice-pellets': '#510c0f', 'freezing-rain': '#900096',
 };
-export const PRECIP_SHADES = [
-  { label: 'Light', tone: 0.38 },
-  { label: 'Moderate', tone: 0 },
-  { label: 'Heavy', tone: -0.25 },
-] as const;
+export const PRECIP_SHADES = [{ label: 'Precipitation', tone: 0 }] as const;
 export const PRECIP_SHADING_OPACITY = 1;
 export const PRECIP_DETAIL_MIN_ZOOM = 8;
 
 /** Zero, missing and invalid precipitation never produce a wet overlay. */
 export function precipitationShade(mm3h: number | null, zoom = Infinity) {
   if (mm3h === null || !Number.isFinite(mm3h) || mm3h <= 0) return null;
-  if (zoom < PRECIP_DETAIL_MIN_ZOOM) return PRECIP_SHADES[1];
-  return PRECIP_SHADES[mm3h < 0.5 ? 0 : mm3h < 3 ? 1 : 2];
+  return PRECIP_SHADES[0];
 }
 
 /** Strictly dry, known samples only. Unknown or wet samples leave gaps. */

@@ -79,13 +79,13 @@ Search starts after three characters and a 450 ms typing pause. Photon provides 
 
 ### Map
 
-- Precipitation shading uses blue snow, cyan wet snow, orange mix, green rain,
-  purple ice pellets and red freezing rain and uses three
-  intensity opacities: light `<0.5`, moderate `>=0.5 and <3`, heavy `>=3 mm/3h`.
+- Precipitation shading uses the Windy palette: cyan rain, magenta freezing rain,
+  dark red-brown ice pellets, grey snow, green wet snow and yellow-green mix.
+  Each type has one fixed colour; precipitation intensity is not encoded in shading.
   Zero precipitation is unshaded, and unknown precipitation or phase stays blank.
 - Weather profiles start at nominal 9 km locally, with coarser broad overviews.
   Terrain refines beyond zoom 8 while reusing those profiles and precipitation totals.
-  Separate **Contours**, **Shading**, **Icons** and **⚡ Storms** controls retain their settings.
+  Separate **Contours**, **Shading** and **Icons** controls retain their settings; Icons includes forecast lightning.
 - Precipitation icons use the same terrain-aware phase as shading, with matching
   colours. They reuse existing wet samples (no extra weather requests), stay spaced
   across the screen and are capped at 80 markers. Dry and missing samples stay blank.
@@ -213,9 +213,9 @@ weather profile and rainfall amount; this does not create higher-resolution rain
 Missing owners remain blank.
 
 Up to 12 profile requests run concurrently. Partial shading appears before all
-requests finish. Fine terrain loads with 8 workers and cached elevations; cancellation
-stops obsolete work. The six type colours and three intensity levels are batched into
-at most 18 canvas polygon groups. Lightning uses zoom-adaptive display spacing and its own cancellable, bounded
+requests finish. Terrain uses four concurrent tile requests and cached elevations;
+cancellation stops obsolete work. Six type colours are rendered in raster tiles.
+Lightning uses zoom-adaptive display spacing and its own cancellable, bounded
 tile sampling; the underlying ECMWF field remains at its native resolution.
 
 ## Interpretation
@@ -297,21 +297,30 @@ This changes symbol placement and sampling, not the ECMWF forecast resolution.
 
 ## Tiled precipitation preview (11 October 2026)
 
-Shading uses globally anchored 256-pixel raster tiles, with 96 diagnosis samples per axis. Tile zoom is inferred from visible map width and longitude bounds, keeping diagnosis samples at about 2–4 screen pixels even with Windy's wrapper zoom conventions and fractional zoom. Bilinear interpolation of precipitation and pressure-level temperature/dew point/height replaces nearest-neighbour weather blocks. Wet bulb is recalculated before phase classification; category colours and three intensity bands remain discrete. Missing forecast corners remain transparent.
+Shading uses globally anchored 256-pixel raster tiles, with 96 diagnosis samples per axis. Tile zoom is inferred from visible map width and longitude bounds, keeping diagnosis samples at about 2–4 screen pixels even with Windy's wrapper zoom conventions and fractional zoom. Bilinear interpolation of precipitation and pressure-level temperature/dew point/height replaces nearest-neighbour weather blocks. Wet bulb is recalculated before phase classification; category colours remain discrete, with one colour per type. Missing forecast corners remain transparent.
 
-Mapzen Terrarium elevation tiles are decoded locally and interpolated across tile boundaries. Terrain data zoom follows the physical map zoom minus two, capped at 14; original terrain resolution varies by location. Four concurrent terrain requests, pending-request sharing, a 64-tile decoded LRU (16 MiB), ten-second timeout and failure cooldown keep work bounded. Cached weather terrain supplies an explicitly identified coarse fallback. Point forecasts continue using Windy elevation. Timeline changes reuse the DEM cache and invalidate old shaded output. Raster work yields between tiles and cancels stale render jobs. Icons reuse the same interpolation and terrain diagnosis.
+Mapzen Terrarium elevation tiles are decoded locally and interpolated across tile boundaries. Terrain data zoom follows the physical map zoom minus two, capped at 14; original terrain resolution varies by location. Four concurrent terrain requests, pending-request sharing, a 64-tile decoded LRU (16 MiB), ten-second timeout and failure cooldown keep work bounded. Cached weather terrain supplies an explicitly identified coarse fallback. Point forecasts continue using Windy elevation. Timeline changes reuse weather profiles, DEM tiles and bounded prepared frames. Raster work yields between tiles and cancels stale render jobs. Icons reuse the same interpolation and terrain diagnosis.
 
 Terrain endpoint: https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png . See [terrain attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md); credits are included in How it works. Weather samples still target 9 km locally and use bounded overview sampling; this preview does not download every native ECMWF cell globally. Forecast accuracy has not yet been validated against observations.
 
 
 ### Selected Windy layer and fixed shading strength
 
-Wintry keeps the selected Windy layer. Valid wet diagnoses use fully opaque precipitation pixels; known dry and missing weather remain transparent. Light (<0.5), moderate (0.5–<3) and heavy (≥3 mm/3h) use three colour tones, with no opacity slider. DEM relief modulates the colours without revealing the underlying weather layer.
+Wintry keeps the selected Windy layer. Valid wet diagnoses use fully opaque precipitation pixels; known dry and missing weather remain transparent. Each precipitation type uses one fixed colour, with no intensity gradient or opacity slider. DEM relief modulates the colours without revealing the underlying weather layer.
 
 A separate geographic foreground draws cached map tiles at 45% opacity, clipped to the same wet-area mask. This retains roads, labels and terrain above the opaque colours while leaving dry areas unchanged. It uses Windy's geographic tile templates and an outdoor-map fallback. Up to four requests per render, shared pending requests, a 32-image cache and ten-second timeout bound loading. Failed tiles are reported. DOM image overlays are the verified live path; native MapLibre ordering is available where the host exposes it.
 
 Below zoom 8, Shading and Icons controls are disabled and their overlays removed. Zooming closer restores their checked choices. Contours remains independent. Icons combines precipitation symbols and raw ECMWF forecast lightning.
 
-Palette matches the Windy precipitation-type legend: rain cyan #0099b6; freezing rain magenta #900096; mixed ice/ice pellets dark red-brown #510c0f; snow grey #b2b2b2; wet snow green #569456; rain/snow mix yellow-green #95a109. Shading, icons, point phase headings and charts share these hues. Light/moderate/heavy tones are retained. Ice pellets remain the plugin diagnosed class; matching the Mixed ice colour does not equate the classifications.
+Palette matches the Windy precipitation-type legend: rain cyan #0099b6; freezing rain magenta #900096; mixed ice/ice pellets dark red-brown #510c0f; snow grey #b2b2b2; wet snow green #569456; rain/snow mix yellow-green #95a109. Shading, icons, point phase headings and charts share these hues. Precipitation amounts remain available in point forecasts. Ice pellets remain the plugin diagnosed class; matching the Mixed ice colour does not equate the classifications.
 
 Live Windy close-ups verified opaque wet colours and outdoor-map road/terrain visibility. Native city weather annotations still describe native Windy forecasts. Missing or unavailable forecast intervals remain transparent. A complete live grid (55/55 points at the tested noon forecast) had no missing profiles, amounts or phase diagnoses; unshaded rectangles were zero precipitation in the point feed while the native map showed precipitation type. Known limitation in this release: the point precipitation feed and native map precipitation-type mask can disagree. Do not fill those areas with invented precipitation or claim they are missing-data gaps. Differences from native ECMWF output are not an accuracy validation. Version 1000.0.5 includes opaque precipitation, geographic foreground, the revised palette, combined precipitation/lightning icons, and zoom-dependent controls. The release retains the known point/map precipitation discrepancy.
+
+
+### Fast timeline preview (12 October 2026)
+
+Map shading and precipitation icons reuse frames for the actual represented forecast interval. Moving between hours inside that interval does not rebuild the raster or request new point profiles. Up to six frames are retained under a 48 MiB estimated pixel budget, and one next interval is prepared in the background after foreground loading settles. New model runs, refreshed profiles, terrain changes and viewport or control changes invalidate the relevant frames. Obsolete rendering is cancelled; a new foreground frame replaces the previous frame atomically while Updating is shown. Dry intervals skip raster allocation. This cache does not create hourly source profiles where only coarser intervals exist.
+
+Forecast lightning retains six previously viewed time/view frames for up to fifteen minutes, with model-run and refresh invalidation. Unseen lightning hours can still require data. Windy's selected background layer also controls its own time-dependent requests; the plugin cannot eliminate those loads. Caches are bounded to keep activation and memory use manageable rather than downloading the global forecast.
+
+Verification: 65 unit tests, synthetic desktop/mobile raster and icon regressions, named point card checks, and a timeline cache fixture. The fixture verified no new point requests or raster rebuilds within one represented interval, reuse of the prepared next interval, immediate return to cached wet frames, dry-frame clearing, rapid-time cancellation and lightning revisit reuse. Fixture timings are not an internet performance benchmark or evidence of forecast skill. These optimizations are on the preview branch pending a new public release.
