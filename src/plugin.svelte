@@ -13,18 +13,13 @@
 
     <div class="layer-controls" role="group" aria-label="Map layers">
       <label class:active={showContours} title="Estimated snowline contours and dry-terrain hatching"><input type="checkbox" bind:checked={showContours} on:change={toggleMapLayers} /> Contours</label>
-      <label class:active={showShading && precipDetailAvailable} class:unavailable={!precipDetailAvailable} title="Precipitation type and intensity colours"><input type="checkbox" bind:checked={showShading} disabled={!precipDetailAvailable} on:change={toggleMapLayers} /> Shading</label>
+      <label class:active={showShading && precipDetailAvailable} class:unavailable={!precipDetailAvailable} title="Precipitation type colours"><input type="checkbox" bind:checked={showShading} disabled={!precipDetailAvailable} on:change={toggleMapLayers} /> Shading</label>
       <label class:active={showIcons && precipDetailAvailable} class:unavailable={!precipDetailAvailable} title="Precipitation-type symbols and ECMWF forecast lightning"><input type="checkbox" bind:checked={showIcons} disabled={!precipDetailAvailable} on:change={toggleMapLayers} /> Icons</label>
     </div>
     </div>
     {#if !precipDetailAvailable}<div class="zoom-hint">Zoom in to level 8 for shading and icons</div>{/if}
     {#if precipDetailAvailable && (showShading || showIcons)}
-      {#if showShading}<div class="shade-legend" aria-label="Precipitation shading intensity">
-        <span>Light &lt;0.5</span><span>Moderate 0.5–&lt;3</span><span>Heavy ≥3</span>
-        <small>mm/3h · colour indicates precipitation type</small>
-        <small>Intensity shades and icons appear from zoom 8</small>
-      </div>{/if}
-      <div class="shade-types" aria-label="Precipitation type colours">
+        <div class="shade-types" aria-label="Precipitation type colours">
         <span>{@html precipitationIconSvg('snow')}Snow</span>
         <span>{@html precipitationIconSvg('wet-snow')}Wet snow</span>
         <span>{@html precipitationIconSvg('mix')}Mix</span>
@@ -48,10 +43,10 @@
     </details>
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
-    {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading)}
+    {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
       <div class="status-pill" role="status" aria-live="polite"><span class="status-dot"></span>{probeLoading ? 'Reading point…' : 'Updating…'}</div>
     {/if}
-    <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading} on:click={() => {clearStorms();void renderStorms();refreshForecast()}}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
+    <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading} on:click={refreshForecast}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
   </div>
 {/if}
 
@@ -75,7 +70,7 @@
       </div>
       <div class="info-body">
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
-        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Light &lt;0.5, moderate 0.5–&lt;3 and heavy ≥3 mm/3h use progressively darker shades at full opacity above weather and below geographic map details. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
+        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div>
         <details><summary>Terrain data credits</summary>
           <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p>
@@ -154,6 +149,12 @@
   const terrainTiles=new TerrainTiles();
   let terrainDetailStatus='', rasterEpoch=0, rasterTarget:number|null=null, rasterTimer:ReturnType<typeof setTimeout>|null=null;
   let terrainGeneration=0, terrainJobKey='';
+  type RasterFrame={shading:any;icons:any;geography:any|null;fallback:boolean;geographyError:string;bytes:number};
+  const frameCache=new Map<string,RasterFrame>();
+  const stormFrames=new Map<string,{layer:any;status:string;fetchedAt:number}>();
+  const FRAME_PIXEL_BUDGET=48*1024*1024;
+  let activePhaseKey='',pendingPhaseKey='',weatherRevision=0,terrainRevision=0,rasterLoading=false;
+  let prefetchTimer:ReturnType<typeof setTimeout>|null=null,prefetchBusy=false;
   const PRECIP_PANE='wintry-precip-shading';
   const GEOGRAPHY_ID=`wintry-geography-${Date.now()}`;
   let geographyLayer:any=null,geographyEpoch=0,geographyError='';
@@ -166,6 +167,7 @@
   const pendingProfiles = new Map<string,Promise<CachedPoint|null>>();
   const forecastRequests=new Set<AbortController>();
   let refreshEpoch=0, lastChecked:number|null=null, refreshError='', destroyed=false;
+  let placeAbort:AbortController|null=null;
   let freshnessTimer:ReturnType<typeof setInterval>|null=null;
   let lastRefreshAttempt = Date.now();
 
@@ -194,7 +196,7 @@
   function invalidateForNewRun(run:number|null){
     if(run===null||isOlderRun(run,activeRunTime))return;
     if(activeRunTime===null){activeRunTime=run;return}
-    if(run>activeRunTime+60_000){activeRunTime=run;profileCache.clear();cache=[];clearContours();clearShading()}
+    if(run>activeRunTime+60_000){activeRunTime=run;profileCache.clear();stormFrames.clear();clearStorms();cache=[];clearContours();clearShading()}
   }
   const elevationCache = new Map<string, Promise<number|null>>();
   const readyElevations = new Map<string,number>();
@@ -263,7 +265,7 @@
         if(my===generation&&result&&profileIsFresh(result.fetchedAt,result.runTime,activeRunTime)){
           progressive[p.r][p.c]=result;completed++;
           // First usable map before all network requests finish, then at most one paint per 700 ms.
-          if(completed>=12&&Date.now()-paintedAt>700){cache=progressive;paintedAt=Date.now();renderFromCache();}
+          if(completed>=12&&Date.now()-paintedAt>700){cache=progressive;weatherRevision++;frameCache.clear();paintedAt=Date.now();renderFromCache();}
         }
         return {...p,result};
       });
@@ -273,7 +275,7 @@
       if(valid<Math.max(4,Math.floor(points.length*MIN_VALID_FRACTION))){cache=[];clearContours();clearShading();refreshError='Map forecast unavailable.';return}
       const next:(CachedPoint|null)[][]=Array.from({length:rows},()=>Array(cols).fill(null));
       for(const x of results)if(sameRun(x.result))next[x.r][x.c]=x.result;
-      cache=next;lastChecked=Date.now();refreshError='';renderFromCache();
+      cache=next;weatherRevision++;frameCache.clear();lastChecked=Date.now();refreshError='';renderFromCache();
       if(clickedPoint&&clickedLatLon&&!profileIsFresh(clickedPoint.fetchedAt,clickedPoint.runTime,activeRunTime))void probeLocation(...clickedLatLon,pointSource??'map-click',clickedPlaceName);
     }finally{
       if(my===generation)viewportLoading=false;
@@ -286,37 +288,39 @@
   function refreshForecast(){
     if(!enabled||destroyed)return;
     lastRefreshAttempt=Date.now();
+    stormFrames.clear();clearStorms();void renderStorms();
     terrainTiles.retry();terrainJobKey='';
     refreshEpoch++;generation++;viewportLoading=false;refreshQueued=false;profileCache.clear();pendingProfiles.clear();refreshError='';
     if(clickedLatLon)void probeLocation(...clickedLatLon,pointSource??'map-click',clickedPlaceName);
     void refreshViewport();
   }
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
-  function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null}
-  function clearShading(){clearGeography();terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
+  function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null;activePhaseKey=''}
+  function clearShading(){frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}clearGeography();terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
   function clearGeography(){geographyEpoch++;geographyError='';if(geographyLayer)try{map.removeLayer(geographyLayer)}catch{}geographyLayer=null}
-  async function renderGeography(masks:any[],z:number){
-    if(!showShading||!precipDetailAvailable){clearGeography();return;}
-    const epoch=++geographyEpoch,next=L.layerGroup();let failed=false;
+  async function renderGeography(frame:RasterFrame,key:string,masks:any[],z:number){
+    const epoch=geographyEpoch,next=L.layerGroup();let failed=false;
     const tiles=typeof getMapTiles==='function'?getMapTiles():{},kind=String(store.get('map')??document.body.dataset.map??'sznmap');
     const template=Math.floor(Number(map.getZoom()))<=11?(tiles as any).graymap:(tiles as any)[kind]??(tiles as any).sznmap;
     const urlTemplate=template??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
     const pane=map.getPane(GEOGRAPHY_ID)||map.createPane(GEOGRAPHY_ID);pane.style.zIndex='395';pane.style.pointerEvents='none';
+    const current=()=>epoch===geographyEpoch&&!destroyed&&(frameCache.get(key)===frame||activePhaseKey===key);
     await mapLimit(masks,4,async m=>{
-      if(epoch!==geographyEpoch||!showShading||destroyed)return;
+      if(!current())return;
       try{
         const n=2**z,url=urlTemplate.replace('{z}',String(z)).replace('{x}',String(((m.tile.x%n)+n)%n)).replace('{y}',String(m.tile.y));
-        const image=await geographicTiles.get(url);if(epoch!==geographyEpoch||!showShading||destroyed)return;
+        const image=await geographicTiles.get(url);if(!current())return;
         const canvas=document.createElement('canvas');canvas.width=TILE_SIZE;canvas.height=TILE_SIZE;const ctx=canvas.getContext('2d');if(!ctx)return;
         ctx.drawImage(image,0,0,TILE_SIZE,TILE_SIZE);ctx.globalCompositeOperation='destination-in';ctx.drawImage(m.canvas,0,0);
         L.imageOverlay(canvas.toDataURL('image/png'),[[m.se.lat,m.nw.lon],[m.nw.lat,m.se.lon]],{pane:GEOGRAPHY_ID,opacity:.45,interactive:false,className:'wintry-geographic-tile'}).addTo(next);
       }catch{failed=true;}
     });
-    if(epoch!==geographyEpoch||destroyed||!showShading){next.clearLayers();return;}
-    next.addTo(map);const old=geographyLayer;geographyLayer=next;if(old)try{map.removeLayer(old)}catch{}geographyError=failed?'Some map detail tiles unavailable':'';
+    if(!current()){next.clearLayers();return;}
+    frame.geography=next;frame.geographyError=failed?'Some map detail tiles unavailable':'';
+    if(activePhaseKey===key){next.addTo(map);const old=geographyLayer;geographyLayer=next;if(old&&old!==next)try{map.removeLayer(old)}catch{}geographyError=frame.geographyError;}
   }
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
-  function clearPointState(closeChart=true){clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
+  function clearPointState(closeChart=true){placeAbort?.abort();placeAbort=null;clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function statusColor(s:ProbeStatus){return s==='above'?'#46d9ff':s==='below'?'#ff9d3d':s==='near'?'#ffe45c':'#fff'}
   function statusForDifference(d:number):ProbeStatus{return d>POSITION_NEAR_SNOWLINE_METRES?'above':d<-POSITION_NEAR_SNOWLINE_METRES?'below':'near'}
   function positionText(d:number){const a=Math.abs(d);if(a<=POSITION_NEAR_SNOWLINE_METRES)return`<strong>Near snowline</strong><small>within ±${formatElevation(POSITION_NEAR_SNOWLINE_METRES,unitSystem)}</small>`;const side=d>0?'above':'below',label=a>1000?`Far ${side} snowline`:a>300?`Well ${side} snowline`:`Slightly ${side} snowline`;return`<strong>${label}</strong><small>${formatElevation(a,unitSystem)} ${side}</small>`}
@@ -346,14 +350,26 @@
     return{minSnowlineM:minSnowlineM===null?null:Math.round(minSnowlineM/10)*10,newSnowCm:snowpack,transition}
   }
 
-  async function resolvePlaceName(lat:number,lon:number){
+  async function resolvePlaceName(lat:number,lon:number,signal?:AbortSignal){
     if(clickedPlaceName)return clickedPlaceName;
     try{
-      const d=await geocode('reverse',new URLSearchParams({format:'jsonv2',zoom:'12',lat:String(lat),lon:String(lon)})),a=d?.address??{};
+      const d=await geocode('reverse',new URLSearchParams({format:'jsonv2',zoom:'12',lat:String(lat),lon:String(lon)}),signal),a=d?.address??{};
       const local=d?.name||a.city||a.town||a.village||a.municipality||a.county,country=a.country;
       if(local&&country)return String(local)+', '+String(country);if(local)return String(local);
     }catch{}
     return formatCoordinate(lat,lon);
+  }
+  function escapeLabelText(value:string){return value.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!))}
+  async function updatePointPlaceName(lat:number,lon:number,selection:number){
+    placeAbort?.abort();const abort=new AbortController();placeAbort=abort;
+    const timer=setTimeout(()=>abort.abort(),5000);
+    try{
+      const name=await resolvePlaceName(lat,lon,abort.signal);
+      if(selection!==clickGeneration||destroyed||!enabled)return;
+      clickedPlaceName=name;
+      if(clickedPoint)updatePersistentClickLabel();
+      else{const title=document.querySelector('.snowline-point-place');if(title)title.textContent=name;}
+    }finally{clearTimeout(timer);if(placeAbort===abort)placeAbort=null;}
   }
   async function copyText(text:string){if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return}const t=document.createElement('textarea');t.value=text;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();const copied=document.execCommand('copy');t.remove();if(!copied)throw new Error('Copy failed')}
   function favouriteKey(lat:number,lon:number){return`${lat.toFixed(5)},${lon.toFixed(5)}`}
@@ -394,21 +410,23 @@
     return`<div class="snowline-valid">${args.valid}</div>${grid}${relation}${summary}`;
   }
 
-  function showClickLabel(lat:number,lon:number,mainText:string,detailHtml='',snowlineColor='#fff',status:ProbeStatus='neutral'){clearClickLayer();clickLayer=L.layerGroup().addTo(map);const accent=statusColor(status);L.circleMarker([lat,lon],{radius:status==='neutral'?4:5,weight:2,color:'#fff',fillColor:accent,fillOpacity:1,interactive:false}).addTo(clickLayer);const detail=detailHtml?`<div class="snowline-label-detail">${detailHtml}</div>`:'',saved=isCurrentFavourite(),actions=clickedPoint&&clickedLatLon?`<button class="snowline-label-chart" type="button" aria-label="Open forecast" title="Open forecast">Forecast</button><button class="snowline-label-favourite${saved?' saved':''}" type="button" aria-label="${saved?'Remove saved location':'Save location'}" title="${saved?'Remove saved location':'Save location'}">${saved?'Saved':'Save'}</button><button class="snowline-label-share" type="button" aria-label="Copy Wintry forecast details" title="Copy Wintry forecast details">Copy</button>`:'',dry=mainText==='DRY';const marker=L.marker([lat,lon],{interactive:true,bubblingMouseEvents:false,zIndexOffset:2000,icon:L.divIcon({className:`snowline-click-label snowline-probe-${status}${dry?' snowline-card-dry':''}`,html:`<span style="--snowline-color:${snowlineColor};--probe-accent:${accent}">${actions}<button class="snowline-label-close" type="button" aria-label="Close Wintry forecast label" title="Close">×</button><div class="snowline-card-kicker">WINTRY FORECAST</div><b>${mainText}</b>${detail}</span>`,iconSize:[228,180],iconAnchor:[114,188]})}).addTo(clickLayer);marker.on('click',(event:any)=>{const original=event?.originalEvent,target=original?.target as HTMLElement|undefined,graph=target?.closest?.('.snowline-label-chart'),jump=target?.closest?.('.snowline-event-jump'),fav=target?.closest?.('.snowline-label-favourite') as HTMLButtonElement|null,share=target?.closest?.('.snowline-label-share') as HTMLButtonElement|null,close=target?.closest?.('.snowline-label-close');if(!graph&&!jump&&!fav&&!share&&!close)return;try{L.DomEvent.stop(original)}catch{}if(graph){if(clickedPoint){forecastTab='graph';chartOpen=true}return}if(jump&&clickedNextEventTime!==null){try{(store as any).set('timestamp',clickedNextEventTime)}catch{}forecastTab='graph';chartOpen=true;return}if(fav){void toggleCurrentFavourite(fav);return}if(share){void shareCurrentPoint(share);return}clearPointState(true)})}
+  function showClickLabel(lat:number,lon:number,mainText:string,detailHtml='',snowlineColor='#fff',status:ProbeStatus='neutral',phaseKey:string|null=null){clearClickLayer();clickLayer=L.layerGroup().addTo(map);const accent=phaseKey?(PRECIP_TYPE_COLOURS as Record<string,string>)[phaseKey]??statusColor(status):statusColor(status);L.marker([lat,lon],{interactive:false,keyboard:false,zIndexOffset:2100,icon:L.divIcon({className:'wintry-point-pointer',html:`<span style="--probe-accent:${accent}"></span>`,iconSize:[14,14],iconAnchor:[7,7]})}).addTo(clickLayer);const detail=detailHtml?`<div class="snowline-label-detail">${detailHtml}</div>`:'',saved=isCurrentFavourite(),actions=clickedPoint&&clickedLatLon?`<button class="snowline-label-chart" type="button" aria-label="Open forecast" title="Open forecast">Forecast</button><button class="snowline-label-favourite${saved?' saved':''}" type="button" aria-label="${saved?'Remove saved location':'Save location'}" title="${saved?'Remove saved location':'Save location'}">${saved?'Saved':'Save'}</button><button class="snowline-label-share" type="button" aria-label="Copy Wintry forecast details" title="Copy Wintry forecast details">Copy</button>`:'',dry=mainText==='DRY';const marker=L.marker([lat,lon],{interactive:true,bubblingMouseEvents:false,zIndexOffset:2000,icon:L.divIcon({className:`snowline-click-label snowline-probe-${status}${dry?' snowline-card-dry':''}`,html:`<span style="--snowline-color:${snowlineColor};--probe-accent:${accent}">${actions}<button class="snowline-label-close" type="button" aria-label="Close Wintry forecast label" title="Close">×</button><div class="snowline-point-place">${escapeLabelText(clickedPlaceName||formatCoordinate(lat,lon))}</div><b>${mainText}</b>${detail}</span>`,iconSize:[0,0],iconAnchor:[0,0]})}).addTo(clickLayer);marker.on('click',(event:any)=>{const original=event?.originalEvent,target=original?.target as HTMLElement|undefined,graph=target?.closest?.('.snowline-label-chart'),jump=target?.closest?.('.snowline-event-jump'),fav=target?.closest?.('.snowline-label-favourite') as HTMLButtonElement|null,share=target?.closest?.('.snowline-label-share') as HTMLButtonElement|null,close=target?.closest?.('.snowline-label-close');if(!graph&&!jump&&!fav&&!share&&!close)return;try{L.DomEvent.stop(original)}catch{}if(graph){if(clickedPoint){forecastTab='graph';chartOpen=true}return}if(jump&&clickedNextEventTime!==null){try{(store as any).set('timestamp',clickedNextEventTime)}catch{}forecastTab='graph';chartOpen=true;return}if(fav){void toggleCurrentFavourite(fav);return}if(share){void shareCurrentPoint(share);return}clearPointState(true)})}
 
   function updatePersistentClickLabel(){if(!enabled){clearClickLayer();return}if(!clickedPoint||!clickedLatLon||!clickedPoint.times.length)return;clickedNextEventTime=null;const[lat,lon]=clickedLatLon,target=getStoreTimestamp(),first=clickedPoint.times[0],end=Math.min(clickedPoint.times.at(-1)!,first+MAX_FORECAST_HOURS*3600_000);if(target<first-30*60_000||target>end+30*60_000){showClickLabel(lat,lon,'Outside +144 h');return}const index=forecastIntervalIndex(clickedPoint.times,target);if(index<0){showClickLabel(lat,lon,'Forecast unavailable at this time');return}const valid=clickedPoint.times[index],profile=buildProfile(clickedPoint.forecast,index),slr=wetBulbZeroHeight(profile),snowline=slr.snowLevelM!==null&&Number.isFinite(slr.snowLevelM)?slr.snowLevelM:null;if(snowline===null){
       const precip=precipMmAt(clickedPoint.forecast,index),phase=clickedMapElevationM!==null?phaseAt(clickedPoint,index,clickedMapElevationM):null;
       const reason=slr.status==='below-lowest-level'?'WBZ is below the lowest resolved level or absent in a cold column':'No atmospheric crossing resolved';
       const detail=`<div class="snowline-valid">${shortValid(valid)}</div><div class="snowline-label-grid">${metricTile('Terrain',formatElevation(clickedMapElevationM,unitSystem),'metric-terrain')}${metricTile('Precip',formatPrecip(precip,unitSystem),'')}</div><div class="snowline-event-line">${reason}. ${phase?precipitationLabel(phase):precip!==null&&precip<PRECIP_THRESHOLD_MM_H?'Dry':'Precipitation type unavailable'}</div>`;
-      showClickLabel(lat,lon,phase?`${phase.icon} ${precipitationLabel(phase).toUpperCase()}`:precip!==null&&precip<PRECIP_THRESHOLD_MM_H?'DRY':'WBZ unresolved',detail);return
-    }const rounded=Math.round(snowline/10)*10,tendency=tendencyText(clickedPoint,index),precip=precipMmAt(clickedPoint.forecast,index),hasPrecip=precip!==null&&precip>=PRECIP_THRESHOLD_MM_H;if(clickedMapElevationM!==null&&Number.isFinite(clickedMapElevationM)){const terrain=Math.round(clickedMapElevationM/10)*10,difference=clickedMapElevationM-snowline,status=statusForDifference(difference),phase=hasPrecip?terrainPrecipitationType(profile,clickedMapElevationM):null,summary=compactEventSummary(clickedPoint,clickedMapElevationM,target);clickedNextEventTime=summary.jumpTime;const grid=labelGrid({valid:shortValid(valid),terrain,snowline:rounded,difference,precip,hasPrecip,eventLine:summary.text,canJump:summary.jumpTime!==null})+(slr.extrapolated?'<div class="forecast-quality">Snowline estimated below the resolved profile</div>':'')+(phase?.confidence==='low'?'<div class="forecast-quality">Limited atmospheric detail; type may differ</div>':'');if(phase){showClickLabel(lat,lon,`${phase.icon} ${precipitationLabel(phase).toUpperCase()}`,grid,colorForLevel(snowline),status);return}showClickLabel(lat,lon,conditionLabel(precip,phase).toUpperCase(),grid,colorForLevel(snowline),status);return}showClickLabel(lat,lon,formatElevation(rounded,unitSystem),`<div class="snowline-label-grid"><span><small>Valid</small><strong>${shortValid(valid)}</strong></span><span><small>Trend</small><strong>${tendency||'—'}</strong></span></div>`,colorForLevel(snowline),'neutral')}
+      showClickLabel(lat,lon,phase?`${phase.icon} ${precipitationLabel(phase).toUpperCase()}`:precip!==null&&precip<PRECIP_THRESHOLD_MM_H?'DRY':'WBZ unresolved',detail,'#fff','neutral',phase?.key??null);return
+    }const rounded=Math.round(snowline/10)*10,tendency=tendencyText(clickedPoint,index),precip=precipMmAt(clickedPoint.forecast,index),hasPrecip=precip!==null&&precip>=PRECIP_THRESHOLD_MM_H;if(clickedMapElevationM!==null&&Number.isFinite(clickedMapElevationM)){const terrain=Math.round(clickedMapElevationM/10)*10,difference=clickedMapElevationM-snowline,status=statusForDifference(difference),phase=hasPrecip?terrainPrecipitationType(profile,clickedMapElevationM):null,summary=compactEventSummary(clickedPoint,clickedMapElevationM,target);clickedNextEventTime=summary.jumpTime;const grid=labelGrid({valid:shortValid(valid),terrain,snowline:rounded,difference,precip,hasPrecip,eventLine:summary.text,canJump:summary.jumpTime!==null})+(slr.extrapolated?'<div class="forecast-quality">Snowline estimated below the resolved profile</div>':'')+(phase?.confidence==='low'?'<div class="forecast-quality">Limited atmospheric detail; type may differ</div>':'');if(phase){showClickLabel(lat,lon,`${phase.icon} ${precipitationLabel(phase).toUpperCase()}`,grid,colorForLevel(snowline),status,phase?.key??null);return}showClickLabel(lat,lon,conditionLabel(precip,phase).toUpperCase(),grid,colorForLevel(snowline),status,phase?.key??null);return}showClickLabel(lat,lon,formatElevation(rounded,unitSystem),`<div class="snowline-label-grid"><span><small>Valid</small><strong>${shortValid(valid)}</strong></span><span><small>Trend</small><strong>${tendency||'—'}</strong></span></div>`,colorForLevel(snowline),'neutral')}
 
   async function probeLocation(lat:number,lon:number,source:PointSource,placeName:string|null=null){
     if(!enabled||destroyed||!Number.isFinite(lat)||!Number.isFinite(lon))return;
+    placeAbort?.abort();placeAbort=null;
     const keep=chartOpen,my=++clickGeneration;
     clickedPoint=null;clickedMapElevationM=null;clickedNextEventTime=null;
     clickedLatLon=[lat,lon];clickedPlaceName=placeName;pointSource=source;probeLoading=true;
     showClickLabel(lat,lon,'Loading forecast…','<div class="snowline-loading">Checking snow, timing and amounts</div>');
+    if(!placeName)void updatePointPlaceName(lat,lon,my);
     try{
       const[point,elev,fields]=await Promise.all([loadPoint(lat,lon,3),loadMapElevation(lat,lon),loadSelectedPrecipFields(lat,wrappedLongitude(lon),FORECAST_DAYS)]);
       if(my!==clickGeneration||pointSource!==source||!enabled||destroyed)return;
@@ -476,26 +494,63 @@
     return i<0?null:precipMmAt(p.forecast,i);
   }
   function rasterZoom(){const b=currentBounds();return viewportRasterZoom(map.getSize().x,b.west,b.east,map.getZoom());}
+  function phaseFrameKey(target:number){
+    const b=currentBounds(),size=map.getSize();
+    // The map diagnosis uses the represented profile interval, not invented hourly profiles.
+    const intervals=cache.flat().map(p=>p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)?forecastIntervalIndex(p.times,target):-2);
+    return JSON.stringify([weatherRevision,terrainRevision,activeRunTime,rasterZoom(),Number(map.getZoom()),size.x,size.y,b,showShading,showIcons,store.get('map'),intervals]);
+  }
+  function rememberFrame(key:string,frame:RasterFrame){
+    if(frame.bytes>FRAME_PIXEL_BUDGET)return;
+    frameCache.delete(key);frameCache.set(key,frame);
+    while(frameCache.size>6||[...frameCache.values()].reduce((sum,f)=>sum+f.bytes,0)>FRAME_PIXEL_BUDGET){
+      const oldest=frameCache.keys().next().value!;
+      if(oldest===activePhaseKey&&frameCache.size>1){const active=frameCache.get(oldest)!;frameCache.delete(oldest);frameCache.set(oldest,active);continue;}
+      frameCache.delete(oldest);
+    }
+  }
+  function applyFrame(key:string,frame:RasterFrame){
+    const previous=[shadingLayer,precipIconLayer,geographyLayer];
+    frame.shading.addTo(map);frame.icons.addTo(map);frame.geography?.addTo(map);
+    shadingLayer=frame.shading;precipIconLayer=frame.icons;geographyLayer=frame.geography;activePhaseKey=key;pendingPhaseKey=key;
+    for(const layer of previous)if(layer&&layer!==shadingLayer&&layer!==precipIconLayer&&layer!==geographyLayer)try{map.removeLayer(layer)}catch{}
+    geographyError=frame.geographyError;terrainDetailStatus=frame.fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';rasterLoading=false;
+  }
+  function scheduleNextFrame(){
+    if(prefetchTimer||prefetchBusy||viewportLoading||terrainLoading||destroyed||!enabled)return;
+    const point=cache.flat().find((p):p is CachedPoint=>!!p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime));if(!point)return;
+    const i=forecastIntervalIndex(point.times,getStoreTimestamp()),next=point.times[i+1];
+    if(i<0||!Number.isFinite(next)||frameCache.has(phaseFrameKey(next)))return;
+    prefetchTimer=setTimeout(()=>{prefetchTimer=null;prefetchBusy=true;void paintShading(next,true).finally(()=>prefetchBusy=false)},200);
+  }
   function queueRasterPaint(){
     if(rasterTimer||destroyed||!enabled)return;
-    rasterTimer=setTimeout(()=>{rasterTimer=null;void paintShading(getStoreTimestamp());},350);
+    rasterTimer=setTimeout(()=>{rasterTimer=null;void paintShading(getStoreTimestamp());},80);
   }
   function renderPrecipitation(target:number){
     if(!precipDetailAvailable||(!showShading&&!showIcons)){clearShading();return;}
     const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
-    if(rasterTarget!==target){rasterEpoch++;rasterTarget=target;if(shadingLayer)try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null;clearPrecipIcons();}
-    const b=currentBounds(),z=rasterZoom(),key=[z,b.south,b.north,b.west,b.east].join(':');
-    if(key!==terrainJobKey){
-      terrainJobKey=key;const epoch=++terrainGeneration;terrainLoading=true;terrainDetailStatus='';
-      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,queueRasterPaint).then(()=>{
+    rasterTarget=target;
+    const b=currentBounds(),z=rasterZoom(),terrainKey=[z,b.south,b.north,b.west,b.east].join(':');
+    if(terrainKey!==terrainJobKey){
+      terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoading=true;terrainDetailStatus='';
+      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,()=>{terrainRevision++;frameCache.clear();queueRasterPaint()}).then(()=>{
         if(epoch!==terrainGeneration||destroyed||!enabled)return;terrainLoading=false;queueRasterPaint();
       });
     }
-    queueRasterPaint();
+    const key=phaseFrameKey(target);
+    if(key!==pendingPhaseKey){rasterEpoch++;pendingPhaseKey=key;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}}
+    if(key===activePhaseKey&&shadingLayer){rasterLoading=false;scheduleNextFrame();return;}
+    const frame=frameCache.get(key);
+    if(frame){rememberFrame(key,frame);applyFrame(key,frame);scheduleNextFrame();return;}
+    rasterLoading=true;queueRasterPaint();
   }
-  async function paintShading(target:number){
+  async function paintShading(target:number,background=false){
     if(!enabled||!precipDetailAvailable||(!showShading&&!showIcons)||destroyed||!cache.length)return;
-    const epoch=++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup(),geographyMasks:any[]=[];
+    const key=phaseFrameKey(target),mainKey=phaseFrameKey(getStoreTimestamp());
+    if(background&&frameCache.has(key))return;
+    const epoch=background?rasterEpoch:++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup(),geographyMasks:any[]=[];
+    const obsolete=()=>epoch!==rasterEpoch||destroyed||!enabled||(background&&mainKey!==phaseFrameKey(getStoreTimestamp()));
     const profiles=new Map<CachedPoint,ReturnType<typeof buildProfile>>(),amounts=new Map<CachedPoint,number|null>();
     for(const p of cache.flat())if(p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)){
       const i=forecastIntervalIndex(p.times,target);profiles.set(p,i<0?[]:buildProfile(p.forecast,i));amounts.set(p,mapPrecipAt(p,target));
@@ -518,10 +573,10 @@
       const phase=terrainPrecipitationType(profile,terrain);if(!phase)return null;return{phase,shade,coverage:wetCoverage(neighbours,p=>amounts.get(p)??null)??0};
     }
     try{
-      if(showShading){
+      if(showShading&&[...amounts.values()].some(value=>value!==null&&value>0)){
         const tiles=visibleRasterTiles(b,z),centre=map.getCenter();tiles.sort((a,c)=>{const x=tileLocation(a.x+.5,a.y+.5,z),y=tileLocation(c.x+.5,c.y+.5,z);return(x.lat-centre.lat)**2+(x.lon-centre.lng)**2-((y.lat-centre.lat)**2+(y.lon-centre.lng)**2)});
         for(const tile of tiles){
-          if(epoch!==rasterEpoch||destroyed||!enabled){next.clearLayers();return;}
+          if(obsolete()){next.clearLayers();return;}
           const canvas=document.createElement('canvas');canvas.width=RASTER_SAMPLES;canvas.height=RASTER_SAMPLES;
           const ctx=canvas.getContext('2d');if(!ctx)continue;const image=ctx.createImageData(RASTER_SAMPLES,RASTER_SAMPLES);let wet=false;
           for(let y=0;y<RASTER_SAMPLES;y++)for(let x=0;x<RASTER_SAMPLES;x++){
@@ -540,18 +595,20 @@
           await new Promise(resolve=>setTimeout(resolve,0));
         }
       }
-      if(epoch!==rasterEpoch||destroyed||!enabled){next.clearLayers();return;}
-      next.addTo(map);const old=shadingLayer;shadingLayer=next;if(old)try{map.removeLayer(old)}catch{}
-      void renderGeography(geographyMasks,z);
+      if(obsolete()){next.clearLayers();return;}
       const iconLayer=L.layerGroup(),size=map.getSize();let spacing=72;
       while(Math.ceil(size.x/spacing)*Math.ceil(size.y/spacing)>80)spacing+=8;
       if(showIcons&&detailZoom>=PRECIP_DETAIL_MIN_ZOOM)for(let y=spacing/2;y<size.y;y+=spacing)for(let x=spacing/2;x<size.x;x+=spacing){
         const p=map.containerPointToLatLng([x,y]),result=diagnose(p.lat,p.lng);if(!result)continue;
         L.marker([p.lat,p.lng],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html:`<span role="img" aria-label="${result.phase.label}">${precipitationIconSvg(result.phase.key)}</span>`,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(iconLayer);
       }
-      iconLayer.addTo(map);const previous=precipIconLayer;precipIconLayer=iconLayer;if(previous)try{map.removeLayer(previous)}catch{}
-      terrainDetailStatus=fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';
-    }catch(error){next.clearLayers();console.warn('Wintry raster rendering failed',error);if(epoch===rasterEpoch)terrainDetailStatus='Shading unavailable · retry refresh';}
+      if(obsolete()){next.clearLayers();iconLayer.clearLayers();return;}
+      const frame:RasterFrame={shading:next,icons:iconLayer,geography:null,fallback,geographyError:'',bytes:geographyMasks.length*TILE_SIZE*TILE_SIZE*8+iconLayer.getLayers().length*4096};
+      if(!background)applyFrame(key,frame);
+      rememberFrame(key,frame);
+      if(!background)scheduleNextFrame();
+      void renderGeography(frame,key,geographyMasks,z);
+    }catch(error){next.clearLayers();console.warn('Wintry raster rendering failed',error);if(epoch===rasterEpoch&&!background){rasterLoading=false;terrainDetailStatus='Shading unavailable · retry refresh';}}
   }
   function clearStorms(){
     stormLoading=false;stormEpoch++;stormAbort?.abort();stormAbort=null;stormKey='';
@@ -560,8 +617,10 @@
   async function renderStorms(){
     if(!enabled||destroyed||(!showIcons||!precipDetailAvailable)){clearStorms();return}
     const target=getStoreTimestamp(),b=currentBounds(),zoom=map.getZoom();
-    const key=[target,zoom,b.south,b.north,b.west,b.east].join(':');
+    const key=[activeRunTime,target,zoom,b.south,b.north,b.west,b.east].join(':');
     if(key===stormKey)return;
+    const saved=stormFrames.get(key);
+    if(saved&&Date.now()-saved.fetchedAt<15*60_000){clearStorms();stormKey=key;stormLayer=saved.layer.addTo(map);stormStatus=saved.status;stormFrames.delete(key);stormFrames.set(key,saved);return;}
     clearStorms();stormKey=key;const epoch=stormEpoch,abort=stormAbort=new AbortController();
     stormLoading=true;stormStatus='⚡ Forecast lightning';
     const tiles=new Map<string,Promise<any>>();
@@ -592,6 +651,7 @@
       if(epoch!==stormEpoch||abort.signal.aborted)return;
       next.addTo(map);stormLayer=next;
       stormStatus=known?`⚡ ECMWF forecast lightning · ${count?'activity shown':'none at sampled points'}`:'⚡ ECMWF lightning unavailable';
+      if(known){stormFrames.delete(key);stormFrames.set(key,{layer:next,status:stormStatus,fetchedAt:Date.now()});while(stormFrames.size>6)stormFrames.delete(stormFrames.keys().next().value!);}
     }catch(error){
       if(epoch!==stormEpoch||abort.signal.aborted)return;
       stormKey='';stormStatus='⚡ ECMWF lightning unavailable';
@@ -654,17 +714,20 @@
     release(config.name,'high');generation++;refreshEpoch++;pendingProfiles.clear();viewportLoading=false;refreshQueued=false;
     if(moveTimer){clearTimeout(moveTimer);moveTimer=null}clearContours();clearShading();clearStorms();clearPointState(true);
   }
-  onMount(()=>{loadPreferences();if(!enabled)release(config.name,'high');freshnessTimer=setInterval(checkAutomaticRefresh,30_000);document.addEventListener('visibilitychange',checkAutomaticRefresh);window.addEventListener('online',checkAutomaticRefresh);map.on('moveend',handleMapNavigation);map.on('zoomend',handleMapNavigation);try{timestampListener=store.on('timestamp',()=>{void renderStorms();if(enabled&&cache.length)renderFromCache();if(enabled)updatePersistentClickLabel()})}catch{}void renderStorms();refreshViewport()})
-  onDestroy(()=>{destroyed=true;for(const abort of forecastRequests)abort.abort();forecastRequests.clear();refreshEpoch++;pendingProfiles.clear();if(freshnessTimer)clearInterval(freshnessTimer);document.removeEventListener('visibilitychange',checkAutomaticRefresh);window.removeEventListener('online',checkAutomaticRefresh);generation++;clickGeneration++;refreshQueued=false;if(moveTimer)clearTimeout(moveTimer);map.off('moveend',handleMapNavigation);map.off('zoomend',handleMapNavigation);if(timestampListener!==null)try{store.off(timestampListener)}catch{}clearContours();clearShading();clearStorms();terrainTiles.destroy();geographicTiles.destroy();clearClickLayer();stormInterpolator?.destroy();stormInterpolator=null;profileCache.clear()})
+  onMount(()=>{loadPreferences();if(!enabled)release(config.name,'high');freshnessTimer=setInterval(checkAutomaticRefresh,30_000);document.addEventListener('visibilitychange',checkAutomaticRefresh);window.addEventListener('online',checkAutomaticRefresh);map.on('moveend',handleMapNavigation);map.on('zoomend',handleMapNavigation);try{timestampListener=store.on('timestamp',()=>{if(enabled&&cache.length)renderFromCache();else void renderStorms();if(enabled)updatePersistentClickLabel()})}catch{}void renderStorms();refreshViewport()})
+  onDestroy(()=>{destroyed=true;stormFrames.clear();placeAbort?.abort();for(const abort of forecastRequests)abort.abort();forecastRequests.clear();refreshEpoch++;pendingProfiles.clear();if(freshnessTimer)clearInterval(freshnessTimer);document.removeEventListener('visibilitychange',checkAutomaticRefresh);window.removeEventListener('online',checkAutomaticRefresh);generation++;clickGeneration++;refreshQueued=false;if(moveTimer)clearTimeout(moveTimer);map.off('moveend',handleMapNavigation);map.off('zoomend',handleMapNavigation);if(timestampListener!==null)try{store.off(timestampListener)}catch{}clearContours();clearShading();clearStorms();terrainTiles.destroy();geographicTiles.destroy();clearClickLayer();stormInterpolator?.destroy();stormInterpolator=null;profileCache.clear()})
 </script>
 
 <style lang="less">
+  :global(.snowline-click-label>span>b){text-shadow:0 0 1px #fff}
+  :global(.snowline-point-place){font-size:12px;line-height:1.3;font-weight:750;color:#d9e7ef;overflow-wrap:anywhere;max-height:3.9em;overflow:auto;padding:0 2px}
+  :global(.wintry-point-pointer){background:transparent!important;border:0!important;pointer-events:none!important}:global(.wintry-point-pointer>span){display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #fff;border-radius:50%;background:var(--probe-accent,#fff);box-shadow:0 0 0 2px rgba(0,0,0,.55)}
   .storm-legend{font-size:9px;color:#f5df91;margin-top:5px}
   :global(.wintry-storm-symbol){background:none!important;border:0!important;pointer-events:none!important}
   :global(.wintry-storm-symbol span){font-size:23px;color:#ffe04b;text-shadow:0 1px 2px #111,0 0 3px #111;line-height:28px}
   :global(.wintry-precip-icon){background:none!important;border:0!important;pointer-events:none!important}
   :global(.wintry-precip-icon span){display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}
-  :global(.wintry-precip-icon svg){width:25px;height:25px;padding:1.5px}
+  :global(.wintry-precip-icon svg){width:25px;height:25px;padding:1.5px;filter:drop-shadow(0 0 .75px #ffffffc0)}
   .layer-controls{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls label{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls input{accent-color:#67d7ff;margin:0;width:15px;height:15px}
   .zoom-hint{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls label.unavailable{opacity:.45;cursor:not-allowed}.layer-controls label.unavailable input{cursor:not-allowed}
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
@@ -682,7 +745,7 @@
   .status-pill{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px;padding:4px 7px;border-radius:6px;background:rgba(10,14,18,.72);color:rgba(255,255,255,.92);font-size:10px;font-weight:700}.status-dot{width:7px;height:7px;border-radius:50%;background:#70d7ff;animation:snowline-pulse 1s ease-in-out infinite}@keyframes snowline-pulse{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
   .info-overlay{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0,0,0,.30)}.info-window{width:min(360px,calc(100vw - 24px));max-height:min(74vh,540px);overflow:hidden;border:1px solid rgba(80,190,255,.48);border-radius:10px;background:rgba(24,28,32,.99);color:white;box-shadow:0 8px 30px rgba(0,0,0,.48)}.info-head{display:flex;justify-content:space-between;align-items:center;padding:9px 10px 7px;border-bottom:1px solid rgba(255,255,255,.10);font-size:12px}.info-head button{width:22px;height:22px;border:0;border-radius:6px;background:rgba(255,255,255,.08);color:white;font-size:17px;cursor:pointer}.info-body{max-height:calc(min(74vh,540px) - 40px);overflow-y:auto;padding:9px 10px 10px;font-size:10px;line-height:1.4;color:rgba(255,255,255,.84)}.info-body>div+div{margin-top:8px}.info-caveat{padding-top:8px;border-top:1px solid rgba(255,255,255,.10);color:rgba(255,228,92,.90)}
   :global(.snowline-label){text-align:center;pointer-events:none}:global(.snowline-label),:global(.snowline-click-label){background:transparent!important;border:0!important}:global(.snowline-label span){display:inline-block;padding:1px 4px 1px 6px;border-radius:3px;border-left:4px solid var(--snowline-color,white);background:rgba(15,17,20,.86);color:white;font-size:10px;font-weight:800;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,.8);box-shadow:0 0 0 1px rgba(255,255,255,.12)}:global(.snowline-label-major span){padding-left:7px;border-left-width:5px;background:rgba(10,13,16,.92);font-weight:900;box-shadow:0 0 0 1px rgba(255,255,255,.18),0 2px 5px rgba(0,0,0,.28)}
-  :global(.snowline-click-label){pointer-events:auto!important}:global(.snowline-click-label>span){position:relative;display:flex;flex-direction:column;gap:6px;width:228px;min-height:146px;box-sizing:border-box;padding:40px 9px 9px;border-radius:14px;border:1px solid rgba(255,255,255,.11);border-top:2px solid var(--probe-accent,rgba(255,255,255,.4));border-bottom:3px solid var(--snowline-color,white);background:linear-gradient(180deg,rgba(11,17,21,.985),rgba(7,12,16,.99));color:#fff;text-align:center;white-space:normal;text-shadow:none;box-shadow:0 10px 30px rgba(0,0,0,.54)}
+  :global(.snowline-click-label){pointer-events:none!important}:global(.snowline-click-label>span){position:absolute;bottom:20px;left:0;transform:translateX(-50%);pointer-events:auto;display:flex;flex-direction:column;gap:6px;width:228px;min-height:146px;box-sizing:border-box;padding:40px 9px 9px;border-radius:14px;border:1px solid rgba(255,255,255,.11);border-top:2px solid var(--probe-accent,rgba(255,255,255,.4));border-bottom:3px solid var(--snowline-color,white);background:linear-gradient(180deg,rgba(11,17,21,.985),rgba(7,12,16,.99));color:#fff;text-align:center;white-space:normal;text-shadow:none;box-shadow:0 10px 30px rgba(0,0,0,.54)}
   :global(.snowline-card-kicker){position:absolute;top:12px;left:74px;right:74px;color:#7f929e;font-size:6px;line-height:1;font-weight:900;letter-spacing:1.15px;text-align:center;white-space:nowrap;pointer-events:none}
   :global(.snowline-label-close),:global(.snowline-label-share),:global(.snowline-label-chart),:global(.snowline-label-favourite){position:absolute;top:7px;height:27px;padding:0;border:1px solid rgba(255,255,255,.085);border-radius:8px;background:rgba(255,255,255,.045);color:#dfe9ee;font-size:12px;line-height:25px;font-weight:800;text-shadow:none;cursor:pointer;pointer-events:auto;transition:background .12s ease,border-color .12s ease}:global(.snowline-label-close:hover),:global(.snowline-label-share:hover),:global(.snowline-label-chart:hover),:global(.snowline-label-favourite:hover){background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.16)}:global(.snowline-label-close){right:7px;width:27px;font-size:17px}:global(.snowline-label-share){right:40px;width:27px;font-size:0;background-repeat:no-repeat;background-position:center;background-size:14px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3Ccircle cx='6' cy='12' r='3'/%3E%3Ccircle cx='18' cy='19' r='3'/%3E%3Cpath d='M8.6 10.5l6.8-4M8.6 13.5l6.8 4'/%3E%3C/svg%3E")}:global(.snowline-label-chart){left:7px;width:29px;font-size:15px}:global(.snowline-label-favourite){left:42px;width:29px;font-size:16px;color:#aab6bd}:global(.snowline-label-favourite.saved){color:#ffe45c;border-color:rgba(255,228,92,.42);background:rgba(255,228,92,.08)}
   :global(.snowline-click-label b){display:block;padding:4px 7px 2px;border-radius:8px;background:transparent;color:var(--probe-accent,white);font-size:15px;line-height:1.05;font-weight:900;letter-spacing:.25px}:global(.snowline-card-dry>span>b){padding:3px 7px 1px;background:transparent;font-size:12px;letter-spacing:.8px;opacity:.95}:global(.snowline-label-detail){width:100%}
@@ -743,7 +806,7 @@
   .panel-head{position:sticky;top:-10px;z-index:3;margin:-10px -10px 0;padding:10px 10px 6px;background:linear-gradient(155deg,#142b3b,#102330);border-bottom:1px solid #304655}
   @media(max-width:600px){.panel-head{margin-inline:-12px;padding-inline:12px}}
   .layer-controls{gap:6px;margin-top:10px}.layer-controls label{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls label.active{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls label:focus-within{outline:2px solid #8de4ff;outline-offset:2px}
-  .shade-types{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 8px;font-size:11px;margin-top:8px}.shade-types span{min-height:22px;white-space:normal;line-height:1.2;gap:6px}.shade-types :global(svg){width:19px;height:19px;flex:none}
+  .shade-types{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 8px;font-size:11px;margin-top:8px}.shade-types span{min-height:22px;white-space:normal;line-height:1.2;gap:6px}.shade-types :global(svg){width:19px;height:19px;flex:none;filter:drop-shadow(0 0 .75px #ffffffc0)}
   .shade-legend{font-size:10px;line-height:1.5;margin-top:8px}.shade-legend small{font-size:10px}.storm-legend{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer{position:sticky;bottom:-10px;z-index:3;background:#102330;border-top:1px solid #304655;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button:disabled{opacity:.45;cursor:default}.panel-footer .help-link{min-height:34px}.status-pill{font-size:11px;min-height:22px}.status-dot{flex-shrink:0}
   @media(prefers-reduced-motion:reduce){.status-dot{animation:none}}
   @media(pointer:coarse){.layer-controls label,.refresh-button,.panel-footer .help-link{min-height:44px}
