@@ -315,3 +315,7 @@ Below zoom 8, both Shading and Icons controls are disabled and their overlays ar
 The separate Storms control has been removed. Icons enables or hides both precipitation symbols and ECMWF forecast lightning; below zoom 8 neither is displayed or requested.
 
 Current phase palette: rain emerald green #25b56a; snow blue #287dd8; wet snow pink #f27fb8; rain/snow mix orange #f4a033; ice pellets violet #8659d4; freezing rain red #ec414c. The same hues are used by map shading, icons, the forecast chart, and legends. Three intensity tones and fixed 55% map opacity are retained.
+
+### Opaque precipitation with geographic layer ordering
+
+Native MapLibre image tiles now render at full opacity between weather and the geographic base-map bucket. Wet coverage still feathers wet/dry edges; dry or unknown cells are transparent. Map details render above the precipitation. This replaces the previous 55% overlay. Native geographic ordering must be visually verified at each map scale, especially where Windy switches to its outdoor raster map.

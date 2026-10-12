@@ -10,7 +10,7 @@ export const PRECIP_SHADES = [
   { label: 'Moderate', tone: 0 },
   { label: 'Heavy', tone: -0.25 },
 ] as const;
-export const PRECIP_SHADING_OPACITY = 0.55;
+export const PRECIP_SHADING_OPACITY = 1;
 export const PRECIP_DETAIL_MIN_ZOOM = 8;
 
 /** Zero, missing and invalid precipitation never produce a wet overlay. */
