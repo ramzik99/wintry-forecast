@@ -14,8 +14,7 @@
     <div class="layer-controls" role="group" aria-label="Map layers">
       <label class:active={showContours} title="Estimated snowline contours and dry-terrain hatching"><input type="checkbox" bind:checked={showContours} on:change={toggleMapLayers} /> Contours</label>
       <label class:active={showShading && precipDetailAvailable} class:unavailable={!precipDetailAvailable} title="Precipitation type and intensity colours"><input type="checkbox" bind:checked={showShading} disabled={!precipDetailAvailable} on:change={toggleMapLayers} /> Shading</label>
-      <label class:active={showIcons && precipDetailAvailable} class:unavailable={!precipDetailAvailable} title="Precipitation-type symbols"><input type="checkbox" bind:checked={showIcons} disabled={!precipDetailAvailable} on:change={toggleMapLayers} /> Icons</label>
-      <label class:active={showThunder} title="ECMWF forecast lightning symbols"><input type="checkbox" bind:checked={showThunder} on:change={toggleMapLayers} /> ⚡ Storms</label>
+      <label class:active={showIcons && precipDetailAvailable} class:unavailable={!precipDetailAvailable} title="Precipitation-type symbols and ECMWF forecast lightning"><input type="checkbox" bind:checked={showIcons} disabled={!precipDetailAvailable} on:change={toggleMapLayers} /> Icons</label>
     </div>
     </div>
     {#if !precipDetailAvailable}<div class="zoom-hint">Zoom in to level 8 for shading and icons</div>{/if}
@@ -35,7 +34,7 @@
       </div>
     {/if}
     {#if (showShading || showIcons) && terrainDetailStatus}<div class="storm-legend" role="status">{terrainDetailStatus}</div>{/if}
-    {#if showThunder}<div class="storm-legend" role="status">{stormStatus}</div>{/if}
+    {#if showIcons && precipDetailAvailable}<div class="storm-legend" role="status">{stormStatus}</div>{/if}
     {#if clickedPoint}
       <div class="point-tools"><strong>{clickedPlaceName || 'Selected point'}</strong><div><button type="button" on:click={() => {forecastTab='graph';chartOpen=true}}>Forecast</button><button type="button" on:click={() => {forecastTab='sounding';chartOpen=true}}>Sounding</button></div></div>
     {/if}
@@ -75,7 +74,7 @@
       </div>
       <div class="info-body">
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
-        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Light &lt;0.5, moderate 0.5–&lt;3 and heavy ≥3 mm/3h use progressively darker shades at one fixed 55% opacity. Windy’s Clouds layer remains the background while the plugin is enabled, replacing the native precipitation layer. The previous background returns when the plugin is disabled or closed. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and precipitation icons can be hidden independently. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
+        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Light &lt;0.5, moderate 0.5–&lt;3 and heavy ≥3 mm/3h use progressively darker shades at one fixed 55% opacity. Windy’s Clouds layer remains the background while the plugin is enabled, replacing the native precipitation layer. The previous background returns when the plugin is disabled or closed. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div>
         <details><summary>Terrain data credits</summary>
           <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p>
@@ -143,7 +142,7 @@
   const MAX_CONCURRENT = 12, CONTOUR_STEP_H = 1, FORECAST_DAYS = 6, MAX_FORECAST_HOURS = 144, PROFILE_CACHE_MAX = 1600, MIN_VALID_FRACTION = 0.32, POSITION_NEAR_SNOWLINE_METRES = 100, TENDENCY_HOURS = 1, MAX_VIEWPORT_LATITUDE = 85;
   const FAVOURITES_STORAGE_KEY = 'snowline:favourites:v1', FAVOURITES_CHANGED_EVENT = 'wintry:favourites-changed', PREFS_STORAGE_KEY='wintry:prefs:v1';
 
-  let showContours=true, showShading=true, showIcons=true, showThunder=true;
+  let showContours=true, showShading=true, showIcons=true;
   let backgroundOverlay:string|null=null, overlayListener:number|null=null;
   let precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;
   let terrainLoading=false, stormLoading=false;
@@ -522,7 +521,7 @@
     if(stormLayer)try{map.removeLayer(stormLayer)}catch{}stormLayer=null;
   }
   async function renderStorms(){
-    if(!enabled||destroyed||!showThunder){clearStorms();return}
+    if(!enabled||destroyed||(!showIcons||!precipDetailAvailable)){clearStorms();return}
     const target=getStoreTimestamp(),b=currentBounds(),zoom=map.getZoom();
     const key=[target,zoom,b.south,b.north,b.west,b.east].join(':');
     if(key===stormKey)return;
@@ -608,10 +607,10 @@
   }
   function useCloudBackground(){if(!enabled||destroyed)return;if(backgroundOverlay===null)backgroundOverlay=String(store.get('overlay')??'clouds');if(store.get('overlay')!=='clouds')store.set('overlay','clouds')}
   function restoreBackground(){const previous=backgroundOverlay;backgroundOverlay=null;if(previous&&store.get('overlay')==='clouds')store.set('overlay',previous as any)}
-  function loadPreferences(){try{const p=JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY)||'{}');if(typeof p.enabled==='boolean')enabled=p.enabled;if(typeof p.showContours==='boolean')showContours=p.showContours;if(typeof p.showShading==='boolean')showShading=p.showShading;if(typeof p.showIcons==='boolean')showIcons=p.showIcons;if(typeof p.showThunder==='boolean')showThunder=p.showThunder;if(typeof p.panelHidden==='boolean')panelHidden=p.panelHidden;if(p.forecastTab==='graph'||p.forecastTab==='sounding')forecastTab=p.forecastTab}catch{}unitSystem=loadUnitSystem();prefsReady=true}
-  function persistPreferences(){if(!prefsReady)return;try{localStorage.setItem(PREFS_STORAGE_KEY,JSON.stringify({enabled,panelHidden,forecastTab,showContours,showShading,showIcons,showThunder}))}catch{}}
+  function loadPreferences(){try{const p=JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY)||'{}');if(typeof p.enabled==='boolean')enabled=p.enabled;if(typeof p.showContours==='boolean')showContours=p.showContours;if(typeof p.showShading==='boolean')showShading=p.showShading;if(typeof p.showIcons==='boolean')showIcons=p.showIcons;if(typeof p.panelHidden==='boolean')panelHidden=p.panelHidden;if(p.forecastTab==='graph'||p.forecastTab==='sounding')forecastTab=p.forecastTab}catch{}unitSystem=loadUnitSystem();prefsReady=true}
+  function persistPreferences(){if(!prefsReady)return;try{localStorage.setItem(PREFS_STORAGE_KEY,JSON.stringify({enabled,panelHidden,forecastTab,showContours,showShading,showIcons}))}catch{}}
   function refreshUnitDependentUi(){if(renderedUnitSystem===unitSystem)return;renderedUnitSystem=unitSystem;if(!enabled)return;if(cache.length&&!viewportLoading)renderFromCache();updatePersistentClickLabel()}
-  $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showIcons;showThunder;persistPreferences()}
+  $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showIcons;persistPreferences()}
   $: if(prefsReady){unitSystem;refreshUnitDependentUi()}
 
   function handleMapNavigation(){precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
