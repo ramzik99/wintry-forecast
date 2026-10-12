@@ -1,6 +1,7 @@
 import { alignPrecipIntervals } from './precipIntervals';
 import { getPointForecastData } from '@windy/fetch';
 import { boundedRequest } from './boundedRequest';
+import { valueAt } from './snowLevel';
 
 export type SnowForecastModel = 'ecmwf';
 
@@ -32,8 +33,7 @@ function collectFromRecordArray(items: unknown[], out: Record<string, unknown>) 
   for (const key of keys) {
     const values = (items as Record<string, unknown>[]).map(item => {
       const raw = item[key];
-      const number = typeof raw === 'number' ? raw : Number(raw);
-      return Number.isFinite(number) ? number : null;
+      return valueAt([raw],0);
     });
     if (values.some(value => value !== null)) out[key] = values;
   }

@@ -6,11 +6,28 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**1000.0.5**
+**1000.0.8**
+
+Final convenience release: a stage-weighted percentage ring follows normal map
+updates for enabled contours, shading and icons. It measures processed forecast
+samples, terrain tiles and raster work, stays below 100% while jobs are running,
+and disappears when loading finishes. It is not a download-byte or accuracy percentage.
+
+Forecast and elevation requests now stop waiting even if a provider ignores
+cancellation. Data status under Choose a place reports profile and precipitation
+availability; incomplete coverage has a visible warning. Unknown samples stay
+blank and are never labelled dry. The ECMWF point feed and Windy's native
+precipitation layer can have different wet coverage. This release does not claim
+to remove that source difference or establish improved forecast accuracy.
+
+Prepare map forecast stores all available represented intervals for the current
+view, up to 144 hours, with cancellation and storage-failure fallback. Prepared
+frames are invalidated when the view, model run or forecast data changes. Shading
+retains one fixed Windy colour per type; contours, shading and icons stay independent.
 
 Compact 260 px desktop / 250 px phone-width panel, with location settings collapsed after selection. Forecast and Sounding remain directly accessible. The panel sits on the left above the timeline, away from right-side map controls, and can minimize to a small button. Use Windy's existing timeline to change forecast time; the duplicate slider and day shortcuts have been removed from both views.
 
-[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.5/plugin.min.js) · [Release notes and verification](V1000.md)
+[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.8/plugin.min.js) · [Release notes and verification](V1000.md)
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
 
@@ -314,7 +331,7 @@ Below zoom 8, Shading and Icons controls are disabled and their overlays removed
 
 Palette matches the Windy precipitation-type legend: rain cyan #0099b6; freezing rain magenta #900096; mixed ice/ice pellets dark red-brown #510c0f; snow grey #b2b2b2; wet snow green #569456; rain/snow mix yellow-green #95a109. Shading, icons, point phase headings and charts share these hues. Precipitation amounts remain available in point forecasts. Ice pellets remain the plugin diagnosed class; matching the Mixed ice colour does not equate the classifications.
 
-Live Windy close-ups verified opaque wet colours and outdoor-map road/terrain visibility. Native city weather annotations still describe native Windy forecasts. Missing or unavailable forecast intervals remain transparent. A complete live grid (55/55 points at the tested noon forecast) had no missing profiles, amounts or phase diagnoses; unshaded rectangles were zero precipitation in the point feed while the native map showed precipitation type. Known limitation in this release: the point precipitation feed and native map precipitation-type mask can disagree. Do not fill those areas with invented precipitation or claim they are missing-data gaps. Differences from native ECMWF output are not an accuracy validation. Version 1000.0.5 includes opaque precipitation, geographic foreground, the revised palette, combined precipitation/lightning icons, and zoom-dependent controls. The release retains the known point/map precipitation discrepancy.
+Live Windy close-ups verified opaque wet colours and outdoor-map road/terrain visibility. Native city weather annotations still describe native Windy forecasts. Missing or unavailable forecast intervals remain transparent. A complete live grid (55/55 points at the tested noon forecast) had no missing profiles, amounts or phase diagnoses; unshaded rectangles were zero precipitation in the point feed while the native map showed precipitation type. Known limitation in this release: the point precipitation feed and native map precipitation-type mask can disagree. Do not fill those areas with invented precipitation or claim they are missing-data gaps. Differences from native ECMWF output are not an accuracy validation. Version 1000.0.8 includes opaque precipitation, geographic foreground, the revised palette, combined precipitation/lightning icons, and zoom-dependent controls. The release retains the known point/map precipitation discrepancy.
 
 
 ### Fast timeline preview (12 October 2026)
