@@ -13,12 +13,13 @@
 
     <div class="layer-controls" role="group" aria-label="Map layers">
       <label class:active={showContours} title="Estimated snowline contours and dry-terrain hatching"><input type="checkbox" bind:checked={showContours} on:change={toggleMapLayers} /> Contours</label>
-      <label class:active={showShading} title="Precipitation type and intensity colours"><input type="checkbox" bind:checked={showShading} on:change={toggleMapLayers} /> Shading</label>
-      <label class:active={showIcons} title="Precipitation-type symbols"><input type="checkbox" bind:checked={showIcons} on:change={toggleMapLayers} /> Icons</label>
+      <label class:active={showShading && precipDetailAvailable} class:unavailable={!precipDetailAvailable} title="Precipitation type and intensity colours"><input type="checkbox" bind:checked={showShading} disabled={!precipDetailAvailable} on:change={toggleMapLayers} /> Shading</label>
+      <label class:active={showIcons && precipDetailAvailable} class:unavailable={!precipDetailAvailable} title="Precipitation-type symbols"><input type="checkbox" bind:checked={showIcons} disabled={!precipDetailAvailable} on:change={toggleMapLayers} /> Icons</label>
       <label class:active={showThunder} title="ECMWF forecast lightning symbols"><input type="checkbox" bind:checked={showThunder} on:change={toggleMapLayers} /> ⚡ Storms</label>
     </div>
     </div>
-    {#if showShading || showIcons}
+    {#if !precipDetailAvailable}<div class="zoom-hint">Zoom in to level 8 for shading and icons</div>{/if}
+    {#if precipDetailAvailable && (showShading || showIcons)}
       {#if showShading}<div class="shade-legend" aria-label="Precipitation shading intensity">
         <span>Light &lt;0.5</span><span>Moderate 0.5–&lt;3</span><span>Heavy ≥3</span>
         <small>mm/3h · colour indicates precipitation type</small>
@@ -144,6 +145,7 @@
 
   let showContours=true, showShading=true, showIcons=true, showThunder=true;
   let backgroundOverlay:string|null=null, overlayListener:number|null=null;
+  let precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;
   let terrainLoading=false, stormLoading=false;
   let stormInterpolator:any=null;
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
@@ -235,7 +237,7 @@
     return grid;
   }
   async function refreshViewport(){
-    if(!enabled||destroyed||(!showContours&&!showShading&&!showIcons))return;
+    if(!enabled||destroyed||(!showContours&&(!precipDetailAvailable||(!showShading&&!showIcons))))return;
     if(viewportLoading){refreshQueued=true;return}
     refreshQueued=false;const my=++generation;viewportLoading=true;
     const{points,rows,cols}=buildViewportPoints();
@@ -453,7 +455,7 @@
     rasterTimer=setTimeout(()=>{rasterTimer=null;void paintShading(getStoreTimestamp());},350);
   }
   function renderPrecipitation(target:number){
-    if(!showShading&&!showIcons){clearShading();return;}
+    if(!precipDetailAvailable||(!showShading&&!showIcons)){clearShading();return;}
     const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
     if(rasterTarget!==target){rasterEpoch++;rasterTarget=target;if(shadingLayer)try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null;clearPrecipIcons();}
     const b=currentBounds(),z=rasterZoom(),key=[z,b.south,b.north,b.west,b.east].join(':');
@@ -466,7 +468,7 @@
     queueRasterPaint();
   }
   async function paintShading(target:number){
-    if(!enabled||(!showShading&&!showIcons)||destroyed||!cache.length)return;
+    if(!enabled||!precipDetailAvailable||(!showShading&&!showIcons)||destroyed||!cache.length)return;
     const epoch=++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup();
     const profiles=new Map<CachedPoint,ReturnType<typeof buildProfile>>(),amounts=new Map<CachedPoint,number|null>();
     for(const p of cache.flat())if(p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)){
@@ -602,7 +604,7 @@
     if(!showContours)clearContours();if(!showShading)clearShading();if(!showIcons)clearPrecipIcons();
     if(!enabled)return;
     if(cache.length)renderFromCache();
-    if((showContours||showShading||showIcons)&&!cache.length)void refreshViewport();
+    if((showContours||(precipDetailAvailable&&(showShading||showIcons)))&&!cache.length)void refreshViewport();
   }
   function useCloudBackground(){if(!enabled||destroyed)return;if(backgroundOverlay===null)backgroundOverlay=String(store.get('overlay')??'clouds');if(store.get('overlay')!=='clouds')store.set('overlay','clouds')}
   function restoreBackground(){const previous=backgroundOverlay;backgroundOverlay=null;if(previous&&store.get('overlay')==='clouds')store.set('overlay',previous as any)}
@@ -612,7 +614,7 @@
   $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showIcons;showThunder;persistPreferences()}
   $: if(prefsReady){unitSystem;refreshUnitDependentUi()}
 
-  function handleMapNavigation(){if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
+  function handleMapNavigation(){precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
   function toggleEnabled(){
     if(enabled){useCloudBackground();register(config.name,'high');void renderStorms();refreshViewport();return}
     restoreBackground();release(config.name,'high');generation++;refreshEpoch++;pendingProfiles.clear();viewportLoading=false;refreshQueued=false;
@@ -630,6 +632,7 @@
   :global(.wintry-precip-icon span){display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}
   :global(.wintry-precip-icon svg){width:25px;height:25px;padding:1.5px}
   .layer-controls{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls label{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls input{accent-color:#67d7ff;margin:0;width:15px;height:15px}
+  .zoom-hint{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls label.unavailable{opacity:.45;cursor:not-allowed}.layer-controls label.unavailable input{cursor:not-allowed}
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
   .shade-types{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 3px;margin-top:5px;font-size:9px;color:#d7e3e9}.shade-types span{display:flex;align-items:center;gap:4px;white-space:nowrap}.shade-types i{display:inline-block;flex:none;width:8px;height:8px;border-radius:1px}
 
