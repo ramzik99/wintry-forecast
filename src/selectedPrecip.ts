@@ -1,5 +1,6 @@
 import { alignPrecipIntervals } from './precipIntervals';
 import { getPointForecastData } from '@windy/fetch';
+import { boundedRequest } from './boundedRequest';
 
 export type SnowForecastModel = 'ecmwf';
 
@@ -76,12 +77,15 @@ export async function loadSelectedPrecipFields(
   lon: number,
   days = 6,
   model: SnowForecastModel = 'ecmwf',
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   try {
-    const response = await getPointForecastData(
+    const response = await boundedRequest(abortSignal=>getPointForecastData(
       model,
       { lat, lon, step: 3, days, source: 'detail' } as any,
-    );
+      undefined,
+      {abortSignal},
+    ),12_000,signal);
     const out: Record<string, unknown> = {};
     const rawRun=(response as any)?.data?.header?.refTime ?? (response as any)?.header?.refTime;
     const run=typeof rawRun==='number'?(rawRun>1e12?rawRun:rawRun>1e9?rawRun*1000:null):typeof rawRun==='string'?Date.parse(rawRun):null;
@@ -89,7 +93,7 @@ export async function loadSelectedPrecipFields(
     collectPrecipFields(response as unknown, out);
     return out;
   } catch (error) {
-    console.warn('Wintry forecast precipitation request failed', lat, lon, error);
+    if((error as Error)?.name!=='AbortError')console.warn('Wintry forecast precipitation request failed', lat, lon, error);
     return {};
   }
 }

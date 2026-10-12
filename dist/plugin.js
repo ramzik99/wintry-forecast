@@ -10,8 +10,8 @@ const __pluginConfig =  {
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1791826607695,
-  "builtReadable": "2026-10-12T17:36:47.695Z"
+  "built": 1791829973416,
+  "builtReadable": "2026-10-12T18:32:53.416Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -8702,6 +8702,34 @@ let sequence = 0;
     };
 }
 
+/** Stop waiting even when a provider ignores AbortSignal; late results are discarded. */ async function boundedRequest(request, timeoutMs, parent) {
+    const controller = new AbortController();
+    const cancel = ()=>controller.abort();
+    if (parent?.aborted) cancel();
+    else parent?.addEventListener('abort', cancel, {
+        once: true
+    });
+    let timer;
+    let rejectAbort = ()=>{};
+    try {
+        return await Promise.race([
+            new Promise((_, reject)=>{
+                rejectAbort = ()=>reject(new DOMException('Forecast request cancelled or timed out', 'AbortError'));
+                controller.signal.addEventListener('abort', rejectAbort, {
+                    once: true
+                });
+                if (controller.signal.aborted) rejectAbort();
+                timer = setTimeout(cancel, timeoutMs);
+            }),
+            controller.signal.aborted ? Promise.reject(new DOMException('Forecast request cancelled', 'AbortError')) : request(controller.signal)
+        ]);
+    } finally{
+        clearTimeout(timer);
+        parent?.removeEventListener('abort', cancel);
+        controller.signal.removeEventListener('abort', rejectAbort);
+    }
+}
+
 function isNumericArrayLike(value) {
     if (ArrayBuffer.isView(value)) return Number(value?.length) > 0;
     if (!Array.isArray(value) || !value.length) return false;
@@ -8758,15 +8786,17 @@ function collectPrecipFields(value, out, depth = 0) {
  * always exposed by the meteogram endpoint. No snow-depth request is made here:
  * the plugin's "new snow" product is calculated from forecast precipitation
  * and the terrain-aware precipitation-type diagnosis.
- */ async function loadSelectedPrecipFields(lat, lon, days = 6, model = 'ecmwf') {
+ */ async function loadSelectedPrecipFields(lat, lon, days = 6, model = 'ecmwf', signal) {
     try {
-        const response = await getPointForecastData(model, {
-            lat,
-            lon,
-            step: 3,
-            days,
-            source: 'detail'
-        });
+        const response = await boundedRequest((abortSignal)=>getPointForecastData(model, {
+                lat,
+                lon,
+                step: 3,
+                days,
+                source: 'detail'
+            }, undefined, {
+                abortSignal
+            }), 12_000, signal);
         const out = {};
         const rawRun = response?.data?.header?.refTime ?? response?.header?.refTime;
         const run = typeof rawRun === 'number' ? rawRun > 1e12 ? rawRun : rawRun > 1e9 ? rawRun * 1000 : null : typeof rawRun === 'string' ? Date.parse(rawRun) : null;
@@ -8774,7 +8804,7 @@ function collectPrecipFields(value, out, depth = 0) {
         collectPrecipFields(response, out);
         return out;
     } catch (error) {
-        console.warn('Wintry forecast precipitation request failed', lat, lon, error);
+        if (error?.name !== 'AbortError') console.warn('Wintry forecast precipitation request failed', lat, lon, error);
         return {};
     }
 }
@@ -10771,6 +10801,17 @@ function instance$1($$self, $$props, $$invalidate) {
 		return p;
 	}
 
+	async function loadPrecipFields(lat, lon) {
+		const abort = new AbortController();
+		forecastRequests.add(abort);
+
+		try {
+			return await loadSelectedPrecipFields(lat, lon, FORECAST_DAYS, MODEL, abort.signal);
+		} finally {
+			forecastRequests.delete(abort);
+		}
+	}
+
 	async function loadPoint(lat, lon, step = 1) {
 		const c = cachedProfile(lat, lon, step);
 
@@ -10879,7 +10920,7 @@ function instance$1($$self, $$props, $$invalidate) {
 					result.precipChecked = true;
 
 					if (!result.times.some((_, i) => precipMmAt(result.forecast, i) !== null)) {
-						const fields = await loadSelectedPrecipFields(p.lat, wrappedLongitude(p.lon), FORECAST_DAYS);
+						const fields = await loadPrecipFields(p.lat, wrappedLongitude(p.lon));
 
 						if (my === generation && profileIsFresh(result.fetchedAt, result.runTime, activeRunTime)) {
 							Object.assign(result.forecast, alignSelectedPrecipFields(fields, result.times, result.runTime));
@@ -10947,6 +10988,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	function refreshForecast() {
 		if (!enabled || destroyed) return;
+		for (const abort of forecastRequests) abort.abort();
+		forecastRequests.clear();
 		lastRefreshAttempt = Date.now();
 		stormFrames.clear();
 		clearStorms();
@@ -11598,7 +11641,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			const [point, elev, fields] = await Promise.all([
 				loadPoint(lat, lon, 3),
 				loadMapElevation(lat, lon),
-				loadSelectedPrecipFields(lat, wrappedLongitude(lon), FORECAST_DAYS)
+				loadPrecipFields(lat, wrappedLongitude(lon))
 			]);
 
 			if (my !== clickGeneration || pointSource !== source || !enabled || destroyed) return;
@@ -11789,7 +11832,6 @@ function instance$1($$self, $$props, $$invalidate) {
 			size.y,
 			b,
 			showShading,
-			showIcons,
 			store.get('map'),
 			intervals
 		]);
@@ -11817,10 +11859,10 @@ function instance$1($$self, $$props, $$invalidate) {
 	function applyFrame(key, frame) {
 		const previous = [shadingLayer, precipIconLayer, geographyLayer];
 		frame.shading.addTo(map);
-		frame.icons.addTo(map);
+		if (showIcons) frame.icons.addTo(map);
 		frame.geography?.addTo(map);
 		shadingLayer = frame.shading;
-		precipIconLayer = frame.icons;
+		precipIconLayer = showIcons ? frame.icons : null;
 		geographyLayer = frame.geography;
 		activePhaseKey = key;
 		pendingPhaseKey = key;
@@ -11916,6 +11958,14 @@ function instance$1($$self, $$props, $$invalidate) {
 		}
 
 		if (key === activePhaseKey && shadingLayer) {
+			const current = frameCache.get(key);
+
+			if (current && showIcons !== !!precipIconLayer) applyFrame(key, current); else if (showIcons && !precipIconLayer) {
+				$$invalidate(12, rasterLoading = true);
+				queueRasterPaint();
+				return;
+			}
+
 			$$invalidate(12, rasterLoading = false);
 			scheduleNextFrame();
 			return;
@@ -12086,7 +12136,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			let spacing = 72;
 			while (Math.ceil(size.x / spacing) * Math.ceil(size.y / spacing) > 80) spacing += 8;
 
-			if (showIcons && detailZoom >= PRECIP_DETAIL_MIN_ZOOM) for (let y = spacing / 2; y < size.y; y += spacing) for (let x = spacing / 2; x < size.x; x += spacing) {
+			if (detailZoom >= PRECIP_DETAIL_MIN_ZOOM) for (let y = spacing / 2; y < size.y; y += spacing) for (let x = spacing / 2; x < size.x; x += spacing) {
 				const p = map.containerPointToLatLng([x, y]), result = diagnose(p.lat, p.lng);
 				if (!result) continue;
 
@@ -12461,7 +12511,14 @@ function instance$1($$self, $$props, $$invalidate) {
 		updatePersistentClickLabel();
 	}
 
+	let lastNavigationKey = '';
+
 	function handleMapNavigation() {
+		const size = map.getSize(),
+			key = JSON.stringify([currentBounds(), Number(map.getZoom()), size.x, size.y]);
+
+		if (key === lastNavigationKey) return;
+		lastNavigationKey = key;
 		$$invalidate(7, precipDetailAvailable = Number(map.getZoom()) >= PRECIP_DETAIL_MIN_ZOOM);
 		if (!precipDetailAvailable) clearShading();
 		if (!enabled) return;
@@ -12482,6 +12539,8 @@ function instance$1($$self, $$props, $$invalidate) {
 	}
 
 	function toggleEnabled() {
+		lastNavigationKey = '';
+
 		if (enabled) {
 			register(config.name, 'high');
 			void renderStorms();
@@ -12490,6 +12549,8 @@ function instance$1($$self, $$props, $$invalidate) {
 		}
 
 		release(config.name, 'high');
+		for (const abort of forecastRequests) abort.abort();
+		forecastRequests.clear();
 		generation++;
 		refreshEpoch++;
 		pendingProfiles.clear();

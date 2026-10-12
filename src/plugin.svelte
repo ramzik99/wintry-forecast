@@ -215,6 +215,11 @@
     if(!profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)){profileCache.delete(k);return null}
     profileCache.delete(k);profileCache.set(k,p);return p;
   }
+  async function loadPrecipFields(lat:number,lon:number){
+    const abort=new AbortController();forecastRequests.add(abort);
+    try{return await loadSelectedPrecipFields(lat,lon,FORECAST_DAYS,MODEL,abort.signal)}
+    finally{forecastRequests.delete(abort)}
+  }
   async function loadPoint(lat:number,lon:number,step=1):Promise<CachedPoint|null>{
     const c=cachedProfile(lat,lon,step);if(c){if(c.terrainM===null)c.terrainM=await loadMapElevation(lat,lon);return c}
     const key=profileKey(lat,lon,step),epoch=refreshEpoch,pending=pendingProfiles.get(key);
@@ -256,7 +261,7 @@
         if(result&&!result.precipChecked&&my===generation){
           result.precipChecked=true;
           if(!result.times.some((_,i)=>precipMmAt(result.forecast,i)!==null)){
-            const fields=await loadSelectedPrecipFields(p.lat,wrappedLongitude(p.lon),FORECAST_DAYS);
+            const fields=await loadPrecipFields(p.lat,wrappedLongitude(p.lon));
             if(my===generation&&profileIsFresh(result.fetchedAt,result.runTime,activeRunTime)){
               Object.assign(result.forecast,alignSelectedPrecipFields(fields,result.times,result.runTime));
             }
@@ -287,6 +292,7 @@
   }
   function refreshForecast(){
     if(!enabled||destroyed)return;
+    for(const abort of forecastRequests)abort.abort();forecastRequests.clear();
     lastRefreshAttempt=Date.now();
     stormFrames.clear();clearStorms();void renderStorms();
     terrainTiles.retry();terrainJobKey='';
@@ -428,7 +434,7 @@
     showClickLabel(lat,lon,'Loading forecast…','<div class="snowline-loading">Checking snow, timing and amounts</div>');
     if(!placeName)void updatePointPlaceName(lat,lon,my);
     try{
-      const[point,elev,fields]=await Promise.all([loadPoint(lat,lon,3),loadMapElevation(lat,lon),loadSelectedPrecipFields(lat,wrappedLongitude(lon),FORECAST_DAYS)]);
+      const[point,elev,fields]=await Promise.all([loadPoint(lat,lon,3),loadMapElevation(lat,lon),loadPrecipFields(lat,wrappedLongitude(lon))]);
       if(my!==clickGeneration||pointSource!==source||!enabled||destroyed)return;
       if(!point||!point.times.length||!profileIsFresh(point.fetchedAt,point.runTime,activeRunTime)){showClickLabel(lat,lon,'Forecast unavailable','<div class="snowline-loading">Select this place again to retry.</div>');return}
       const aligned=alignSelectedPrecipFields(fields,point.times,point.runTime);
@@ -498,7 +504,7 @@
     const b=currentBounds(),size=map.getSize();
     // The map diagnosis uses the represented profile interval, not invented hourly profiles.
     const intervals=cache.flat().map(p=>p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)?forecastIntervalIndex(p.times,target):-2);
-    return JSON.stringify([weatherRevision,terrainRevision,activeRunTime,rasterZoom(),Number(map.getZoom()),size.x,size.y,b,showShading,showIcons,store.get('map'),intervals]);
+    return JSON.stringify([weatherRevision,terrainRevision,activeRunTime,rasterZoom(),Number(map.getZoom()),size.x,size.y,b,showShading,store.get('map'),intervals]);
   }
   function rememberFrame(key:string,frame:RasterFrame){
     if(frame.bytes>FRAME_PIXEL_BUDGET)return;
@@ -511,8 +517,8 @@
   }
   function applyFrame(key:string,frame:RasterFrame){
     const previous=[shadingLayer,precipIconLayer,geographyLayer];
-    frame.shading.addTo(map);frame.icons.addTo(map);frame.geography?.addTo(map);
-    shadingLayer=frame.shading;precipIconLayer=frame.icons;geographyLayer=frame.geography;activePhaseKey=key;pendingPhaseKey=key;
+    frame.shading.addTo(map);if(showIcons)frame.icons.addTo(map);frame.geography?.addTo(map);
+    shadingLayer=frame.shading;precipIconLayer=showIcons?frame.icons:null;geographyLayer=frame.geography;activePhaseKey=key;pendingPhaseKey=key;
     for(const layer of previous)if(layer&&layer!==shadingLayer&&layer!==precipIconLayer&&layer!==geographyLayer)try{map.removeLayer(layer)}catch{}
     geographyError=frame.geographyError;terrainDetailStatus=frame.fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';rasterLoading=false;
   }
@@ -540,7 +546,7 @@
     }
     const key=phaseFrameKey(target);
     if(key!==pendingPhaseKey){rasterEpoch++;pendingPhaseKey=key;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}}
-    if(key===activePhaseKey&&shadingLayer){rasterLoading=false;scheduleNextFrame();return;}
+    if(key===activePhaseKey&&shadingLayer){const current=frameCache.get(key);if(current&&showIcons!==!!precipIconLayer)applyFrame(key,current);else if(showIcons&&!precipIconLayer){rasterLoading=true;queueRasterPaint();return;}rasterLoading=false;scheduleNextFrame();return;}
     const frame=frameCache.get(key);
     if(frame){rememberFrame(key,frame);applyFrame(key,frame);scheduleNextFrame();return;}
     rasterLoading=true;queueRasterPaint();
@@ -598,7 +604,8 @@
       if(obsolete()){next.clearLayers();return;}
       const iconLayer=L.layerGroup(),size=map.getSize();let spacing=72;
       while(Math.ceil(size.x/spacing)*Math.ceil(size.y/spacing)>80)spacing+=8;
-      if(showIcons&&detailZoom>=PRECIP_DETAIL_MIN_ZOOM)for(let y=spacing/2;y<size.y;y+=spacing)for(let x=spacing/2;x<size.x;x+=spacing){
+      // Prepare bounded symbols with each frame so the Icons switch never rebuilds its shading.
+      if(detailZoom>=PRECIP_DETAIL_MIN_ZOOM)for(let y=spacing/2;y<size.y;y+=spacing)for(let x=spacing/2;x<size.x;x+=spacing){
         const p=map.containerPointToLatLng([x,y]),result=diagnose(p.lat,p.lng);if(!result)continue;
         L.marker([p.lat,p.lng],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html:`<span role="img" aria-label="${result.phase.label}">${precipitationIconSvg(result.phase.key)}</span>`,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(iconLayer);
       }
@@ -708,10 +715,12 @@
   $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showIcons;persistPreferences()}
   $: if(prefsReady){unitSystem;refreshUnitDependentUi()}
 
-  function handleMapNavigation(){precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
+  let lastNavigationKey='';
+  function handleMapNavigation(){const size=map.getSize(),key=JSON.stringify([currentBounds(),Number(map.getZoom()),size.x,size.y]);if(key===lastNavigationKey)return;lastNavigationKey=key;precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
   function toggleEnabled(){
+    lastNavigationKey='';
     if(enabled){register(config.name,'high');void renderStorms();refreshViewport();return}
-    release(config.name,'high');generation++;refreshEpoch++;pendingProfiles.clear();viewportLoading=false;refreshQueued=false;
+    release(config.name,'high');for(const abort of forecastRequests)abort.abort();forecastRequests.clear();generation++;refreshEpoch++;pendingProfiles.clear();viewportLoading=false;refreshQueued=false;
     if(moveTimer){clearTimeout(moveTimer);moveTimer=null}clearContours();clearShading();clearStorms();clearPointState(true);
   }
   onMount(()=>{loadPreferences();if(!enabled)release(config.name,'high');freshnessTimer=setInterval(checkAutomaticRefresh,30_000);document.addEventListener('visibilitychange',checkAutomaticRefresh);window.addEventListener('online',checkAutomaticRefresh);map.on('moveend',handleMapNavigation);map.on('zoomend',handleMapNavigation);try{timestampListener=store.on('timestamp',()=>{if(enabled&&cache.length)renderFromCache();else void renderStorms();if(enabled)updatePersistentClickLabel()})}catch{}void renderStorms();refreshViewport()})
