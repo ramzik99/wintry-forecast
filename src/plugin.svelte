@@ -49,7 +49,12 @@
     <div class="prepare-map-controls">
       {#if preparingMap}<button class="refresh-button" type="button" on:click={cancelMapPreparation}>Cancel preparation</button>
       {:else}<button class="refresh-button" type="button" disabled={!enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading} on:click={prepareMapForecast}>Prepare map forecast</button>{/if}
-      <small>{prepareMessage || 'Current area · all available shading and type-icon times'}</small>
+      <div class="prepare-progress">
+        {#if prepareTotal > 0}
+          <div class="prepare-ring" class:paused={!preparingMap && preparePercent < 100} role="progressbar" aria-label="Current map forecast prepared" aria-valuemin="0" aria-valuemax="100" aria-valuenow={preparePercent} aria-valuetext={`${preparePercent}% · ${prepareCompleted} of ${prepareTotal} times prepared`} style={`--progress: ${preparePercent}%`}><span>{preparePercent}%</span></div>
+        {/if}
+        <small>{prepareMessage || 'Current area · all available shading and type-icon times'}</small>
+      </div>
     </div>
     <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading} on:click={refreshForecast}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
   </div>
@@ -162,6 +167,8 @@
   const preparedMapCache=new PreparedMapCache<StoredFrame>();
   const preparedKeys=new Set<string>();
   let preparingMap=false,prepareMessage='',prepareGeneration=0,preparedReadKey='';
+  let prepareCompleted=0,prepareTotal=0;
+  $: preparePercent=prepareTotal ? Math.min(100,Math.floor(prepareCompleted/prepareTotal*100)) : 0;
   const frameCache=new Map<string,RasterFrame>();
   const stormFrames=new Map<string,{layer:any;status:string;fetchedAt:number}>();
   const FRAME_PIXEL_BUDGET=(map.getSize().x<600?48:96)*1024*1024;
@@ -517,7 +524,7 @@
   }
   function rasterZoom(){const b=currentBounds();return viewportRasterZoom(map.getSize().x,b.west,b.east,map.getZoom());}
   function cancelMapPreparation(){prepareGeneration++;preparingMap=false;prepareMessage=`Stopped · ${preparedKeys.size} times prepared`;}
-  function resetMapPreparation(){cancelMapPreparation();preparedKeys.clear();preparedReadKey='';prepareMessage='';}
+  function resetMapPreparation(){cancelMapPreparation();preparedKeys.clear();preparedReadKey='';prepareMessage='';prepareCompleted=0;prepareTotal=0;}
   function restorePreparedFrame(record:StoredFrame):RasterFrame{
     const shading=L.layerGroup(),icons=L.layerGroup(),geography=L.layerGroup();
     const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
@@ -535,7 +542,7 @@
     const seen=new Set<string>(),times=[...new Set(points.flatMap(p=>p.times))].filter(t=>t>=first&&t<=end).sort((a,b)=>a-b).filter(t=>{const key=phaseFrameKey(t);if(seen.has(key))return false;seen.add(key);return true;});
     const reference=getStoreTimestamp(),scene=phaseFrameKey(reference),my=++prepareGeneration;
     const current=()=>my===prepareGeneration&&enabled&&!destroyed&&scene===phaseFrameKey(reference);
-    const started=Date.now();preparingMap=true;preparedKeys.clear();prepareMessage=`Preparing 0 / ${times.length} times…`;
+    const started=Date.now();preparingMap=true;preparedKeys.clear();prepareCompleted=0;prepareTotal=times.length;prepareMessage=`Preparing 0 / ${times.length} times…`;
     if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}rasterEpoch++;
     try{
       await preparedMapCache.clear();
@@ -546,7 +553,7 @@
         if(!frame){await new Promise(resolve=>setTimeout(resolve,150));continue;}
         const key=phaseFrameKey(times[i]);await preparedMapCache.put(key,frame.record);
         if(!current())break;
-        preparedKeys.add(key);i++;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
+        preparedKeys.add(key);i++;prepareCompleted=i;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
         prepareMessage=`Preparing ${i} / ${times.length} times${i>1&&minutes>0?` · about ${minutes} min left`:'…'}`;
         await new Promise(resolve=>setTimeout(resolve,0));
       }
@@ -816,6 +823,10 @@
   .layer-controls{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls label{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls input{accent-color:#67d7ff;margin:0;width:15px;height:15px}
   .zoom-hint{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls label.unavailable{opacity:.45;cursor:not-allowed}.layer-controls label.unavailable input{cursor:not-allowed}
   .prepare-map-controls{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls small{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls .refresh-button{min-height:34px}
+  .prepare-progress{display:flex;align-items:center;gap:10px;min-width:0}
+  .prepare-ring{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress),#324857 0)}
+  .prepare-ring span{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+  .prepare-ring.paused{opacity:.7}
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
   .shade-types{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 3px;margin-top:5px;font-size:9px;color:#d7e3e9}.shade-types span{display:flex;align-items:center;gap:4px;white-space:nowrap}.shade-types i{display:inline-block;flex:none;width:8px;height:8px;border-radius:1px}
 
