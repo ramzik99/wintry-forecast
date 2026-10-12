@@ -44,17 +44,17 @@
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
     {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
-      <div class="status-pill" role="status" aria-live="polite"><span class="status-dot"></span>{probeLoading ? 'Reading point…' : 'Updating…'}</div>
+      <div class="status-pill" role="status">
+        {#if viewportLoading || terrainLoading || stormLoading || rasterLoading}
+          <div class="prepare-ring" role="progressbar" aria-label="Map layer loading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={layerLoadPercent} aria-valuetext={`${layerLoadPercent}% of layer loading stages processed`} style={`--progress: ${layerLoadPercent}%`}><span>{layerLoadPercent}%</span></div>
+          <span>Updating…<small class="loading-stage">{viewportLoading ? 'Forecast data' : terrainLoading ? 'Terrain detail' : rasterLoading ? 'Shading and type icons' : 'Lightning icons'}</small></span>
+        {:else}<span class="status-dot"></span>Reading point…{/if}
+      </div>
     {/if}
     <div class="prepare-map-controls">
       {#if preparingMap}<button class="refresh-button" type="button" on:click={cancelMapPreparation}>Cancel preparation</button>
       {:else}<button class="refresh-button" type="button" disabled={!enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading} on:click={prepareMapForecast}>Prepare map forecast</button>{/if}
-      <div class="prepare-progress">
-        {#if prepareTotal > 0}
-          <div class="prepare-ring" class:paused={!preparingMap && preparePercent < 100} role="progressbar" aria-label="Current map forecast prepared" aria-valuemin="0" aria-valuemax="100" aria-valuenow={preparePercent} aria-valuetext={`${preparePercent}% · ${prepareCompleted} of ${prepareTotal} times prepared`} style={`--progress: ${preparePercent}%`}><span>{preparePercent}%</span></div>
-        {/if}
-        <small>{prepareMessage || 'Current area · all available shading and type-icon times'}</small>
-      </div>
+      <small>{prepareMessage || 'Current area · all available shading and type-icon times'}</small>
     </div>
     <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading} on:click={refreshForecast}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
   </div>
@@ -167,8 +167,14 @@
   const preparedMapCache=new PreparedMapCache<StoredFrame>();
   const preparedKeys=new Set<string>();
   let preparingMap=false,prepareMessage='',prepareGeneration=0,preparedReadKey='';
-  let prepareCompleted=0,prepareTotal=0;
-  $: preparePercent=prepareTotal ? Math.min(100,Math.floor(prepareCompleted/prepareTotal*100)) : 0;
+  let weatherLoadProgress=0,terrainLoadProgress=0,rasterLoadProgress=0,stormLoadProgress=0;
+  // Stage-weighted work progress, not a download-byte or forecast-accuracy percentage.
+  // Cached and synchronous contour work completes immediately; running jobs stay below 100%.
+  $: layerLoadPercent=Math.max(0,Math.min(99,Math.floor(100*(
+    .35*(viewportLoading?weatherLoadProgress:1)+
+    (precipDetailAvailable&&(showShading||showIcons) ? .15*(terrainLoading?terrainLoadProgress:1)+.4*(rasterLoading?rasterLoadProgress:1) : 0)+
+    (precipDetailAvailable&&showIcons ? .1*(stormLoading?stormLoadProgress:1) : 0)
+  )/(.35+(precipDetailAvailable&&(showShading||showIcons)?.55:0)+(precipDetailAvailable&&showIcons?.1:0)))));
   const frameCache=new Map<string,RasterFrame>();
   const stormFrames=new Map<string,{layer:any;status:string;fetchedAt:number}>();
   const FRAME_PIXEL_BUDGET=(map.getSize().x<600?48:96)*1024*1024;
@@ -271,10 +277,10 @@
   async function refreshViewport(){
     if(!enabled||destroyed||(!showContours&&(!precipDetailAvailable||(!showShading&&!showIcons))))return;
     if(viewportLoading){refreshQueued=true;return}
-    refreshQueued=false;const my=++generation;viewportLoading=true;
+    refreshQueued=false;const my=++generation;weatherLoadProgress=0;viewportLoading=true;
     const{points,rows,cols}=buildViewportPoints();
     const progressive:(CachedPoint|null)[][]=Array.from({length:rows},()=>Array(cols).fill(null));
-    let completed=0,paintedAt=0;
+    let completed=0,settled=0,paintedAt=0;
     try{
       const results=await mapLimit(points,MAX_CONCURRENT,async p=>{
         const result=my===generation&&enabled&&!destroyed?await loadPoint(p.lat,p.lon,CONTOUR_STEP_H):null;
@@ -292,6 +298,7 @@
           // One early preview, then the complete frame: repeated partial redraws waste CPU.
           if(completed>=12&&paintedAt===0){cache=progressive;weatherRevision++;frameCache.clear();paintedAt=Date.now();renderFromCache();}
         }
+        if(my===generation)weatherLoadProgress=++settled/points.length;
         return {...p,result};
       });
       if(my!==generation||!enabled||destroyed)return;
@@ -524,7 +531,7 @@
   }
   function rasterZoom(){const b=currentBounds();return viewportRasterZoom(map.getSize().x,b.west,b.east,map.getZoom());}
   function cancelMapPreparation(){prepareGeneration++;preparingMap=false;prepareMessage=`Stopped · ${preparedKeys.size} times prepared`;}
-  function resetMapPreparation(){cancelMapPreparation();preparedKeys.clear();preparedReadKey='';prepareMessage='';prepareCompleted=0;prepareTotal=0;}
+  function resetMapPreparation(){cancelMapPreparation();preparedKeys.clear();preparedReadKey='';prepareMessage='';}
   function restorePreparedFrame(record:StoredFrame):RasterFrame{
     const shading=L.layerGroup(),icons=L.layerGroup(),geography=L.layerGroup();
     const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
@@ -542,7 +549,7 @@
     const seen=new Set<string>(),times=[...new Set(points.flatMap(p=>p.times))].filter(t=>t>=first&&t<=end).sort((a,b)=>a-b).filter(t=>{const key=phaseFrameKey(t);if(seen.has(key))return false;seen.add(key);return true;});
     const reference=getStoreTimestamp(),scene=phaseFrameKey(reference),my=++prepareGeneration;
     const current=()=>my===prepareGeneration&&enabled&&!destroyed&&scene===phaseFrameKey(reference);
-    const started=Date.now();preparingMap=true;preparedKeys.clear();prepareCompleted=0;prepareTotal=times.length;prepareMessage=`Preparing 0 / ${times.length} times…`;
+    const started=Date.now();preparingMap=true;preparedKeys.clear();prepareMessage=`Preparing 0 / ${times.length} times…`;
     if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}rasterEpoch++;
     try{
       await preparedMapCache.clear();
@@ -553,7 +560,7 @@
         if(!frame){await new Promise(resolve=>setTimeout(resolve,150));continue;}
         const key=phaseFrameKey(times[i]);await preparedMapCache.put(key,frame.record);
         if(!current())break;
-        preparedKeys.add(key);i++;prepareCompleted=i;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
+        preparedKeys.add(key);i++;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
         prepareMessage=`Preparing ${i} / ${times.length} times${i>1&&minutes>0?` · about ${minutes} min left`:'…'}`;
         await new Promise(resolve=>setTimeout(resolve,0));
       }
@@ -602,13 +609,13 @@
     rasterTarget=target;
     const b=currentBounds(),z=rasterZoom(),terrainKey=[z,b.south,b.north,b.west,b.east].join(':');
     if(terrainKey!==terrainJobKey){
-      terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoading=true;terrainDetailStatus='';
-      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,()=>{terrainRevision++;frameCache.clear();queueRasterPaint()}).then(()=>{
+      terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoadProgress=0;terrainLoading=true;terrainDetailStatus='';
+      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;terrainRevision++;frameCache.clear();queueRasterPaint()}).then(()=>{
         if(epoch!==terrainGeneration||destroyed||!enabled)return;terrainLoading=false;queueRasterPaint();
       });
     }
     const key=phaseFrameKey(target);
-    if(key!==pendingPhaseKey){rasterEpoch++;pendingPhaseKey=key;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}}
+    if(key!==pendingPhaseKey){rasterLoadProgress=0;rasterEpoch++;pendingPhaseKey=key;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}}
     if(key===activePhaseKey&&shadingLayer){const current=frameCache.get(key);if(current&&showIcons!==!!precipIconLayer)applyFrame(key,current);else if(showIcons&&!precipIconLayer){rasterLoading=true;queueRasterPaint();return;}rasterLoading=false;scheduleNextFrame();return;}
     const frame=frameCache.get(key);
     if(frame){rememberFrame(key,frame);applyFrame(key,frame);scheduleNextFrame();return;}
@@ -629,6 +636,7 @@
     if(background&&frameCache.has(key)){const cached=frameCache.get(key)!;if(preparation)await cached.geographyPromise;return cached;}
     const epoch=background?rasterEpoch:++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup(),geographyMasks:any[]=[];
     const preparationEpoch=prepareGeneration;
+    if(!background)rasterLoadProgress=0;
     const obsolete=()=>epoch!==rasterEpoch||destroyed||!enabled||(preparation&&preparationEpoch!==prepareGeneration)||(background&&!preparation&&mainKey!==phaseFrameKey(getStoreTimestamp()));
     const record:StoredFrame={tiles:[],symbols:[],geography:[],fallback:false,geographyError:'',bytes:0};
     const profiles=new Map<CachedPoint,ReturnType<typeof buildProfile>>(),amounts=new Map<CachedPoint,number|null>();
@@ -655,12 +663,13 @@
     try{
       if(showShading&&[...amounts.values()].some(value=>value!==null&&value>0)){
         const tiles=visibleRasterTiles(b,z),centre=map.getCenter();tiles.sort((a,c)=>{const x=tileLocation(a.x+.5,a.y+.5,z),y=tileLocation(c.x+.5,c.y+.5,z);return(x.lat-centre.lat)**2+(x.lon-centre.lng)**2-((y.lat-centre.lat)**2+(y.lon-centre.lng)**2)});
+        let paintedTiles=0;
         for(const tile of tiles){
           if(obsolete()){next.clearLayers();return;}
           const canvas=document.createElement('canvas');canvas.width=RASTER_SAMPLES;canvas.height=RASTER_SAMPLES;
           const ctx=canvas.getContext('2d');if(!ctx)continue;const image=ctx.createImageData(RASTER_SAMPLES,RASTER_SAMPLES);let wet=false;
           for(let y=0;y<RASTER_SAMPLES;y++){
-          if(y>0&&y%12===0){await new Promise(resolve=>setTimeout(resolve,0));if(obsolete()){next.clearLayers();return;}}
+          if(y>0&&y%12===0){if(!background)rasterLoadProgress=.9*(paintedTiles+y/RASTER_SAMPLES)/tiles.length;await new Promise(resolve=>setTimeout(resolve,0));if(obsolete()){next.clearLayers();return;}}
           for(let x=0;x<RASTER_SAMPLES;x++){
             const p=tileLocation(tile.x+(x+.5)/RASTER_SAMPLES,tile.y+(y+.5)/RASTER_SAMPLES,z);
             if(p.lat<b.south||p.lat>b.north||p.lon<b.west||p.lon>b.east)continue;
@@ -675,6 +684,7 @@
               const url=full.toDataURL('image/png');record.tiles.push({url,nw,se});
               geographyMasks.push({canvas:full,nw,se,tile});precipRasterLayer(L,url,nw,se,layerOrder?.BASE_MAP??400,PRECIP_PANE,gl=>nativeMap=gl).addTo(next);}
           }
+          paintedTiles++;if(!background)rasterLoadProgress=.9*paintedTiles/tiles.length;
           // Yield between small tiles so dragging and the forecast controls stay responsive.
           await new Promise(resolve=>setTimeout(resolve,0));
         }
@@ -690,6 +700,7 @@
         L.marker([p.lat,p.lng],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(iconLayer);
       }
       if(obsolete()){next.clearLayers();iconLayer.clearLayers();return;}
+      if(!background)rasterLoadProgress=1;
       record.fallback=fallback;record.bytes=geographyMasks.length*TILE_SIZE*TILE_SIZE*8+iconLayer.getLayers().length*4096;
       const frame:RasterFrame={shading:next,icons:iconLayer,geography:null,fallback,geographyError:'',bytes:record.bytes,record};
       if(preparation){await renderGeography(frame,key,geographyMasks,z,()=>!obsolete());if(obsolete()){next.clearLayers();iconLayer.clearLayers();return;}return frame;}
@@ -712,7 +723,7 @@
     const saved=stormFrames.get(key);
     if(saved&&Date.now()-saved.fetchedAt<15*60_000){clearStorms();stormKey=key;stormLayer=saved.layer.addTo(map);stormStatus=saved.status;stormFrames.delete(key);stormFrames.set(key,saved);return;}
     clearStorms();stormKey=key;const epoch=stormEpoch,abort=stormAbort=new AbortController();
-    stormLoading=true;stormStatus='⚡ Forecast lightning';
+    stormLoadProgress=0;stormLoading=true;stormStatus='⚡ Forecast lightning';
     const tiles=new Map<string,Promise<any>>();
     const deadline=setTimeout(()=>{abort.abort();if(epoch===stormEpoch){stormKey='';stormStatus='⚡ ECMWF lightning unavailable';stormLoading=false}},12000);
     try{
@@ -720,11 +731,12 @@
       if(epoch!==stormEpoch||abort.signal.aborted)return;
       const sample:any=await new Promise(resolve=>(stormInterpolator??=new TileLayerInterpolator()).createFun(resolve));
       const points=metricGrid(b,stormSpacing(zoom,(b.south+b.north)/2),80,false,Math.SQRT2).points.map(cell=>stormSamplePoint(cell.bounds));
-      const next=L.layerGroup();let known=0,count=0;
+      const next=L.layerGroup();let known=0,count=0,processed=0;
       const mapLibreZoom=(map as any).maplibreMap?.getZoom?.()??zoom-1;
       const dataZoom=getDataZoom(params,lightningTileZoomIndex(mapLibreZoom)),scale=2**dataZoom;
       await mapLimit(points,6,async p=>{
         if(epoch!==stormEpoch||abort.signal.aborted)return;
+        try{
         // The interpolator waits for existing tiles; start each distinct thunder tile first.
         const phi=p.lat*Math.PI/180,lon=wrappedLongitude(p.lon);
         const url=applyUrlTemplate(params.fullPath,{z:dataZoom,x:Math.floor((lon+180)/360*scale),y:Math.floor((1-Math.log(Math.tan(phi)+1/Math.cos(phi))/Math.PI)/2*scale)});
@@ -737,6 +749,7 @@
         count++;
         L.marker([p.lat,p.lon],{interactive:false,keyboard:false,zIndexOffset:1200,
           icon:L.divIcon({className:'wintry-storm-symbol',html:'<span aria-label="ECMWF forecast lightning">⚡</span>',iconSize:[24,28],iconAnchor:[12,14]})}).addTo(next);
+        }finally{if(epoch===stormEpoch&&!abort.signal.aborted)stormLoadProgress=++processed/points.length;}
       });
       if(epoch!==stormEpoch||abort.signal.aborted)return;
       next.addTo(map);stormLayer=next;
@@ -823,10 +836,9 @@
   .layer-controls{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls label{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls input{accent-color:#67d7ff;margin:0;width:15px;height:15px}
   .zoom-hint{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls label.unavailable{opacity:.45;cursor:not-allowed}.layer-controls label.unavailable input{cursor:not-allowed}
   .prepare-map-controls{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls small{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls .refresh-button{min-height:34px}
-  .prepare-progress{display:flex;align-items:center;gap:10px;min-width:0}
   .prepare-ring{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress),#324857 0)}
   .prepare-ring span{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
-  .prepare-ring.paused{opacity:.7}
+  .loading-stage{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
   .shade-types{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 3px;margin-top:5px;font-size:9px;color:#d7e3e9}.shade-types span{display:flex;align-items:center;gap:4px;white-space:nowrap}.shade-types i{display:inline-block;flex:none;width:8px;height:8px;border-radius:1px}
 
