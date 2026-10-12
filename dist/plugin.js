@@ -1,6 +1,6 @@
 const __pluginConfig =  {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.0.6",
+  "version": "1000.0.7",
   "icon": "❄️",
   "title": "Wintry forecast",
   "description": "Concise terrain-aware winter forecast: type, terrain, snowline, precipitation, estimated new snow and timing first; a clean forecast timeline and optional hover/touch sounding.",
@@ -10,8 +10,8 @@ const __pluginConfig =  {
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1791831578778,
-  "builtReadable": "2026-10-12T18:59:38.778Z"
+  "built": 1791832045954,
+  "builtReadable": "2026-10-12T19:07:25.954Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -1941,7 +1941,7 @@ class PlaceSearch extends SvelteComponent {
 
 const config = {
     name: 'windy-plugin-snowline-map-100m',
-    version: '1000.0.6'};
+    version: '1000.0.7'};
 
 const UNITS_STORAGE_KEY = 'wintry:units:v1';
 function loadUnitSystem() {
