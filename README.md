@@ -304,9 +304,9 @@ Mapzen Terrarium elevation tiles are decoded locally and interpolated across til
 Terrain endpoint: https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png . See [terrain attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md); credits are included in How it works. Weather samples still target 9 km locally and use bounded overview sampling; this preview does not download every native ECMWF cell globally. Forecast accuracy has not yet been validated against observations.
 
 
-### Clouds background and fixed shading strength
+### Selected Windy layer and fixed shading strength
 
-While enabled, Wintry selects and keeps Windy’s Clouds overlay; native Windy precipitation colours are replaced by the plugin shading. The original overlay is restored on disable or close. Cloud data and the base map are unchanged. All precipitation uses fixed 55% opacity; light/moderate/heavy intensity uses progressively darker tones within each type colour. Wet/dry edges fade by coverage. The opacity slider and its stored preference have been removed.
+Wintry keeps the selected Windy layer on activation, while running, and when disabled or closed. Its overlays can be used above any Windy layer; it does not force Clouds or change the background. All precipitation uses fixed 55% opacity; light/moderate/heavy intensity uses progressively darker tones within each type colour. Wet/dry edges fade by coverage. The opacity slider and its stored preference have been removed.
 
 Intensity tones and optional precipitation icons appear from Windy zoom 8. The same fixed 55% opacity applies at all enabled zoom levels. The Icons switch controls precipitation symbols and forecast lightning together.
 
