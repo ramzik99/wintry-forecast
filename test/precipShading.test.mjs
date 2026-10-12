@@ -9,7 +9,7 @@ test('exact intensity boundaries retain three shades with no dry or missing fill
   for(const p of [null,NaN,Infinity,-1,0])assert.equal(precipitationShade(p),null);
   for(const [p,name] of [[.01,'Light'],[.499,'Light'],[.5,'Moderate'],[2.999,'Moderate'],[3,'Heavy'],[50,'Heavy']])assert.equal(precipitationShade(p).label,name);
   assert.ok(precipitationShade(.1).tone>precipitationShade(1).tone&&precipitationShade(1).tone>precipitationShade(3).tone);
-  assert.equal(PRECIP_TYPE_COLOURS.rain,'#25b56a');assert.equal(PRECIP_TYPE_COLOURS.snow,'#287dd8');
+  assert.equal(PRECIP_TYPE_COLOURS.rain,'#0099b6');assert.equal(PRECIP_TYPE_COLOURS.snow,'#b2b2b2');
 });
 test('overview uses one tone until zoom 8 while preserving missing and dry gaps',()=>{
   assert.equal(precipitationShade(.1,7.99).tone,precipitationShade(10,7.99).tone);
