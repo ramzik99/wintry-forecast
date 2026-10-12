@@ -10,8 +10,8 @@ const __pluginConfig =  {
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1791831397569,
-  "builtReadable": "2026-10-12T18:56:37.569Z"
+  "built": 1791831578778,
+  "builtReadable": "2026-10-12T18:59:38.778Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -9345,9 +9345,9 @@ function create_else_block(ctx) {
 	let t19;
 	let placesearch;
 	let t20;
+	let t21;
 	let v21panel;
 	let updating_unitSystem;
-	let t21;
 	let t22;
 	let t23;
 	let t24;
@@ -9374,6 +9374,7 @@ function create_else_block(ctx) {
 	placesearch = new PlaceSearch({});
 	placesearch.$on("select", /*handlePlaceSelect*/ ctx[26]);
 	placesearch.$on("clear", /*handleSearchClear*/ ctx[27]);
+	let if_block6 = /*showContours*/ ctx[0] && create_if_block_6();
 
 	function v21panel_unitSystem_binding(value) {
 		/*v21panel_unitSystem_binding*/ ctx[43](value);
@@ -9387,7 +9388,6 @@ function create_else_block(ctx) {
 
 	v21panel = new V21Panel({ props: v21panel_props });
 	binding_callbacks.push(() => bind(v21panel, 'unitSystem', v21panel_unitSystem_binding));
-	let if_block6 = /*showContours*/ ctx[0] && create_if_block_6();
 	let if_block7 = /*refreshError*/ ctx[24] && create_if_block_5(ctx);
 	let if_block8 = /*enabled*/ ctx[3] && (/*viewportLoading*/ ctx[18] || /*probeLoading*/ ctx[19] || /*terrainLoading*/ ctx[8] || /*stormLoading*/ ctx[9] || /*rasterLoading*/ ctx[14]) && create_if_block_4(ctx);
 
@@ -9447,9 +9447,9 @@ function create_else_block(ctx) {
 			t19 = space();
 			create_component(placesearch.$$.fragment);
 			t20 = space();
-			create_component(v21panel.$$.fragment);
-			t21 = space();
 			if (if_block6) if_block6.c();
+			t21 = space();
+			create_component(v21panel.$$.fragment);
 			t22 = space();
 			if (if_block7) if_block7.c();
 			t23 = space();
@@ -9561,9 +9561,9 @@ function create_else_block(ctx) {
 			append(details, t19);
 			mount_component(placesearch, details, null);
 			append(details, t20);
-			mount_component(v21panel, details, null);
-			append(details, t21);
 			if (if_block6) if_block6.m(details, null);
+			append(div7, t21);
+			mount_component(v21panel, div7, null);
 			append(div7, t22);
 			if (if_block7) if_block7.m(div7, null);
 			append(div7, t23);
@@ -9724,17 +9724,6 @@ function create_else_block(ctx) {
 			? 'Change place · settings'
 			: 'Choose a place') + "")) set_data(t18, t18_value);
 
-			const v21panel_changes = {};
-			if (dirty[0] & /*activeRunTime*/ 8388608) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[23];
-
-			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 64) {
-				updating_unitSystem = true;
-				v21panel_changes.unitSystem = /*unitSystem*/ ctx[6];
-				add_flush_callback(() => updating_unitSystem = false);
-			}
-
-			v21panel.$set(v21panel_changes);
-
 			if (/*showContours*/ ctx[0]) {
 				if (if_block6) ; else {
 					if_block6 = create_if_block_6();
@@ -9745,6 +9734,17 @@ function create_else_block(ctx) {
 				if_block6.d(1);
 				if_block6 = null;
 			}
+
+			const v21panel_changes = {};
+			if (dirty[0] & /*activeRunTime*/ 8388608) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[23];
+
+			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 64) {
+				updating_unitSystem = true;
+				v21panel_changes.unitSystem = /*unitSystem*/ ctx[6];
+				add_flush_callback(() => updating_unitSystem = false);
+			}
+
+			v21panel.$set(v21panel_changes);
 
 			if (/*refreshError*/ ctx[24]) {
 				if (if_block7) {
@@ -9813,8 +9813,8 @@ function create_else_block(ctx) {
 			if (if_block4) if_block4.d();
 			if (if_block5) if_block5.d();
 			destroy_component(placesearch);
-			destroy_component(v21panel);
 			if (if_block6) if_block6.d();
+			destroy_component(v21panel);
 			if (if_block7) if_block7.d();
 			if (if_block8) if_block8.d();
 			if_block9.d();
@@ -10131,7 +10131,7 @@ function create_if_block_7(ctx) {
 	};
 }
 
-// (41:6) {#if showContours}
+// (40:6) {#if showContours}
 function create_if_block_6(ctx) {
 	let div;
 

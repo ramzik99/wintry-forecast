@@ -37,10 +37,10 @@
     <details class="panel-options">
       <summary>{clickedPoint ? 'Change place · settings' : 'Choose a place'}</summary>
       <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
-      <V21Panel bind:unitSystem {activeRunTime} />
       {#if showContours}<div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>{/if}
 
     </details>
+    <V21Panel bind:unitSystem {activeRunTime} />
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
 
     {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
