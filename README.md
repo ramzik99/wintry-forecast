@@ -319,3 +319,5 @@ Current phase palette: rain emerald green #25b56a; snow blue #287dd8; wet snow p
 ### Opaque precipitation with geographic layer ordering
 
 Native MapLibre image tiles now render at full opacity between weather and the geographic base-map bucket. Wet coverage still feathers wet/dry edges; dry or unknown cells are transparent. Map details render above the precipitation. This replaces the previous 55% overlay. Native geographic ordering must be visually verified at each map scale, especially where Windy switches to its outdoor raster map.
+
+For native-weather replacement, valid wet pixels are fully opaque; edge coverage fading is disabled to prevent underlying native phase colours bleeding through. Raster tiles use 96 samples per axis for finer geographic boundaries. Dry and missing pixels remain transparent.

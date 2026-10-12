@@ -1,7 +1,7 @@
 import type { ProfilePoint } from './snowLevel';
 
 export type Weighted<T> = { value:T; weight:number };
-export const TILE_SIZE=256, RASTER_SAMPLES=64;
+export const TILE_SIZE=256, RASTER_SAMPLES=96;
 /** Infer physical Web-Mercator zoom from viewport geometry, independent of wrapper zoom conventions. */
 export function viewportRasterZoom(width:number,west:number,east:number,fallback:number){
   const span=east-west;
