@@ -155,6 +155,7 @@
   const PRECIP_PANE='wintry-precip-shading';
   const GEOGRAPHY_ID=`wintry-geography-${Date.now()}`;
   let geographyUrl='';
+  let nativeMap:any=null;
   let enabled=true, panelHidden=false, infoOpen=false, chartOpen=false, forecastTab:'graph'|'sounding'='graph', viewportLoading=false, refreshQueued=false, probeLoading=false, unitSystem:UnitSystem='metric', prefsReady=false;
   let cache:(CachedPoint|null)[][]=[], contourLayer:any=null, clickLayer:any=null, clickedPoint:CachedPoint|null=null, clickedLatLon:[number,number]|null=null, clickedMapElevationM:number|null=null, clickedPlaceName:string|null=null, pointSource:PointSource|null=null, clickedNextEventTime:number|null=null;
   let moveTimer:ReturnType<typeof setTimeout>|null=null, generation=0, clickGeneration=0, timestampListener:number|null=null, activeRunTime:number|null=null, renderedUnitSystem:UnitSystem|null=null;
@@ -290,9 +291,9 @@
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null}
   function clearShading(){clearGeography();terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
-  function clearGeography(){const gl=(map as any).maplibreMap;if(gl)try{if(gl.getLayer(GEOGRAPHY_ID))gl.removeLayer(GEOGRAPHY_ID);if(gl.getSource(GEOGRAPHY_ID))gl.removeSource(GEOGRAPHY_ID)}catch{}geographyUrl=''}
+  function clearGeography(){const gl=(map as any).maplibreMap??nativeMap;if(gl)try{if(gl.getLayer(GEOGRAPHY_ID))gl.removeLayer(GEOGRAPHY_ID);if(gl.getSource(GEOGRAPHY_ID))gl.removeSource(GEOGRAPHY_ID)}catch{}geographyUrl=''}
   function renderGeography(){
-    const gl=(map as any).maplibreMap;if(!showShading||Number(map.getZoom())<12||!gl){clearGeography();return;}
+    const gl=(map as any).maplibreMap??nativeMap;if(!showShading||Number(map.getZoom())<12||!gl){clearGeography();return;}
     try{
       const tiles=getMapTiles(),kind=String(store.get('map')??document.body.dataset.map??'sznmap');
       const url=kind==='sat'?tiles.satLocal:tiles[kind as keyof typeof tiles]??tiles.sznmap;
@@ -522,7 +523,7 @@
           if(wet){
             ctx.putImageData(image,0,0);const full=document.createElement('canvas');full.width=TILE_SIZE;full.height=TILE_SIZE;const fc=full.getContext('2d');
             if(fc){fc.imageSmoothingEnabled=false;fc.drawImage(canvas,0,0,TILE_SIZE,TILE_SIZE);const nw=tileLocation(tile.x,tile.y,z),se=tileLocation(tile.x+1,tile.y+1,z);
-              precipRasterLayer(L,full.toDataURL('image/png'),nw,se,layerOrder?.BASE_MAP??400,PRECIP_PANE).addTo(next);}
+              precipRasterLayer(L,full.toDataURL('image/png'),nw,se,layerOrder?.BASE_MAP??400,PRECIP_PANE,gl=>nativeMap=gl).addTo(next);}
           }
           // Yield between small tiles so dragging and the forecast controls stay responsive.
           await new Promise(resolve=>setTimeout(resolve,0));

@@ -1,12 +1,13 @@
 let sequence=0;
 /** Put precipitation above weather, below Windy's geographic base map. */
-export function precipRasterLayer(L:any,url:string,nw:{lat:number;lon:number},se:{lat:number;lon:number},baseMapBucket:number,pane:string){
+export function precipRasterLayer(L:any,url:string,nw:{lat:number;lon:number},se:{lat:number;lon:number},baseMapBucket:number,pane:string,onNativeMap?:(gl:any)=>void){
   const id=`wintry-precip-${Date.now()}-${++sequence}`,layer=new L.Layer();
   let gl:any=null,fallback:any=null;
   layer.onAdd=function(host:any){
     gl=host.maplibreMap;
     if(gl?.addLayerToBucket){
       try{
+        onNativeMap?.(gl);
         gl.addSource(id,{type:'image',url,coordinates:[[nw.lon,nw.lat],[se.lon,nw.lat],[se.lon,se.lat],[nw.lon,se.lat]]});
         const spec={id,type:'raster',source:id,paint:{'raster-opacity':1,'raster-fade-duration':0,'raster-resampling':'nearest'}};
         if(host.addMapLibreOrderedLayerToBucket)host.addMapLibreOrderedLayerToBucket(spec,baseMapBucket-1);else gl.addLayerToBucket(spec,baseMapBucket-1);
