@@ -93,7 +93,7 @@
 
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { map, layerOrder } from '@windy/map';
+  import { map, layerOrder, getMapTiles } from '@windy/map';
   import store from '@windy/store';
   import { createFullRenderingParams, getDataZoom } from '@windy/renderUtils';
   import { TileLayerInterpolator } from '@windy/tileInterpolator';
@@ -153,6 +153,8 @@
   let terrainDetailStatus='', rasterEpoch=0, rasterTarget:number|null=null, rasterTimer:ReturnType<typeof setTimeout>|null=null;
   let terrainGeneration=0, terrainJobKey='';
   const PRECIP_PANE='wintry-precip-shading';
+  const GEOGRAPHY_ID=`wintry-geography-${Date.now()}`;
+  let geographyUrl='';
   let enabled=true, panelHidden=false, infoOpen=false, chartOpen=false, forecastTab:'graph'|'sounding'='graph', viewportLoading=false, refreshQueued=false, probeLoading=false, unitSystem:UnitSystem='metric', prefsReady=false;
   let cache:(CachedPoint|null)[][]=[], contourLayer:any=null, clickLayer:any=null, clickedPoint:CachedPoint|null=null, clickedLatLon:[number,number]|null=null, clickedMapElevationM:number|null=null, clickedPlaceName:string|null=null, pointSource:PointSource|null=null, clickedNextEventTime:number|null=null;
   let moveTimer:ReturnType<typeof setTimeout>|null=null, generation=0, clickGeneration=0, timestampListener:number|null=null, activeRunTime:number|null=null, renderedUnitSystem:UnitSystem|null=null;
@@ -287,7 +289,20 @@
   }
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null}
-  function clearShading(){terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
+  function clearShading(){clearGeography();terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
+  function clearGeography(){const gl=(map as any).maplibreMap;if(gl)try{if(gl.getLayer(GEOGRAPHY_ID))gl.removeLayer(GEOGRAPHY_ID);if(gl.getSource(GEOGRAPHY_ID))gl.removeSource(GEOGRAPHY_ID)}catch{}geographyUrl=''}
+  function renderGeography(){
+    const gl=(map as any).maplibreMap;if(!showShading||Number(map.getZoom())<12||!gl){clearGeography();return;}
+    try{
+      const tiles=getMapTiles(),kind=String(store.get('map')??document.body.dataset.map??'sznmap');
+      const url=kind==='sat'?tiles.satLocal:tiles[kind as keyof typeof tiles]??tiles.sznmap;
+      if(!url)return;
+      if(geographyUrl!==url||!gl.getLayer(GEOGRAPHY_ID)){
+        clearGeography();gl.addSource(GEOGRAPHY_ID,{type:'raster',tiles:[url],tileSize:256,minzoom:0,maxzoom:22});
+        gl.addLayer({id:GEOGRAPHY_ID,type:'raster',source:GEOGRAPHY_ID,paint:{'raster-opacity':.45,'raster-fade-duration':0}});geographyUrl=url;
+      }else gl.moveLayer(GEOGRAPHY_ID);
+    }catch(error){clearGeography();console.warn('Wintry geographic foreground unavailable',error);}
+  }
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
   function clearPointState(closeChart=true){clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function statusColor(s:ProbeStatus){return s==='above'?'#46d9ff':s==='below'?'#ff9d3d':s==='near'?'#ffe45c':'#fff'}
@@ -515,6 +530,7 @@
       }
       if(epoch!==rasterEpoch||destroyed||!enabled){next.clearLayers();return;}
       next.addTo(map);const old=shadingLayer;shadingLayer=next;if(old)try{map.removeLayer(old)}catch{}
+      renderGeography();
       const iconLayer=L.layerGroup(),size=map.getSize();let spacing=72;
       while(Math.ceil(size.x/spacing)*Math.ceil(size.y/spacing)>80)spacing+=8;
       if(showIcons&&detailZoom>=PRECIP_DETAIL_MIN_ZOOM)for(let y=spacing/2;y<size.y;y+=spacing)for(let x=spacing/2;x<size.x;x+=spacing){
