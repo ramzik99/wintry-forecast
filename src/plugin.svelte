@@ -500,7 +500,7 @@
     for(const p of cache.flat())if(p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)){
       const i=forecastIntervalIndex(p.times,target);profiles.set(p,i<0?[]:buildProfile(p.forecast,i));amounts.set(p,mapPrecipAt(p,target));
     }
-    let fallback=false; const diagnostic={outside:0,profiles:0,amount:0,dry:0,terrain:0,phase:0,wet:0};
+    let fallback=false;
     function terrainLight(lat:number,lon:number){
       const step=360/(256*2**terrainTileZoom(z)),cos=Math.max(.1,Math.cos(lat*Math.PI/180));
       const n=terrainTiles.sample(lat+step*cos,lon,z),s=terrainTiles.sample(lat-step*cos,lon,z),e=terrainTiles.sample(lat,lon+step,z),w=terrainTiles.sample(lat,lon-step,z);
@@ -510,12 +510,12 @@
       return .65+.45*diffuse;
     }
     function diagnose(lat:number,lon:number){
-      const neighbours=stencil(lat,lon);if(!neighbours){diagnostic.outside++;return null;}if(neighbours.some(v=>!profiles.has(v.value))){diagnostic.profiles++;return null;}
-      const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount,detailZoom);if(!shade){amount===null?diagnostic.amount++:diagnostic.dry++;return null;}
+      const neighbours=stencil(lat,lon);if(!neighbours||neighbours.some(v=>!profiles.has(v.value)))return null;
+      const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount,detailZoom);if(!shade)return null;
       const detailed=terrainTiles.sample(lat,lon,z),terrain=detailed??weightedScalar(neighbours,p=>p.terrainM);
-      if(terrain===null){diagnostic.terrain++;return null;}if(detailed===null)fallback=true;
+      if(terrain===null)return null;if(detailed===null)fallback=true;
       const profile=blendedProfile(neighbours.map(v=>({value:profiles.get(v.value)!,weight:v.weight})),wetBulbFromDewpoint);
-      const phase=terrainPrecipitationType(profile,terrain);if(!phase){diagnostic.phase++;return null;}diagnostic.wet++;return{phase,shade,coverage:wetCoverage(neighbours,p=>amounts.get(p)??null)??0};
+      const phase=terrainPrecipitationType(profile,terrain);if(!phase)return null;return{phase,shade,coverage:wetCoverage(neighbours,p=>amounts.get(p)??null)??0};
     }
     try{
       if(showShading){
@@ -542,7 +542,6 @@
       }
       if(epoch!==rasterEpoch||destroyed||!enabled){next.clearLayers();return;}
       next.addTo(map);const old=shadingLayer;shadingLayer=next;if(old)try{map.removeLayer(old)}catch{}
-      console.info("Wintry render diagnostic",JSON.stringify({diagnostic,target:new Date(target).toISOString(),z,detailZoom,b,rows:cache.length,cols:cache[0]?.length,points:cache.flat().filter(Boolean).length,starts:[...new Set(cache.flat().filter(Boolean).map(p=>new Date(p!.times[0]).toISOString()))],ends:[...new Set(cache.flat().filter(Boolean).map(p=>new Date(p!.times.at(-1)!).toISOString()))]}));
       void renderGeography(geographyMasks,z);
       const iconLayer=L.layerGroup(),size=map.getSize();let spacing=72;
       while(Math.ceil(size.x/spacing)*Math.ceil(size.y/spacing)>80)spacing+=8;
