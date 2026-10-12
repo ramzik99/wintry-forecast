@@ -10,8 +10,8 @@ const __pluginConfig =  {
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1791830936004,
-  "builtReadable": "2026-10-12T18:48:56.004Z"
+  "built": 1791831397569,
+  "builtReadable": "2026-10-12T18:56:37.569Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -9348,7 +9348,6 @@ function create_else_block(ctx) {
 	let v21panel;
 	let updating_unitSystem;
 	let t21;
-	let details_open_value;
 	let t22;
 	let t23;
 	let t24;
@@ -9503,7 +9502,6 @@ function create_else_block(ctx) {
 			attr(div4, "class", "panel-head svelte-1infeca");
 			attr(summary, "class", "svelte-1infeca");
 			attr(details, "class", "panel-options svelte-1infeca");
-			details.open = details_open_value = !/*clickedPoint*/ ctx[20];
 			attr(small, "class", "svelte-1infeca");
 			attr(div5, "class", "prepare-map-controls svelte-1infeca");
 			attr(button1, "class", "refresh-button svelte-1infeca");
@@ -9746,10 +9744,6 @@ function create_else_block(ctx) {
 			} else if (if_block6) {
 				if_block6.d(1);
 				if_block6 = null;
-			}
-
-			if (!current || dirty[0] & /*clickedPoint*/ 1048576 && details_open_value !== (details_open_value = !/*clickedPoint*/ ctx[20])) {
-				details.open = details_open_value;
 			}
 
 			if (/*refreshError*/ ctx[24]) {
@@ -12922,7 +12916,9 @@ function instance$1($$self, $$props, $$invalidate) {
 			key = JSON.stringify([currentBounds(), Number(map.getZoom()), size.x, size.y]);
 
 		if (key === lastNavigationKey) return;
+		const wasPrepared = preparingMap || preparedKeys.size > 0;
 		resetMapPreparation();
+		if (wasPrepared) $$invalidate(13, prepareMessage = 'Map changed · prepare this area');
 		lastNavigationKey = key;
 		$$invalidate(7, precipDetailAvailable = Number(map.getZoom()) >= PRECIP_DETAIL_MIN_ZOOM);
 		if (!precipDetailAvailable) clearShading();
