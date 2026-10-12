@@ -19,7 +19,7 @@
     </div>
     </div>
     {#if showShading || showIcons}
-      {#if showShading}<label class="opacity-control"><span>Shading opacity <output>{shadingOpacity}%</output></span><input type="range" aria-label="Shading opacity" aria-valuetext={`${shadingOpacity}%`} min="0" max="100" step="5" bind:value={shadingOpacity} /></label><div class="shade-legend" aria-label="Precipitation shading intensity">
+      {#if showShading}<label class="opacity-control"><span>Shading opacity <output>{shadingOpacity}%</output></span><input type="range" aria-label="Shading opacity" aria-valuetext={`${shadingOpacity}%`} min="0" max="100" step="5" bind:value={shadingOpacity} on:keydown|stopPropagation /></label><div class="shade-legend" aria-label="Precipitation shading intensity">
         <span>Light &lt;0.5</span><span>Moderate 0.5–&lt;3</span><span>Heavy ≥3</span>
         <small>mm/3h · colour indicates precipitation type</small>
       </div>{/if}
