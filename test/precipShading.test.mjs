@@ -11,6 +11,12 @@ test('exact intensity boundaries retain three shades with no dry or missing fill
   assert.ok(precipitationShade(.1).tone>precipitationShade(1).tone&&precipitationShade(1).tone>precipitationShade(3).tone);
   assert.equal(PRECIP_TYPE_COLOURS.rain,'#35c76f');assert.equal(PRECIP_TYPE_COLOURS.snow,'#378bff');
 });
+test('overview uses one tone until zoom 8 while preserving missing and dry gaps',()=>{
+  assert.equal(precipitationShade(.1,7.99).tone,precipitationShade(10,7.99).tone);
+  assert.ok(precipitationShade(.1,8).tone>precipitationShade(10,8).tone);
+  assert.equal(precipitationShade(0,7),null);assert.equal(precipitationShade(null,8),null);
+});
+
 test('hatching excludes even light wet samples and all unknown samples',()=>{
   assert.equal(dryTerrainDifference(0,1500,1000),500);
   for(const p of [null,NaN,.001,.1,.5,3])assert.equal(dryTerrainDifference(p,1500,1000),null);

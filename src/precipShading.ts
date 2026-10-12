@@ -11,10 +11,12 @@ export const PRECIP_SHADES = [
   { label: 'Heavy', tone: -0.25 },
 ] as const;
 export const PRECIP_SHADING_OPACITY = 0.55;
+export const PRECIP_DETAIL_MIN_ZOOM = 8;
 
 /** Zero, missing and invalid precipitation never produce a wet overlay. */
-export function precipitationShade(mm3h: number | null) {
+export function precipitationShade(mm3h: number | null, zoom = Infinity) {
   if (mm3h === null || !Number.isFinite(mm3h) || mm3h <= 0) return null;
+  if (zoom < PRECIP_DETAIL_MIN_ZOOM) return PRECIP_SHADES[1];
   return PRECIP_SHADES[mm3h < 0.5 ? 0 : mm3h < 3 ? 1 : 2];
 }
 

@@ -22,6 +22,7 @@
       {#if showShading}<div class="shade-legend" aria-label="Precipitation shading intensity">
         <span>Light &lt;0.5</span><span>Moderate 0.5–&lt;3</span><span>Heavy ≥3</span>
         <small>mm/3h · colour indicates precipitation type</small>
+        <small>Intensity shades and icons appear from zoom 8</small>
       </div>{/if}
       <div class="shade-types" aria-label="Precipitation type colours">
         <span>{@html precipitationIconSvg('snow')}Snow</span>
@@ -104,7 +105,7 @@
   import V21Panel from './V21Panel.svelte';
   import SnowlineChart from './SnowlineChart.svelte';
   import { terrainHatchSegments } from './terrainHatching';
-  import { precipitationShade, dryTerrainDifference, PRECIP_TYPE_COLOURS, PRECIP_SHADING_OPACITY } from './precipShading';
+  import { precipitationShade, dryTerrainDifference, PRECIP_TYPE_COLOURS, PRECIP_SHADING_OPACITY, PRECIP_DETAIL_MIN_ZOOM } from './precipShading';
   import { precipitationIconSvg } from './precipIcons';
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
   import { weatherInterpolator, weightedScalar, wetCoverage, blendedProfile, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
@@ -466,7 +467,7 @@
   }
   async function paintShading(target:number){
     if(!enabled||(!showShading&&!showIcons)||destroyed||!cache.length)return;
-    const epoch=++rasterEpoch,b=currentBounds(),z=rasterZoom(),stencil=weatherInterpolator(cache),next=L.layerGroup();
+    const epoch=++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup();
     const profiles=new Map<CachedPoint,ReturnType<typeof buildProfile>>(),amounts=new Map<CachedPoint,number|null>();
     for(const p of cache.flat())if(p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)){
       const i=forecastIntervalIndex(p.times,target);profiles.set(p,i<0?[]:buildProfile(p.forecast,i));amounts.set(p,mapPrecipAt(p,target));
@@ -474,7 +475,7 @@
     let fallback=false;
     function diagnose(lat:number,lon:number){
       const neighbours=stencil(lat,lon);if(!neighbours||neighbours.some(v=>!profiles.has(v.value)))return null;
-      const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount);if(!shade)return null;
+      const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount,detailZoom);if(!shade)return null;
       const detailed=terrainTiles.sample(lat,lon,z),terrain=detailed??weightedScalar(neighbours,p=>p.terrainM);
       if(terrain===null)return null;if(detailed===null)fallback=true;
       const profile=blendedProfile(neighbours.map(v=>({value:profiles.get(v.value)!,weight:v.weight})),wetBulbFromDewpoint);
@@ -506,7 +507,7 @@
       next.addTo(map);const old=shadingLayer;shadingLayer=next;if(old)try{map.removeLayer(old)}catch{}
       const iconLayer=L.layerGroup(),size=map.getSize();let spacing=72;
       while(Math.ceil(size.x/spacing)*Math.ceil(size.y/spacing)>80)spacing+=8;
-      if(showIcons)for(let y=spacing/2;y<size.y;y+=spacing)for(let x=spacing/2;x<size.x;x+=spacing){
+      if(showIcons&&detailZoom>=PRECIP_DETAIL_MIN_ZOOM)for(let y=spacing/2;y<size.y;y+=spacing)for(let x=spacing/2;x<size.x;x+=spacing){
         const p=map.containerPointToLatLng([x,y]),result=diagnose(p.lat,p.lng);if(!result)continue;
         L.marker([p.lat,p.lng],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html:`<span role="img" aria-label="${result.phase.label}">${precipitationIconSvg(result.phase.key)}</span>`,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(iconLayer);
       }

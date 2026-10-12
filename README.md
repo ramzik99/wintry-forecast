@@ -307,3 +307,5 @@ Terrain endpoint: https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x
 ### Clouds background and fixed shading strength
 
 While enabled, Wintry selects and keeps Windy’s Clouds overlay; native Windy precipitation colours are replaced by the plugin shading. The original overlay is restored on disable or close. Cloud data and the base map are unchanged. All precipitation uses fixed 55% opacity; light/moderate/heavy intensity uses progressively darker tones within each type colour. Wet/dry edges fade by coverage. The opacity slider and its stored preference have been removed.
+
+Intensity tones and optional precipitation icons appear from Windy zoom 8. Wider views retain one consistent shade per precipitation type. The same fixed 55% opacity applies at all zoom levels. Forecast lightning retains its independent switch and zoom behaviour.
