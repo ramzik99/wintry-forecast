@@ -306,18 +306,12 @@ Terrain endpoint: https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x
 
 ### Selected Windy layer and fixed shading strength
 
-Wintry keeps the selected Windy layer on activation, while running, and when disabled or closed. Its overlays can be used above any Windy layer; it does not force Clouds or change the background. All precipitation uses fixed 55% opacity; light/moderate/heavy intensity uses progressively darker tones within each type colour. Wet/dry edges fade by coverage. The opacity slider and its stored preference have been removed.
+Wintry keeps the selected Windy layer. Valid wet diagnoses use fully opaque precipitation pixels; known dry and missing weather remain transparent. Light (<0.5), moderate (0.5–<3) and heavy (≥3 mm/3h) use three colour tones, with no opacity slider. DEM relief modulates the colours without revealing the underlying weather layer.
 
-Intensity tones and optional precipitation icons appear from Windy zoom 8. The same fixed 55% opacity applies at all enabled zoom levels. The Icons switch controls precipitation symbols and forecast lightning together.
+A separate geographic foreground draws cached map tiles at 45% opacity, clipped to the same wet-area mask. This retains roads, labels and terrain above the opaque colours while leaving dry areas unchanged. It uses Windy's geographic tile templates and an outdoor-map fallback. Up to four requests per render, shared pending requests, a 32-image cache and ten-second timeout bound loading. Failed tiles are reported. DOM image overlays are the verified live path; native MapLibre ordering is available where the host exposes it.
 
-Below zoom 8, both Shading and Icons controls are disabled and their overlays are removed. Zooming to 8 or closer re-enables both controls and restores their existing checked choices. Contours remains independent; forecast lightning follows the Icons switch and the same zoom threshold.
+Below zoom 8, Shading and Icons controls are disabled and their overlays removed. Zooming closer restores their checked choices. Contours remains independent. Icons combines precipitation symbols and raw ECMWF forecast lightning.
 
-The separate Storms control has been removed. Icons enables or hides both precipitation symbols and ECMWF forecast lightning; below zoom 8 neither is displayed or requested.
+Palette: rain emerald #25b56a; snow blue #287dd8; wet snow pink #f27fb8; mix orange #f4a033; ice pellets violet #8659d4; freezing rain red #ec414c. Shading, icons and charts share these hues.
 
-Current phase palette: rain emerald green #25b56a; snow blue #287dd8; wet snow pink #f27fb8; rain/snow mix orange #f4a033; ice pellets violet #8659d4; freezing rain red #ec414c. The same hues are used by map shading, icons, the forecast chart, and legends. Three intensity tones and fixed 55% map opacity are retained.
-
-### Opaque precipitation with geographic layer ordering
-
-Native MapLibre image tiles now render at full opacity between weather and the geographic base-map bucket. Wet coverage still feathers wet/dry edges; dry or unknown cells are transparent. Map details render above the precipitation. This replaces the previous 55% overlay. Native geographic ordering must be visually verified at each map scale, especially where Windy switches to its outdoor raster map.
-
-For native-weather replacement, valid wet pixels are fully opaque; edge coverage fading is disabled to prevent underlying native phase colours bleeding through. Raster tiles use 96 samples per axis for finer geographic boundaries. Dry and missing pixels remain transparent.
+Live Windy close-ups verified opaque wet colours and outdoor-map road/terrain visibility. Native city weather annotations still describe native Windy forecasts. Missing or unavailable forecast intervals remain transparent and may reveal native weather colours; past-time comparison coverage can vary as the forecast feed advances. Differences from native ECMWF output are not an accuracy validation. The public release remains unchanged pending screenshot review.

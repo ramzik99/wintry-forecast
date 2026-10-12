@@ -299,7 +299,7 @@
     if(!showShading||!precipDetailAvailable){clearGeography();return;}
     const epoch=++geographyEpoch,next=L.layerGroup();let failed=false;
     const tiles=typeof getMapTiles==='function'?getMapTiles():{},kind=String(store.get('map')??document.body.dataset.map??'sznmap');
-    const template=Number(map.getZoom())<=11?(tiles as any).graymap:(tiles as any)[kind]??(tiles as any).sznmap;
+    const template=Math.floor(Number(map.getZoom()))<=11?(tiles as any).graymap:(tiles as any)[kind]??(tiles as any).sznmap;
     const urlTemplate=template??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
     const pane=map.getPane(GEOGRAPHY_ID)||map.createPane(GEOGRAPHY_ID);pane.style.zIndex='395';pane.style.pointerEvents='none';
     await mapLimit(masks,4,async m=>{
