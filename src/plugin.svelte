@@ -154,7 +154,7 @@
   let terrainGeneration=0, terrainJobKey='';
   const PRECIP_PANE='wintry-precip-shading';
   const GEOGRAPHY_ID=`wintry-geography-${Date.now()}`;
-  let geographyUrl='';
+  let geographyUrl='',geographyLayer:any=null;
   let nativeMap:any=null;
   let enabled=true, panelHidden=false, infoOpen=false, chartOpen=false, forecastTab:'graph'|'sounding'='graph', viewportLoading=false, refreshQueued=false, probeLoading=false, unitSystem:UnitSystem='metric', prefsReady=false;
   let cache:(CachedPoint|null)[][]=[], contourLayer:any=null, clickLayer:any=null, clickedPoint:CachedPoint|null=null, clickedLatLon:[number,number]|null=null, clickedMapElevationM:number|null=null, clickedPlaceName:string|null=null, pointSource:PointSource|null=null, clickedNextEventTime:number|null=null;
@@ -291,17 +291,15 @@
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null}
   function clearShading(){clearGeography();terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
-  function clearGeography(){const gl=(map as any).maplibreMap??nativeMap;if(gl)try{if(gl.getLayer(GEOGRAPHY_ID))gl.removeLayer(GEOGRAPHY_ID);if(gl.getSource(GEOGRAPHY_ID))gl.removeSource(GEOGRAPHY_ID)}catch{}geographyUrl=''}
+  function clearGeography(){if(geographyLayer)try{map.removeLayer(geographyLayer)}catch{}geographyLayer=null;geographyUrl=''}
   function renderGeography(){
-    const gl=(map as any).maplibreMap??nativeMap;if(!showShading||Number(map.getZoom())<12||!gl){clearGeography();return;}
+    if(!showShading||Number(map.getZoom())<12){clearGeography();return;}
     try{
-      const tiles=getMapTiles(),kind=String(store.get('map')??document.body.dataset.map??'sznmap');
-      const url=kind==='sat'?tiles.satLocal:tiles[kind as keyof typeof tiles]??tiles.sznmap;
-      if(!url)return;
-      if(geographyUrl!==url||!gl.getLayer(GEOGRAPHY_ID)){
-        clearGeography();gl.addSource(GEOGRAPHY_ID,{type:'raster',tiles:[url],tileSize:256,minzoom:0,maxzoom:22});
-        gl.addLayer({id:GEOGRAPHY_ID,type:'raster',source:GEOGRAPHY_ID,paint:{'raster-opacity':.45,'raster-fade-duration':0}});geographyUrl=url;
-      }else gl.moveLayer(GEOGRAPHY_ID);
+      const tiles=typeof getMapTiles==='function'?getMapTiles():{},kind=String(store.get('map')??document.body.dataset.map??'sznmap');
+      const url=(tiles as any)[kind]??(tiles as any).sznmap??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
+      if(geographyUrl===url&&geographyLayer)return;
+      clearGeography();const pane=map.getPane(GEOGRAPHY_ID)||map.createPane(GEOGRAPHY_ID);pane.style.zIndex='395';pane.style.pointerEvents='none';
+      geographyLayer=L.tileLayer(url,{pane:GEOGRAPHY_ID,opacity:.45,tileSize:256,maxZoom:22,updateWhenIdle:true,keepBuffer:1,interactive:false}).addTo(map);geographyUrl=url;
     }catch(error){clearGeography();console.warn('Wintry geographic foreground unavailable',error);}
   }
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
