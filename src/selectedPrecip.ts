@@ -83,6 +83,9 @@ export async function loadSelectedPrecipFields(
       { lat, lon, step: 3, days, source: 'detail' } as any,
     );
     const out: Record<string, unknown> = {};
+    const rawRun=(response as any)?.data?.header?.refTime ?? (response as any)?.header?.refTime;
+    const run=typeof rawRun==='number'?(rawRun>1e12?rawRun:rawRun>1e9?rawRun*1000:null):typeof rawRun==='string'?Date.parse(rawRun):null;
+    if(run!==null&&Number.isFinite(run))out.__precipRunTime=run;
     collectPrecipFields(response as unknown, out);
     return out;
   } catch (error) {
@@ -91,7 +94,8 @@ export async function loadSelectedPrecipFields(
   }
 }
 
-export function alignSelectedPrecipFields(fields:Record<string,unknown>, targetTimes:number[]):Record<string,unknown>{
+export function alignSelectedPrecipFields(fields:Record<string,unknown>, targetTimes:number[], expectedRunTime:number|null=null):Record<string,unknown>{
+  if(expectedRunTime!==null&&typeof fields.__precipRunTime==='number'&&Math.abs(fields.__precipRunTime-expectedRunTime)>60_000)return {};
   if(Array.isArray(fields.__intervalTs)&&Array.isArray(fields.__intervalPrecipMm)){
     return alignPrecipIntervals(fields.__intervalTs as number[],fields.__intervalPrecipMm,targetTimes);
   }
