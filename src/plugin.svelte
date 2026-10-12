@@ -109,7 +109,7 @@
   import { precipitationIconSvg } from './precipIcons';
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
   import { weatherInterpolator, weightedScalar, wetCoverage, blendedProfile, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
-  import { TerrainTiles } from './terrainTiles';
+  import { TerrainTiles, terrainTileZoom } from './terrainTiles';
   import { precipRasterLayer } from './precipRasterLayer';
   import { buildProfile, wetBulbZeroHeight, wetBulbFromDewpoint } from './snowLevel';
   import { formatPrecipMm, precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
@@ -474,6 +474,14 @@
       const i=forecastIntervalIndex(p.times,target);profiles.set(p,i<0?[]:buildProfile(p.forecast,i));amounts.set(p,mapPrecipAt(p,target));
     }
     let fallback=false;
+    function terrainLight(lat:number,lon:number){
+      const step=360/(256*2**terrainTileZoom(z)),cos=Math.max(.1,Math.cos(lat*Math.PI/180));
+      const n=terrainTiles.sample(lat+step*cos,lon,z),s=terrainTiles.sample(lat-step*cos,lon,z),e=terrainTiles.sample(lat,lon+step,z),w=terrainTiles.sample(lat,lon-step,z);
+      if(n===null||s===null||e===null||w===null)return 1;
+      const distance=2*step*cos*111320,nx=-(e-w)/distance,ny=-(n-s)/distance;
+      const diffuse=Math.max(0,(-.5*nx+.5*ny+Math.SQRT1_2)/Math.hypot(nx,ny,1));
+      return .65+.45*diffuse;
+    }
     function diagnose(lat:number,lon:number){
       const neighbours=stencil(lat,lon);if(!neighbours||neighbours.some(v=>!profiles.has(v.value)))return null;
       const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount,detailZoom);if(!shade)return null;
@@ -493,7 +501,8 @@
             const p=tileLocation(tile.x+(x+.5)/RASTER_SAMPLES,tile.y+(y+.5)/RASTER_SAMPLES,z);
             if(p.lat<b.south||p.lat>b.north||p.lon<b.west||p.lon>b.east)continue;
             const result=diagnose(p.lat,p.lon);if(!result)continue;wet=true;const rgb=hexToRgb(PRECIP_TYPE_COLOURS[result.phase.key]).map(v=>Math.round(result.shade.tone>=0?v+(255-v)*result.shade.tone:v*(1+result.shade.tone))),i=(y*RASTER_SAMPLES+x)*4;
-            image.data[i]=rgb[0];image.data[i+1]=rgb[1];image.data[i+2]=rgb[2];image.data[i+3]=Math.round(PRECIP_SHADING_OPACITY*255);
+            const light=terrainLight(p.lat,p.lon);
+            image.data[i]=Math.min(255,Math.round(rgb[0]*light));image.data[i+1]=Math.min(255,Math.round(rgb[1]*light));image.data[i+2]=Math.min(255,Math.round(rgb[2]*light));image.data[i+3]=Math.round(PRECIP_SHADING_OPACITY*255);
           }
           if(wet){
             ctx.putImageData(image,0,0);const full=document.createElement('canvas');full.width=TILE_SIZE;full.height=TILE_SIZE;const fc=full.getContext('2d');
