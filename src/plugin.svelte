@@ -19,7 +19,7 @@
     </div>
     </div>
     {#if showShading || showIcons}
-      {#if showShading}<div class="shade-legend" aria-label="Precipitation shading intensity">
+      {#if showShading}<label class="opacity-control"><span>Shading opacity <output>{shadingOpacity}%</output></span><input type="range" aria-label="Shading opacity" aria-valuetext={`${shadingOpacity}%`} min="0" max="100" step="5" bind:value={shadingOpacity} /></label><div class="shade-legend" aria-label="Precipitation shading intensity">
         <span>Light &lt;0.5</span><span>Moderate 0.5–&lt;3</span><span>Heavy ≥3</span>
         <small>mm/3h · colour indicates precipitation type</small>
       </div>{/if}
@@ -142,6 +142,7 @@
   const FAVOURITES_STORAGE_KEY = 'snowline:favourites:v1', FAVOURITES_CHANGED_EVENT = 'wintry:favourites-changed', PREFS_STORAGE_KEY='wintry:prefs:v1';
 
   let showContours=true, showShading=true, showIcons=true, showThunder=true;
+  let shadingOpacity=100;
   let terrainLoading=false, stormLoading=false;
   let stormInterpolator:any=null;
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
@@ -495,7 +496,7 @@
           if(wet){
             ctx.putImageData(image,0,0);const full=document.createElement('canvas');full.width=TILE_SIZE;full.height=TILE_SIZE;const fc=full.getContext('2d');
             if(fc){fc.imageSmoothingEnabled=false;fc.drawImage(canvas,0,0,TILE_SIZE,TILE_SIZE);const nw=tileLocation(tile.x,tile.y,z),se=tileLocation(tile.x+1,tile.y+1,z);
-              L.imageOverlay(full.toDataURL('image/png'),[[se.lat,nw.lon],[nw.lat,se.lon]],{pane:PRECIP_PANE,interactive:false,opacity:1,className:'wintry-raster-tile'}).addTo(next);}
+              L.imageOverlay(full.toDataURL('image/png'),[[se.lat,nw.lon],[nw.lat,se.lon]],{pane:PRECIP_PANE,interactive:false,opacity:shadingOpacity/100,className:'wintry-raster-tile'}).addTo(next);}
           }
           // Yield between small tiles so dragging and the forecast controls stay responsive.
           await new Promise(resolve=>setTimeout(resolve,0));
@@ -602,10 +603,12 @@
     if(cache.length)renderFromCache();
     if((showContours||showShading||showIcons)&&!cache.length)void refreshViewport();
   }
-  function loadPreferences(){try{const p=JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY)||'{}');if(typeof p.enabled==='boolean')enabled=p.enabled;if(typeof p.showContours==='boolean')showContours=p.showContours;if(typeof p.showShading==='boolean')showShading=p.showShading;if(typeof p.showIcons==='boolean')showIcons=p.showIcons;if(typeof p.showThunder==='boolean')showThunder=p.showThunder;if(typeof p.panelHidden==='boolean')panelHidden=p.panelHidden;if(p.forecastTab==='graph'||p.forecastTab==='sounding')forecastTab=p.forecastTab}catch{}unitSystem=loadUnitSystem();prefsReady=true}
-  function persistPreferences(){if(!prefsReady)return;try{localStorage.setItem(PREFS_STORAGE_KEY,JSON.stringify({enabled,panelHidden,forecastTab,showContours,showShading,showIcons,showThunder}))}catch{}}
+  function applyShadingOpacity(){shadingLayer?.eachLayer((layer:any)=>layer.setOpacity?.(shadingOpacity/100))}
+  function loadPreferences(){try{const p=JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY)||'{}');if(typeof p.enabled==='boolean')enabled=p.enabled;if(typeof p.showContours==='boolean')showContours=p.showContours;if(typeof p.showShading==='boolean')showShading=p.showShading;if(typeof p.showIcons==='boolean')showIcons=p.showIcons;if(typeof p.showThunder==='boolean')showThunder=p.showThunder;if(typeof p.shadingOpacity==='number'&&Number.isFinite(p.shadingOpacity))shadingOpacity=Math.max(0,Math.min(100,p.shadingOpacity));if(typeof p.panelHidden==='boolean')panelHidden=p.panelHidden;if(p.forecastTab==='graph'||p.forecastTab==='sounding')forecastTab=p.forecastTab}catch{}unitSystem=loadUnitSystem();prefsReady=true}
+  function persistPreferences(){if(!prefsReady)return;try{localStorage.setItem(PREFS_STORAGE_KEY,JSON.stringify({enabled,panelHidden,forecastTab,showContours,showShading,showIcons,showThunder,shadingOpacity}))}catch{}}
   function refreshUnitDependentUi(){if(renderedUnitSystem===unitSystem)return;renderedUnitSystem=unitSystem;if(!enabled)return;if(cache.length&&!viewportLoading)renderFromCache();updatePersistentClickLabel()}
-  $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showIcons;showThunder;persistPreferences()}
+  $: if(prefsReady){enabled;panelHidden;forecastTab;showContours;showShading;showIcons;showThunder;shadingOpacity;persistPreferences()}
+  $: if(prefsReady){shadingOpacity;applyShadingOpacity()}
   $: if(prefsReady){unitSystem;refreshUnitDependentUi()}
 
   function handleMapNavigation(){if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
@@ -627,6 +630,7 @@
   :global(.wintry-precip-icon svg){width:25px;height:25px;padding:1.5px}
   .layer-controls{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls label{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls input{accent-color:#67d7ff;margin:0;width:15px;height:15px}
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
+  .opacity-control{display:block;margin-top:9px;font-size:11px;color:#c5d5df}.opacity-control>span{display:flex;justify-content:space-between;gap:8px}.opacity-control output{font-variant-numeric:tabular-nums;color:#dff5ff}.opacity-control input{display:block;width:100%;margin:5px 0 0;accent-color:#67d7ff;cursor:pointer}.opacity-control input:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}
   .shade-types{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 3px;margin-top:5px;font-size:9px;color:#d7e3e9}.shade-types span{display:flex;align-items:center;gap:4px;white-space:nowrap}.shade-types i{display:inline-block;flex:none;width:8px;height:8px;border-radius:1px}
 
   :global(#plugin-windy-plugin-snowline-map-100m){height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible!important}
