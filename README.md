@@ -313,3 +313,5 @@ Intensity tones and optional precipitation icons appear from Windy zoom 8. The s
 Below zoom 8, both Shading and Icons controls are disabled and their overlays are removed. Zooming to 8 or closer re-enables both controls and restores their existing checked choices. Contours remains independent; forecast lightning follows the Icons switch and the same zoom threshold.
 
 The separate Storms control has been removed. Icons enables or hides both precipitation symbols and ECMWF forecast lightning; below zoom 8 neither is displayed or requested.
+
+Current phase palette: rain emerald green #25b56a; snow blue #287dd8; wet snow pink #f27fb8; rain/snow mix orange #f4a033; ice pellets violet #8659d4; freezing rain red #ec414c. The same hues are used by map shading, icons, the forecast chart, and legends. Three intensity tones and fixed 55% map opacity are retained.
