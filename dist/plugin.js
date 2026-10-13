@@ -1,6 +1,6 @@
 const __pluginConfig =  {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.0.8",
+  "version": "1000.0.9",
   "icon": "❄️",
   "title": "Wintry forecast",
   "description": "Concise terrain-aware winter forecast: type, terrain, snowline, precipitation, estimated new snow and timing first; a clean forecast timeline and optional hover/touch sounding.",
@@ -10,8 +10,8 @@ const __pluginConfig =  {
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1791834881483,
-  "builtReadable": "2026-10-12T19:54:41.483Z"
+  "built": 1791883485713,
+  "builtReadable": "2026-10-13T09:24:45.713Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -1941,7 +1941,7 @@ class PlaceSearch extends SvelteComponent {
 
 const config = {
     name: 'windy-plugin-snowline-map-100m',
-    version: '1000.0.8'};
+    version: '1000.0.9'};
 
 const UNITS_STORAGE_KEY = 'wintry:units:v1';
 function loadUnitSystem() {
@@ -1984,12 +1984,21 @@ function formatSnow(cm, units) {
 }
 function formatPrecip(mm3h, units) {
     if (mm3h === null || !Number.isFinite(mm3h)) return '—';
-    const hourly = mm3h;
+    if (mm3h < 0) return '—';
+    const hourly = mm3h / 3;
     if (units === 'imperial') {
         const value = mmToInches(hourly);
-        return `${value < 0.1 ? value.toFixed(2) : value.toFixed(1)} in/3h`;
+        if (value > 0 && value < 0.001) return '<0.001 in/h';
+        return `${value.toFixed(value < 0.1 ? 3 : 2).replace(/\.?0+$/, '')} in/h`;
     }
-    return `${hourly < 10 ? hourly.toFixed(2).replace(/\.?0+$/, '') : Math.round(hourly)} mm/3h`;
+    if (hourly > 0 && hourly < 0.01) return '<0.01 mm/h';
+    return `${hourly < 10 ? hourly.toFixed(2).replace(/\.?0+$/, '') : Math.round(hourly)} mm/h`;
+}
+function formatPrecipTotal(mm, units) {
+    if (mm === null || !Number.isFinite(mm) || mm < 0) return 'Unavailable';
+    const value = units === 'imperial' ? mmToInches(mm) : mm;
+    if (value > 0 && value < (units === 'imperial' ? 0.01 : 0.1)) return units === 'imperial' ? '<0.01 in' : '<0.1 mm';
+    return `${value.toFixed(units === 'imperial' ? 2 : 1).replace(/\.?0+$/, '')} ${units === 'imperial' ? 'in' : 'mm'}`;
 }
 function formatTemperature(c, units, digits = 1) {
     if (c === null || !Number.isFinite(c)) return '—';
@@ -2985,6 +2994,37 @@ function intervalEnd(times, index) {
         precipCount,
         note: precipCount === 0 ? 'Forecast unavailable' : note
     };
+}
+
+/** Integrate three-hour-equivalent amounts over supported, non-overlapping intervals.
+ * Liquid totals do not require a known precipitation phase. Unknown time coverage
+ * invalidates the requested total rather than silently substituting zero. */ function precipitationAccumulation(times, amounts, start, end, sourcePeriods) {
+    const unavailable = {
+        mm: null,
+        complete: false
+    };
+    if (!times.length || !Number.isFinite(start) || !Number.isFinite(end) || end <= start || times.some((t, i)=>!Number.isFinite(t) || i > 0 && t <= times[i - 1])) return unavailable;
+    const periods = Array.isArray(sourcePeriods) ? sourcePeriods : null;
+    let covered = start, total = 0;
+    for(let i = 0; i < times.length && times[i] < end; i++){
+        const represented = forecastIntervalHours(times, i), source = periods ? periods[i] : represented;
+        if (typeof source !== 'number' || !Number.isFinite(source) || source <= 0 || source > 3) {
+            if (times[i] >= start) return unavailable;
+            continue;
+        }
+        const until = Math.min(times[0] + 144 * 3600_000, times[i] + Math.min(represented, source) * 3600_000);
+        if (until <= start) continue;
+        const value = amounts[i];
+        if (times[i] > covered || value === null || value === undefined || !Number.isFinite(value) || value < 0) return unavailable;
+        const from = Math.max(start, covered, times[i]), to = Math.min(end, until);
+        if (to > from) total += value * (to - from) / (3 * 3600_000);
+        covered = Math.max(covered, to);
+        if (covered >= end) return {
+            mm: total,
+            complete: true
+        };
+    }
+    return unavailable;
 }
 
 function saturationVapourPressure(tempC) {
@@ -4912,7 +4952,7 @@ function get_each_context_2(ctx, list, i) {
 }
 
 // (9:6) {#if tab === 'graph' && showNow}
-function create_if_block_22(ctx) {
+function create_if_block_23(ctx) {
 	let button;
 	let mounted;
 	let dispose;
@@ -4947,7 +4987,7 @@ function create_if_block_22(ctx) {
 }
 
 // (10:6) {#if tab === 'graph' && chart}
-function create_if_block_21(ctx) {
+function create_if_block_22(ctx) {
 	let button;
 	let t_value = (/*pngBusy*/ ctx[7] ? 'Saving…' : 'Save image') + "";
 	let t;
@@ -4989,7 +5029,7 @@ function create_if_block_21(ctx) {
 	};
 }
 
-// (126:2) {:else}
+// (131:2) {:else}
 function create_else_block_5(ctx) {
 	let soundingchart;
 	let current;
@@ -5081,7 +5121,7 @@ function create_if_block$1(ctx) {
 	};
 }
 
-// (123:2) {:else}
+// (128:2) {:else}
 function create_else_block_4(ctx) {
 	let div;
 
@@ -5131,7 +5171,7 @@ function create_if_block_1$1(ctx) {
 	let text4;
 	let t5;
 	let tspan1;
-	let t6_value = (/*units*/ ctx[4] === 'imperial' ? 'in/3h' : 'mm/3h') + "";
+	let t6_value = (/*units*/ ctx[4] === 'imperial' ? 'in/h' : 'mm/h') + "";
 	let t6;
 	let rect1;
 	let text5;
@@ -5192,24 +5232,36 @@ function create_if_block_1$1(ctx) {
 	let t25;
 	let div4;
 	let b3;
+	let t27;
+	let span2;
+	let t28_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "";
+	let t28;
+	let t29;
+	let span3;
+	let t30_value = /*chart*/ ctx[12].precip24Range + "";
+	let t30;
+	let t31;
+	let t32;
+	let div5;
+	let b4;
 
-	let t26_value = ((/*event*/ ctx[13]?.activeNow)
+	let t33_value = ((/*event*/ ctx[13]?.activeNow)
 	? 'Current wintry period'
 	: 'Next wintry period') + "";
 
-	let t26;
-	let t27;
-	let t28;
-	let t29;
-	let t30;
-	let if_block13_anchor;
+	let t33;
+	let t34;
+	let t35;
+	let t36;
+	let t37;
+	let if_block14_anchor;
 	let mounted;
 	let dispose;
-	let if_block0 = /*chart*/ ctx[12].terrainY !== null && create_if_block_20(ctx);
-	let if_block1 = show_if && create_if_block_19();
+	let if_block0 = /*chart*/ ctx[12].terrainY !== null && create_if_block_21(ctx);
+	let if_block1 = show_if && create_if_block_20();
 
 	function select_block_type_2(ctx, dirty) {
-		if (/*chart*/ ctx[12].hasPrecip) return create_if_block_18;
+		if (/*chart*/ ctx[12].hasPrecip) return create_if_block_19;
 		return create_else_block_3;
 	}
 
@@ -5223,15 +5275,15 @@ function create_if_block_1$1(ctx) {
 	}
 
 	function select_block_type_3(ctx, dirty) {
-		if (/*chart*/ ctx[12].newSnowMax > 0.05) return create_if_block_17;
+		if (/*chart*/ ctx[12].newSnowMax > 0.05) return create_if_block_18;
 		return create_else_block_2$1;
 	}
 
 	let current_block_type_1 = select_block_type_3(ctx);
 	let if_block3 = current_block_type_1(ctx);
-	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_16(ctx);
-	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_15(ctx);
-	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_14$1(ctx);
+	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_17(ctx);
+	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_16(ctx);
+	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_15(ctx);
 	let each_value = ensure_array_like([24, 48, 72, 96, 120, 144]);
 	let each_blocks = [];
 
@@ -5239,16 +5291,17 @@ function create_if_block_1$1(ctx) {
 		each_blocks[i] = create_each_block(get_each_context(ctx, each_value, i));
 	}
 
-	let if_block7 = /*tooltip*/ ctx[11] && create_if_block_11$1(ctx);
+	let if_block7 = /*tooltip*/ ctx[11] && create_if_block_12$1(ctx);
 
 	function select_block_type_4(ctx, dirty) {
-		if (/*chart*/ ctx[12].currentPhase) return create_if_block_10$1;
+		if (/*chart*/ ctx[12].currentPhase) return create_if_block_11$1;
 		return create_else_block_1$1;
 	}
 
 	let current_block_type_2 = select_block_type_4(ctx);
 	let if_block8 = current_block_type_2(ctx);
-	let if_block9 = /*chart*/ ctx[12].currentPosition && create_if_block_9$1(ctx);
+	let if_block9 = /*chart*/ ctx[12].currentPosition && create_if_block_10$1(ctx);
+	let if_block10 = /*chart*/ ctx[12].precip24h === null && create_if_block_9$1();
 
 	function select_block_type_5(ctx, dirty) {
 		if (/*event*/ ctx[13]) return create_if_block_5$1;
@@ -5256,10 +5309,10 @@ function create_if_block_1$1(ctx) {
 	}
 
 	let current_block_type_3 = select_block_type_5(ctx);
-	let if_block10 = current_block_type_3(ctx);
-	let if_block11 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
-	let if_block12 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
-	let if_block13 = /*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
+	let if_block11 = current_block_type_3(ctx);
+	let if_block12 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
+	let if_block13 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
+	let if_block14 = /*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
 
 	return {
 		c() {
@@ -5283,7 +5336,7 @@ function create_if_block_1$1(ctx) {
 			path = svg_element("path");
 			if (if_block1) if_block1.c();
 			text4 = svg_element("text");
-			t5 = text("PRECIPITATION ");
+			t5 = text("AVERAGE PRECIPITATION ");
 			tspan1 = svg_element("tspan");
 			t6 = text(t6_value);
 			rect1 = svg_element("rect");
@@ -5352,22 +5405,34 @@ function create_if_block_1$1(ctx) {
 			t22 = space();
 			span1 = element("span");
 			small1 = element("small");
-			small1.textContent = "Precip";
+			small1.textContent = "Avg precip";
 			b2 = element("b");
 			t24 = text(t24_value);
 			t25 = space();
 			div4 = element("div");
 			b3 = element("b");
-			t26 = text(t26_value);
+			b3.textContent = "Next 24 h precipitation";
 			t27 = space();
-			if_block10.c();
-			t28 = space();
-			if (if_block11) if_block11.c();
+			span2 = element("span");
+			t28 = text(t28_value);
+			if (if_block10) if_block10.c();
 			t29 = space();
+			span3 = element("span");
+			t30 = text(t30_value);
+			t31 = text(" · liquid equivalent");
+			t32 = space();
+			div5 = element("div");
+			b4 = element("b");
+			t33 = text(t33_value);
+			t34 = space();
+			if_block11.c();
+			t35 = space();
 			if (if_block12) if_block12.c();
-			t30 = space();
+			t36 = space();
 			if (if_block13) if_block13.c();
-			if_block13_anchor = empty();
+			t37 = space();
+			if (if_block14) if_block14.c();
+			if_block14_anchor = empty();
 			attr(tspan0, "class", "svelte-1q22nou");
 			attr(text0, "x", "42");
 			attr(text0, "y", "11");
@@ -5513,7 +5578,12 @@ function create_if_block_1$1(ctx) {
 			toggle_class(div3, "active-ice-pellets", /*chart*/ ctx[12].currentPhase?.key === 'ice-pellets');
 			toggle_class(div3, "active-freezing-rain", /*chart*/ ctx[12].currentPhase?.key === 'freezing-rain');
 			attr(b3, "class", "svelte-1q22nou");
-			attr(div4, "class", "outlook24 event-intelligence svelte-1q22nou");
+			attr(span2, "class", "svelte-1q22nou");
+			attr(span3, "class", "svelte-1q22nou");
+			attr(div4, "class", "outlook24 svelte-1q22nou");
+			attr(div4, "aria-label", "Next 24 hours precipitation");
+			attr(b4, "class", "svelte-1q22nou");
+			attr(div5, "class", "outlook24 event-intelligence svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, div0, anchor);
@@ -5614,16 +5684,27 @@ function create_if_block_1$1(ctx) {
 			insert(target, t25, anchor);
 			insert(target, div4, anchor);
 			append(div4, b3);
-			append(b3, t26);
 			append(div4, t27);
-			if_block10.m(div4, null);
-			insert(target, t28, anchor);
-			if (if_block11) if_block11.m(target, anchor);
-			insert(target, t29, anchor);
+			append(div4, span2);
+			append(span2, t28);
+			if (if_block10) if_block10.m(span2, null);
+			append(div4, t29);
+			append(div4, span3);
+			append(span3, t30);
+			append(span3, t31);
+			insert(target, t32, anchor);
+			insert(target, div5, anchor);
+			append(div5, b4);
+			append(b4, t33);
+			append(div5, t34);
+			if_block11.m(div5, null);
+			insert(target, t35, anchor);
 			if (if_block12) if_block12.m(target, anchor);
-			insert(target, t30, anchor);
+			insert(target, t36, anchor);
 			if (if_block13) if_block13.m(target, anchor);
-			insert(target, if_block13_anchor, anchor);
+			insert(target, t37, anchor);
+			if (if_block14) if_block14.m(target, anchor);
+			insert(target, if_block14_anchor, anchor);
 
 			if (!mounted) {
 				dispose = [
@@ -5642,7 +5723,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_20(ctx);
+					if_block0 = create_if_block_21(ctx);
 					if_block0.c();
 					if_block0.m(svg, line0);
 				}
@@ -5663,7 +5744,7 @@ function create_if_block_1$1(ctx) {
 
 			if (show_if) {
 				if (if_block1) ; else {
-					if_block1 = create_if_block_19();
+					if_block1 = create_if_block_20();
 					if_block1.c();
 					if_block1.m(svg, text4);
 				}
@@ -5672,7 +5753,7 @@ function create_if_block_1$1(ctx) {
 				if_block1 = null;
 			}
 
-			if (dirty[0] & /*units*/ 16 && t6_value !== (t6_value = (/*units*/ ctx[4] === 'imperial' ? 'in/3h' : 'mm/3h') + "")) set_data(t6, t6_value);
+			if (dirty[0] & /*units*/ 16 && t6_value !== (t6_value = (/*units*/ ctx[4] === 'imperial' ? 'in/h' : 'mm/h') + "")) set_data(t6, t6_value);
 
 			if (current_block_type === (current_block_type = select_block_type_2(ctx)) && if_block2) {
 				if_block2.p(ctx, dirty);
@@ -5727,7 +5808,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block4) {
 					if_block4.p(ctx, dirty);
 				} else {
-					if_block4 = create_if_block_16(ctx);
+					if_block4 = create_if_block_17(ctx);
 					if_block4.c();
 					if_block4.m(svg, if_block4_anchor);
 				}
@@ -5740,7 +5821,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block5) {
 					if_block5.p(ctx, dirty);
 				} else {
-					if_block5 = create_if_block_15(ctx);
+					if_block5 = create_if_block_16(ctx);
 					if_block5.c();
 					if_block5.m(svg, if_block5_anchor);
 				}
@@ -5753,7 +5834,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block6) {
 					if_block6.p(ctx, dirty);
 				} else {
-					if_block6 = create_if_block_14$1(ctx);
+					if_block6 = create_if_block_15(ctx);
 					if_block6.c();
 					if_block6.m(svg, if_block6_anchor);
 				}
@@ -5766,7 +5847,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block7) {
 					if_block7.p(ctx, dirty);
 				} else {
-					if_block7 = create_if_block_11$1(ctx);
+					if_block7 = create_if_block_12$1(ctx);
 					if_block7.c();
 					if_block7.m(div0, null);
 				}
@@ -5791,7 +5872,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block9) {
 					if_block9.p(ctx, dirty);
 				} else {
-					if_block9 = create_if_block_9$1(ctx);
+					if_block9 = create_if_block_10$1(ctx);
 					if_block9.c();
 					if_block9.m(div1, null);
 				}
@@ -5830,57 +5911,72 @@ function create_if_block_1$1(ctx) {
 				toggle_class(div3, "active-freezing-rain", /*chart*/ ctx[12].currentPhase?.key === 'freezing-rain');
 			}
 
-			if (dirty[0] & /*event*/ 8192 && t26_value !== (t26_value = ((/*event*/ ctx[13]?.activeNow)
-			? 'Current wintry period'
-			: 'Next wintry period') + "")) set_data(t26, t26_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t28_value !== (t28_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "")) set_data(t28, t28_value);
 
-			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block10) {
-				if_block10.p(ctx, dirty);
-			} else {
-				if_block10.d(1);
-				if_block10 = current_block_type_3(ctx);
-
-				if (if_block10) {
+			if (/*chart*/ ctx[12].precip24h === null) {
+				if (if_block10) ; else {
+					if_block10 = create_if_block_9$1();
 					if_block10.c();
-					if_block10.m(div4, null);
+					if_block10.m(span2, null);
+				}
+			} else if (if_block10) {
+				if_block10.d(1);
+				if_block10 = null;
+			}
+
+			if (dirty[0] & /*chart*/ 4096 && t30_value !== (t30_value = /*chart*/ ctx[12].precip24Range + "")) set_data(t30, t30_value);
+
+			if (dirty[0] & /*event*/ 8192 && t33_value !== (t33_value = ((/*event*/ ctx[13]?.activeNow)
+			? 'Current wintry period'
+			: 'Next wintry period') + "")) set_data(t33, t33_value);
+
+			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block11) {
+				if_block11.p(ctx, dirty);
+			} else {
+				if_block11.d(1);
+				if_block11 = current_block_type_3(ctx);
+
+				if (if_block11) {
+					if_block11.c();
+					if_block11.m(div5, null);
 				}
 			}
 
 			if (/*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5]) {
-				if (if_block11) {
-					if_block11.p(ctx, dirty);
+				if (if_block12) {
+					if_block12.p(ctx, dirty);
 				} else {
-					if_block11 = create_if_block_4$1(ctx);
-					if_block11.c();
-					if_block11.m(t29.parentNode, t29);
-				}
-			} else if (if_block11) {
-				if_block11.d(1);
-				if_block11 = null;
-			}
-
-			if (/*chart*/ ctx[12].currentPhase?.confidence === 'low') {
-				if (if_block12) ; else {
-					if_block12 = create_if_block_3$1();
+					if_block12 = create_if_block_4$1(ctx);
 					if_block12.c();
-					if_block12.m(t30.parentNode, t30);
+					if_block12.m(t36.parentNode, t36);
 				}
 			} else if (if_block12) {
 				if_block12.d(1);
 				if_block12 = null;
 			}
 
-			if (/*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote) {
-				if (if_block13) {
-					if_block13.p(ctx, dirty);
-				} else {
-					if_block13 = create_if_block_2$1(ctx);
+			if (/*chart*/ ctx[12].currentPhase?.confidence === 'low') {
+				if (if_block13) ; else {
+					if_block13 = create_if_block_3$1();
 					if_block13.c();
-					if_block13.m(if_block13_anchor.parentNode, if_block13_anchor);
+					if_block13.m(t37.parentNode, t37);
 				}
 			} else if (if_block13) {
 				if_block13.d(1);
 				if_block13 = null;
+			}
+
+			if (/*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote) {
+				if (if_block14) {
+					if_block14.p(ctx, dirty);
+				} else {
+					if_block14 = create_if_block_2$1(ctx);
+					if_block14.c();
+					if_block14.m(if_block14_anchor.parentNode, if_block14_anchor);
+				}
+			} else if (if_block14) {
+				if_block14.d(1);
+				if_block14 = null;
 			}
 		},
 		d(detaching) {
@@ -5890,10 +5986,12 @@ function create_if_block_1$1(ctx) {
 				detach(div3);
 				detach(t25);
 				detach(div4);
-				detach(t28);
-				detach(t29);
-				detach(t30);
-				detach(if_block13_anchor);
+				detach(t32);
+				detach(div5);
+				detach(t35);
+				detach(t36);
+				detach(t37);
+				detach(if_block14_anchor);
 			}
 
 			if (if_block0) if_block0.d();
@@ -5909,10 +6007,11 @@ function create_if_block_1$1(ctx) {
 			if (if_block7) if_block7.d();
 			if_block8.d();
 			if (if_block9) if_block9.d();
-			if_block10.d();
-			if (if_block11) if_block11.d(detaching);
+			if (if_block10) if_block10.d();
+			if_block11.d();
 			if (if_block12) if_block12.d(detaching);
 			if (if_block13) if_block13.d(detaching);
+			if (if_block14) if_block14.d(detaching);
 			mounted = false;
 			run_all(dispose);
 		}
@@ -5920,7 +6019,7 @@ function create_if_block_1$1(ctx) {
 }
 
 // (23:8) {#if chart.terrainY !== null}
-function create_if_block_20(ctx) {
+function create_if_block_21(ctx) {
 	let rect;
 	let rect_y_value;
 	let rect_height_value;
@@ -5990,7 +6089,7 @@ function create_if_block_20(ctx) {
 }
 
 // (35:8) {#if !chart.points.trim()}
-function create_if_block_19(ctx) {
+function create_if_block_20(ctx) {
 	let text_1;
 	let t;
 
@@ -6056,7 +6155,7 @@ function create_else_block_3(ctx) {
 }
 
 // (39:8) {#if chart.hasPrecip}
-function create_if_block_18(ctx) {
+function create_if_block_19(ctx) {
 	let text0;
 	let t0_value = /*chart*/ ctx[12].precipMaxLabel + "";
 	let t0;
@@ -6276,7 +6375,7 @@ function create_else_block_2$1(ctx) {
 }
 
 // (62:8) {#if chart.newSnowMax > 0.05}
-function create_if_block_17(ctx) {
+function create_if_block_18(ctx) {
 	let text_1;
 	let t_value = /*chart*/ ctx[12].newSnowMaxLabel + "";
 	let t;
@@ -6328,7 +6427,7 @@ function create_if_block_17(ctx) {
 }
 
 // (70:8) {#if chart.nowX !== null}
-function create_if_block_16(ctx) {
+function create_if_block_17(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6394,7 +6493,7 @@ function create_if_block_16(ctx) {
 }
 
 // (75:8) {#if chart.currentX !== null && chart.currentY !== null}
-function create_if_block_15(ctx) {
+function create_if_block_16(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6447,7 +6546,7 @@ function create_if_block_15(ctx) {
 }
 
 // (79:8) {#if tooltip}
-function create_if_block_14$1(ctx) {
+function create_if_block_15(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6515,7 +6614,7 @@ function create_each_block(ctx) {
 }
 
 // (86:6) {#if tooltip}
-function create_if_block_11$1(ctx) {
+function create_if_block_12$1(ctx) {
 	let div1;
 	let b0;
 	let t0_value = /*tooltip*/ ctx[11].timeLabel + "";
@@ -6546,8 +6645,8 @@ function create_if_block_11$1(ctx) {
 	let t10;
 	let t11;
 	let div1_style_value;
-	let if_block0 = /*tooltip*/ ctx[11].phase && create_if_block_13$1(ctx);
-	let if_block1 = /*terrainM*/ ctx[2] !== null && create_if_block_12$1(ctx);
+	let if_block0 = /*tooltip*/ ctx[11].phase && create_if_block_14$1(ctx);
+	let if_block1 = /*terrainM*/ ctx[2] !== null && create_if_block_13$1(ctx);
 
 	return {
 		c() {
@@ -6564,7 +6663,7 @@ function create_if_block_11$1(ctx) {
 			t4 = text(t4_value);
 			t5 = space();
 			span1 = element("span");
-			t6 = text("Precip ");
+			t6 = text("Avg precip ");
 			b2 = element("b");
 			t7 = text(t7_value);
 			t8 = space();
@@ -6617,7 +6716,7 @@ function create_if_block_11$1(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_13$1(ctx);
+					if_block0 = create_if_block_14$1(ctx);
 					if_block0.c();
 					if_block0.m(div1, t2);
 				}
@@ -6637,7 +6736,7 @@ function create_if_block_11$1(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_12$1(ctx);
+					if_block1 = create_if_block_13$1(ctx);
 					if_block1.c();
 					if_block1.m(div0, null);
 				}
@@ -6662,7 +6761,7 @@ function create_if_block_11$1(ctx) {
 }
 
 // (89:10) {#if tooltip.phase}
-function create_if_block_13$1(ctx) {
+function create_if_block_14$1(ctx) {
 	let strong;
 	let i;
 	let i_class_value;
@@ -6703,7 +6802,7 @@ function create_if_block_13$1(ctx) {
 }
 
 // (94:12) {#if terrainM !== null}
-function create_if_block_12$1(ctx) {
+function create_if_block_13$1(ctx) {
 	let span;
 	let t0;
 	let b;
@@ -6760,7 +6859,7 @@ function create_else_block_1$1(ctx) {
 }
 
 // (102:11) {#if chart.currentPhase}
-function create_if_block_10$1(ctx) {
+function create_if_block_11$1(ctx) {
 	let i;
 	let i_class_value;
 	let t_value = precipitationLabel(/*chart*/ ctx[12].currentPhase) + "";
@@ -6793,7 +6892,7 @@ function create_if_block_10$1(ctx) {
 }
 
 // (103:8) {#if chart.currentPosition}
-function create_if_block_9$1(ctx) {
+function create_if_block_10$1(ctx) {
 	let strong;
 	let t_value = /*chart*/ ctx[12].currentPosition + "";
 	let t;
@@ -6819,7 +6918,26 @@ function create_if_block_9$1(ctx) {
 	};
 }
 
-// (116:6) {:else}
+// (113:54) {#if chart.precip24h===null}
+function create_if_block_9$1(ctx) {
+	let t;
+
+	return {
+		c() {
+			t = text("· incomplete forecast coverage");
+		},
+		m(target, anchor) {
+			insert(target, t, anchor);
+		},
+		d(detaching) {
+			if (detaching) {
+				detach(t);
+			}
+		}
+	};
+}
+
+// (121:6) {:else}
 function create_else_block$1(ctx) {
 	let span;
 	let t_value = noEventMessage(/*point*/ ctx[1], /*terrainM*/ ctx[2], /*timestamp*/ ctx[5]) + "";
@@ -6846,7 +6964,7 @@ function create_else_block$1(ctx) {
 	};
 }
 
-// (113:6) {#if event}
+// (118:6) {#if event}
 function create_if_block_5$1(ctx) {
 	let span;
 	let t0_value = /*event*/ ctx[13].dominantPhase.icon + "";
@@ -6941,7 +7059,7 @@ function create_if_block_5$1(ctx) {
 	};
 }
 
-// (114:226) 
+// (119:226) 
 function create_if_block_8$1(ctx) {
 	let t0;
 	let t1_value = formatSnow(/*event*/ ctx[13].newSnowCm, /*units*/ ctx[4]) + "";
@@ -6974,7 +7092,7 @@ function create_if_block_8$1(ctx) {
 	};
 }
 
-// (114:152) {#if event.incomplete}
+// (119:152) {#if event.incomplete}
 function create_if_block_7$1(ctx) {
 	let t;
 
@@ -6994,7 +7112,7 @@ function create_if_block_7$1(ctx) {
 	};
 }
 
-// (115:8) {#if !event.activeNow}
+// (120:8) {#if !event.activeNow}
 function create_if_block_6$1(ctx) {
 	let button;
 	let mounted;
@@ -7028,7 +7146,7 @@ function create_if_block_6$1(ctx) {
 	};
 }
 
-// (120:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
+// (125:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
 function create_if_block_4$1(ctx) {
 	let button;
 
@@ -7084,7 +7202,7 @@ function create_if_block_4$1(ctx) {
 	};
 }
 
-// (121:4) {#if chart.currentPhase?.confidence === 'low'}
+// (126:4) {#if chart.currentPhase?.confidence === 'low'}
 function create_if_block_3$1(ctx) {
 	let div;
 
@@ -7105,7 +7223,7 @@ function create_if_block_3$1(ctx) {
 	};
 }
 
-// (122:4) {#if event && chart.coverageNote}
+// (127:4) {#if event && chart.coverageNote}
 function create_if_block_2$1(ctx) {
 	let div;
 	let t_value = /*chart*/ ctx[12].coverageNote + "";
@@ -7167,8 +7285,8 @@ function create_fragment$2(ctx) {
 	let current;
 	let mounted;
 	let dispose;
-	let if_block0 = /*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[14] && create_if_block_22(ctx);
-	let if_block1 = /*tab*/ ctx[0] === 'graph' && /*chart*/ ctx[12] && create_if_block_21(ctx);
+	let if_block0 = /*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[14] && create_if_block_23(ctx);
+	let if_block1 = /*tab*/ ctx[0] === 'graph' && /*chart*/ ctx[12] && create_if_block_22(ctx);
 	const if_block_creators = [create_if_block$1, create_else_block_5];
 	const if_blocks = [];
 
@@ -7295,7 +7413,7 @@ function create_fragment$2(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_22(ctx);
+					if_block0 = create_if_block_23(ctx);
 					if_block0.c();
 					if_block0.m(div1, t6);
 				}
@@ -7308,7 +7426,7 @@ function create_fragment$2(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_21(ctx);
+					if_block1 = create_if_block_22(ctx);
 					if_block1.c();
 					if_block1.m(div1, t7);
 				}
@@ -7698,6 +7816,7 @@ function instance$2($$self, $$props, $$invalidate) {
 		: '';
 
 		const end24 = target + 24 * 3600_000;
+		const liquid24 = precipitationAccumulation(p.times, precipValues, target, end24, p.forecast.__precipPeriodsH);
 		const windowIndices = p.times.map((time, i) => ({ time, i })).filter(v => v.time + forecastIntervalHours(p.times, v.i) * 3600_000 > target && v.time < end24).map(v => v.i);
 		const minEntry = windowIndices.map(i => ({ i, value: snowlineAt(p, i) })).filter(v => v.value !== null && Number.isFinite(v.value)).sort((a, b) => a.value - b.value)[0] ?? null;
 
@@ -7729,6 +7848,8 @@ function instance$2($$self, $$props, $$invalidate) {
 		}
 
 		return {
+			precip24h: liquid24.mm,
+			precip24Range: `${formatTooltipTime(target)} to ${formatTooltipTime(end24)}`,
 			points,
 			terrainY: terrain !== null
 			? Math.max(top, Math.min(bottom, y(terrain)))
@@ -7761,7 +7882,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			precipBars,
 			hasPrecip: validPrecip.some(v => v >= PRECIP_THRESHOLD_MM_H),
 			precipMaxLabel: precipMax
-			? formatPrecip(precipMax, units).replace(/\s*(mm|in)\/3h$/, '')
+			? formatPrecip(precipMax, units).replace(/\s*(mm|in)\/h$/, '')
 			: '—',
 			minScale: min,
 			maxScale: max,
@@ -7883,11 +8004,15 @@ function instance$2($$self, $$props, $$invalidate) {
 			ctx.fillText(
 				`Snowline ${chart.currentSnowline === null
 				? 'WBZ unresolved'
-				: formatElevation(chart.currentSnowline, units)}   ·   Precip ${formatPrecip(chart.currentPrecip, units)}`,
+				: formatElevation(chart.currentSnowline, units)}   ·   Avg precip ${formatPrecip(chart.currentPrecip, units)}`,
 				52,
 				y
 			);
 
+			y += 30;
+			ctx.fillStyle = '#b8c8d1';
+			ctx.font = '22px Arial';
+			ctx.fillText(`Next 24 h liquid precipitation: ${formatPrecipTotal(chart.precip24h, units)}${chart.precip24h === null ? ' (incomplete coverage)' : ''}`, 52, y);
 			y += 38;
 			ctx.fillStyle = '#dfeaf0';
 			ctx.font = '700 21px Arial';
@@ -10599,7 +10724,7 @@ function create_if_block(ctx) {
 			button.textContent = "×";
 			t3 = space();
 			div12 = element("div");
-			div12.innerHTML = `<div class="svelte-7draw5"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-7draw5"><b>Prepare map forecast:</b> prepares all available shading and precipitation-type icon times for the visible area, up to 144 hours. Preparation may take several minutes; progress and an estimated remaining time are shown. Cancel keeps already prepared times usable. Moving or zooming the map, refreshing, changing shading or receiving a newer model run invalidates the prepared view. Completed frames are stored locally for this session, and the normal timeline remains available if storage is full or unavailable. Windy&#39;s background layer and forecast lightning still load separately.</div> <div class="svelte-7draw5"><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-7draw5"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-7draw5"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-7draw5"><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div> <div class="svelte-7draw5"><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div> <div class="svelte-7draw5"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Precipitation is shown as three-hour totals. New snow uses these intervals, precipitation type and an estimated snow-to-water ratio, with simple settling and melt.</div> <div class="svelte-7draw5"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated new snow on one timeline.</div> <div class="svelte-7draw5"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-7draw5">Estimated new snow is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
+			div12.innerHTML = `<div class="svelte-7draw5"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-7draw5"><b>Prepare map forecast:</b> prepares all available shading and precipitation-type icon times for the visible area, up to 144 hours. Preparation may take several minutes; progress and an estimated remaining time are shown. Cancel keeps already prepared times usable. Moving or zooming the map, refreshing, changing shading or receiving a newer model run invalidates the prepared view. Completed frames are stored locally for this session, and the normal timeline remains available if storage is full or unavailable. Windy&#39;s background layer and forecast lightning still load separately.</div> <div class="svelte-7draw5"><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-7draw5"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-7draw5"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-7draw5"><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div> <div class="svelte-7draw5"><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div> <div class="svelte-7draw5"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. New snow uses these intervals, precipitation type and an estimated snow-to-water ratio, with simple settling and melt.</div> <div class="svelte-7draw5"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated new snow on one timeline.</div> <div class="svelte-7draw5"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-7draw5">Estimated new snow is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close information");
 			attr(button, "title", "Close");
@@ -11724,7 +11849,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			conditionLabel(precip, phase),
 			'Snowline: ' + formatElevation(snowline, units),
 			'Terrain: ' + formatElevation(terrain, units),
-			'Precipitation: ' + formatPrecip(precip, units),
+			'Average precipitation: ' + formatPrecip(precip, units),
 			event
 			? (event.activeNow ? 'Current' : 'Next') + ' wintry period: ' + formatLocal(event.startTime) + ' to ' + formatLocal(event.endTime)
 			: noEventMessage(point, terrain, target),
@@ -11787,7 +11912,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		const relation = `<div class="snowline-compact-relation">${positionText(args.difference)}<span>${args.precip === null
 		? 'Precip unavailable'
 		: args.hasPrecip
-			? `Precip ${formatPrecip(args.precip, unitSystem)}`
+			? `Avg precip ${formatPrecip(args.precip, unitSystem)}`
 			: 'Dry'}</span></div>`;
 
 		const grid = `<div class="snowline-label-grid">${terrain}${snowline}</div>`;
@@ -11943,7 +12068,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			? 'WBZ is below the lowest resolved level or absent in a cold column'
 			: 'No atmospheric crossing resolved';
 
-			const detail = `<div class="snowline-valid">${shortValid(valid)}</div><div class="snowline-label-grid">${metricTile('Terrain', formatElevation(clickedMapElevationM, unitSystem), 'metric-terrain')}${metricTile('Precip', formatPrecip(precip, unitSystem), '')}</div><div class="snowline-event-line">${reason}. ${phase
+			const detail = `<div class="snowline-valid">${shortValid(valid)}</div><div class="snowline-label-grid">${metricTile('Terrain', formatElevation(clickedMapElevationM, unitSystem), 'metric-terrain')}${metricTile('Avg precip', formatPrecip(precip, unitSystem), '')}</div><div class="snowline-event-line">${reason}. ${phase
 			? precipitationLabel(phase)
 			: precip !== null && precip < PRECIP_THRESHOLD_MM_H
 				? 'Dry'
