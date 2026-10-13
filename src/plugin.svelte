@@ -39,10 +39,7 @@
       <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
       {#if showContours}<div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>{/if}
       <div class="data-status" aria-label="Map data status">
-        <b>Data status</b>
         <span>{mapDataStatus || 'Forecast data not loaded'}</span>
-        <span>Precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer.</span>
-        <span>Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</span>
       </div>
 
     </details>
@@ -61,7 +58,7 @@
     <div class="prepare-map-controls">
       {#if preparingMap}<button class="refresh-button" type="button" on:click={cancelMapPreparation}>Cancel preparation</button>
       {:else}<button class="refresh-button" type="button" disabled={!enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading} on:click={prepareMapForecast}>Prepare map forecast</button>{/if}
-      <small>{prepareMessage || 'Current area · all available shading and type-icon times'}</small>
+      <small>{prepareMessage || 'Current area · up to 144 h'}</small>
     </div>
     <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading} on:click={refreshForecast}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
   </div>
@@ -86,6 +83,7 @@
         <button type="button" aria-label="Close information" title="Close" on:click={() => infoOpen = false}>×</button>
       </div>
       <div class="info-body">
+        <div><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div>
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
         <div><b>Prepare map forecast:</b> prepares all available shading and precipitation-type icon times for the visible area, up to 144 hours. Preparation may take several minutes; progress and an estimated remaining time are shown. Cancel keeps already prepared times usable. Moving or zooming the map, refreshing, changing shading or receiving a newer model run invalidates the prepared view. Completed frames are stored locally for this session, and the normal timeline remains available if storage is full or unavailable. Windy's background layer and forecast lightning still load separately.</div>
         <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
@@ -558,7 +556,7 @@
     const seen=new Set<string>(),times=[...new Set(points.flatMap(p=>p.times))].filter(t=>t>=first&&t<=end).sort((a,b)=>a-b).filter(t=>{const key=phaseFrameKey(t);if(seen.has(key))return false;seen.add(key);return true;});
     const reference=getStoreTimestamp(),scene=phaseFrameKey(reference),my=++prepareGeneration;
     const current=()=>my===prepareGeneration&&enabled&&!destroyed&&scene===phaseFrameKey(reference);
-    const started=Date.now();preparingMap=true;preparedKeys.clear();prepareMessage=`Preparing 0 / ${times.length} times…`;
+    const started=Date.now();preparingMap=true;preparedKeys.clear();prepareMessage=`0 / ${times.length} times…`;
     if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}rasterEpoch++;
     try{
       await preparedMapCache.clear();
@@ -570,7 +568,7 @@
         const key=phaseFrameKey(times[i]);await preparedMapCache.put(key,frame.record);
         if(!current())break;
         preparedKeys.add(key);i++;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
-        prepareMessage=`Preparing ${i} / ${times.length} times${i>1&&minutes>0?` · about ${minutes} min left`:'…'}`;
+        prepareMessage=`${i} / ${times.length} times${i>1&&minutes>0?` · ~${minutes} min left`:'…'}`;
         await new Promise(resolve=>setTimeout(resolve,0));
       }
       if(current())prepareMessage=`Ready · ${preparedKeys.size} / ${times.length} times · current area`;
@@ -776,7 +774,7 @@
     const target=getStoreTimestamp(),firstPoint=cache.flat().find((p):p is CachedPoint=>p!==null&&p.times.length>0);
     const samples=cache.flat(),fresh=samples.filter((p):p is CachedPoint=>!!p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)&&forecastIntervalIndex(p.times,target)>=0);
     const known=fresh.filter(p=>mapPrecipAt(p,target)!==null).length;
-    mapDataStatus=`Profiles ${fresh.length} / ${samples.length} · precipitation ${known} / ${samples.length} samples`;
+    mapDataStatus=`Profiles ${fresh.length}/${samples.length} · precip ${known}/${samples.length}`;
     mapDataMissing=fresh.length<samples.length||((showShading||showIcons)&&precipDetailAvailable&&known<samples.length);
     if(!firstPoint){clearContours();clearShading();return}
     const first=firstPoint.times[0],end=Math.min(firstPoint.times.at(-1)!,first+MAX_FORECAST_HOURS*3600_000);
@@ -856,7 +854,7 @@
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
   .shade-types{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 3px;margin-top:5px;font-size:9px;color:#d7e3e9}.shade-types span{display:flex;align-items:center;gap:4px;white-space:nowrap}.shade-types i{display:inline-block;flex:none;width:8px;height:8px;border-radius:1px}
 
-  :global(#plugin-windy-plugin-snowline-map-100m){height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible!important}
+  :global(#device-desktop #plugin-windy-plugin-snowline-map-100m){height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible!important}
   .refresh-error{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error button{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}
   :global(.forecast-quality){margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}
 
@@ -934,4 +932,22 @@
   @media(prefers-reduced-motion:reduce){.status-dot{animation:none}}
   @media(pointer:coarse){.layer-controls label,.refresh-button,.panel-footer .help-link{min-height:44px}
 .hide-button,.switch{min-height:40px}.point-tools button{min-height:44px}.panel-options summary{min-height:24px;padding:10px 0}.panel-options :global(.utility-row button){height:44px}}
+  /* mobileUI: 'small' owns placement below Windy's timeline. Keep its host
+     geometry intact; only style the content inside that bottom panel. */
+  :global(#device-mobile) .snowline-panel,:global(#device-mobile) .show-panel{
+    position:relative;left:auto;right:auto;bottom:auto;z-index:auto;
+    margin:0;width:100%;max-width:100%;
+  }
+  :global(#device-mobile) .snowline-panel{
+    border-radius:0;padding:8px 12px;
+    max-height:38vh;max-height:38dvh;
+    padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));
+  }
+  :global(#device-mobile) .panel-head{top:-8px;margin-top:-8px;padding-top:8px}
+  :global(#device-mobile) .layer-controls{grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:6px}
+  :global(#device-mobile) .layer-controls label{min-height:44px;padding:6px 4px;justify-content:center;font-size:11px}
+  :global(#device-mobile) .shade-types{grid-template-columns:repeat(3,minmax(0,1fr));gap:2px 4px;font-size:10px;margin-top:5px}
+  :global(#device-mobile) .shade-types :global(svg){width:15px;height:15px}
+  :global(#device-mobile) .prepare-map-controls{margin:6px 0;gap:3px}
+  :global(#device-mobile) .panel-footer{position:relative;bottom:auto;padding-bottom:0}
 </style>
