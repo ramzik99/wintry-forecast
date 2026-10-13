@@ -6,6 +6,7 @@
     <div class="top-row">
       <div class="title">Wintry forecast</div>
       <div class="top-controls">
+        <button class="settings-button" type="button" aria-label="Open Wintry settings" title="Colours, units and data status" on:click={() => settingsOpen = true}>⚙</button>
         <button class="hide-button" type="button" aria-label="Hide Wintry forecast panel" title="Hide" on:click={() => panelHidden = true}>−</button>
         <label class="switch"><input type="checkbox" aria-label="Enable Wintry forecast" bind:checked={enabled} on:change={toggleEnabled} /><span>{enabled ? 'On' : 'Off'}</span></label>
       </div>
@@ -18,31 +19,13 @@
     </div>
     </div>
     {#if !precipDetailAvailable}<div class="zoom-hint">Zoom in to level 8 for shading and icons</div>{/if}
-    {#if precipDetailAvailable && (showShading || showIcons)}
-        <div class="shade-types" aria-label="Precipitation type colours">
-        <span>{@html precipitationIconSvg('snow')}Snow</span>
-        <span>{@html precipitationIconSvg('wet-snow')}Wet snow</span>
-        <span>{@html precipitationIconSvg('mix')}Mix</span>
-        <span>{@html precipitationIconSvg('rain')}Rain</span>
-        <span>{@html precipitationIconSvg('ice-pellets')}Ice pellets</span>
-        <span>{@html precipitationIconSvg('freezing-rain')}Freezing rain</span>
-      </div>
-    {/if}
+    <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
     {#if showShading && precipDetailAvailable && geographyError}<div class="storm-legend" role="status">{geographyError}</div>{/if}
     {#if (showShading || showIcons) && terrainDetailStatus}<div class="storm-legend" role="status">{terrainDetailStatus}</div>{/if}
     {#if showIcons && precipDetailAvailable}<div class="storm-legend" role="status">{stormStatus}</div>{/if}
     {#if clickedPoint}
       <div class="point-tools"><strong>{clickedPlaceName || 'Selected point'}</strong><div><button type="button" on:click={() => {forecastTab='graph';chartOpen=true}}>Forecast</button><button type="button" on:click={() => {forecastTab='sounding';chartOpen=true}}>Sounding</button></div></div>
     {/if}
-    <details class="panel-options">
-      <summary>{clickedPoint ? 'Change place · settings' : 'Choose a place'}</summary>
-      <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
-      {#if showContours}<div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>{/if}
-      <div class="data-status" aria-label="Map data status">
-        <span>{mapDataStatus || 'Forecast data not loaded'}</span>
-      </div>
-
-    </details>
     <V21Panel bind:unitSystem {activeRunTime} />
     {#if enabled && !viewportLoading && mapDataMissing}<div class="storm-legend" role="status">Some forecast data is missing · blank areas may be unknown</div>{/if}
     {#if refreshError}<div class="refresh-error" role="status">{refreshError} <button type="button" on:click={refreshForecast}>Retry</button></div>{/if}
@@ -55,12 +38,28 @@
         {:else}<span class="status-dot"></span>Reading point…{/if}
       </div>
     {/if}
+    <div class="panel-actions">
     <div class="prepare-map-controls">
       {#if preparingMap}<button class="refresh-button" type="button" on:click={cancelMapPreparation}>Cancel preparation</button>
       {:else}<button class="refresh-button" type="button" disabled={!enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading} on:click={prepareMapForecast}>Prepare map forecast</button>{/if}
       <small>{prepareMessage || 'Current area · up to 144 h'}</small>
     </div>
     <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading} on:click={refreshForecast}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
+    </div>
+  </div>
+{/if}
+
+{#if settingsOpen}
+  <div class="info-overlay" role="presentation" on:click|self={() => settingsOpen = false}>
+    <div class="info-window" role="dialog" aria-modal="true" aria-label="Wintry settings">
+      <div class="info-head"><b>Wintry settings</b><button type="button" aria-label="Close settings" on:click={() => settingsOpen = false}>×</button></div>
+      <div class="info-body">
+        <div><b>Precipitation colours</b><PrecipitationLegend /></div>
+        <div><b>Units</b><V21Panel bind:unitSystem {activeRunTime} settingsOnly={true} /></div>
+        {#if showContours}<div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>{/if}
+        <div class="data-status" aria-label="Map data status">{mapDataStatus || 'Forecast data not loaded'}</div>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -105,6 +104,7 @@
 
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import PrecipitationLegend from './PrecipitationLegend.svelte';
   import { map, layerOrder, getMapTiles } from '@windy/map';
   import store from '@windy/store';
   import { createFullRenderingParams, getDataZoom } from '@windy/renderUtils';
@@ -192,7 +192,7 @@
   let geographyLayer:any=null,geographyEpoch=0,geographyError='';
   const geographicTiles=new GeographicTiles(map.getSize().x<600?32:96);
   let nativeMap:any=null;
-  let enabled=true, panelHidden=false, infoOpen=false, chartOpen=false, forecastTab:'graph'|'sounding'='graph', viewportLoading=false, refreshQueued=false, probeLoading=false, unitSystem:UnitSystem='metric', prefsReady=false;
+  let enabled=true, panelHidden=false, infoOpen=false, settingsOpen=false, chartOpen=false, forecastTab:'graph'|'sounding'='graph', viewportLoading=false, refreshQueued=false, probeLoading=false, unitSystem:UnitSystem='metric', prefsReady=false;
   let cache:(CachedPoint|null)[][]=[], contourLayer:any=null, clickLayer:any=null, clickedPoint:CachedPoint|null=null, clickedLatLon:[number,number]|null=null, clickedMapElevationM:number|null=null, clickedPlaceName:string|null=null, pointSource:PointSource|null=null, clickedNextEventTime:number|null=null;
   let moveTimer:ReturnType<typeof setTimeout>|null=null, generation=0, clickGeneration=0, timestampListener:number|null=null, activeRunTime:number|null=null, renderedUnitSystem:UnitSystem|null=null;
   const profileCache = new Map<string,CachedPoint>();
@@ -950,4 +950,37 @@
   :global(#device-mobile) .shade-types :global(svg){width:15px;height:15px}
   :global(#device-mobile) .prepare-map-controls{margin:6px 0;gap:3px}
   :global(#device-mobile) .panel-footer{position:relative;bottom:auto;padding-bottom:0}
+  .mobile-extra-settings,.mobile-options-label{display:none}
+  :global(#device-mobile) .desktop-legend,:global(#device-mobile) .desktop-options-label{display:none}
+  :global(#device-mobile) .mobile-extra-settings,:global(#device-mobile) .mobile-options-label{display:block}
+  :global(#device-mobile) .panel-options{margin-top:4px}
+  :global(#device-mobile) .panel-options summary{box-sizing:border-box;min-height:44px;padding:12px 0;font-size:11px}
+  :global(#device-mobile) .title{font-size:15px}
+  :global(#device-mobile) .hide-button,:global(#device-mobile) .switch{min-height:44px}
+  :global(#device-mobile) .panel-actions{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px}
+  :global(#device-mobile) .prepare-map-controls,:global(#device-mobile) .panel-footer{display:contents}
+  :global(#device-mobile) .prepare-map-controls button{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}
+  :global(#device-mobile) .prepare-map-controls small{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}
+  :global(#device-mobile) .panel-footer .refresh-button{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}
+  :global(#device-mobile) .panel-footer .help-link{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}
+  /* Primary controls never scroll. Secondary controls live in Settings. */
+  .snowline-panel{max-height:none;overflow:visible}
+  .panel-head{position:static}
+  .layer-controls{grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:6px}
+  .layer-controls label{padding-inline:4px;justify-content:center;font-size:11px}
+  .settings-button{width:30px;height:32px;border:1px solid #304655;border-radius:7px;background:#152735;color:#dff5ff;font-size:17px;cursor:pointer}
+  .title{font-size:14px}
+  .panel-actions{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px;padding-top:7px}
+  .prepare-map-controls,.panel-footer{display:contents}
+  .prepare-map-controls button{grid-column:1;grid-row:1;min-height:34px;padding-inline:5px}
+  .prepare-map-controls small{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}
+  .panel-footer .refresh-button{grid-column:2;grid-row:1;padding-inline:6px}
+  .panel-footer .help-link{grid-column:3;grid-row:1;padding-inline:3px}
+  :global(#device-mobile) .snowline-panel{max-height:none;overflow:visible}
+  :global(#device-mobile) .panel-head,:global(#device-mobile) .panel-actions{position:static}
+  :global(#device-mobile) .settings-button{min-height:44px;min-width:36px}
+  :global(#device-mobile) .point-tools strong{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  :global(#device-mobile) .status-pill{margin-top:4px;padding:3px;justify-content:flex-start}
+  :global(#device-mobile) .prepare-ring{width:30px;height:30px;flex-basis:30px}
+  :global(#device-mobile) .prepare-ring span{width:24px;height:24px;font-size:9px}
 </style>
