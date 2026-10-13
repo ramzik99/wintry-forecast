@@ -189,7 +189,7 @@ test('three-hour source totals align by interval start, with no missing-value in
  assert.deepEqual(data.__precipMm3h,[null,6,6,null,9,null]);
  assert.equal(precipMmAt(data,0),null);
  assert.equal(precipMmAt(data,1),6);
- assert.equal(formatPrecip(6,'metric'),'6 mm/3h');
+ assert.equal(formatPrecip(6,'metric'),'2 mm/h');
 });
 test('three-hour snowfall uses the full liquid amount',()=>{
  const phase={key:'snow',surfaceWetBulbC:-5};

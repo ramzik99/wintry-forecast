@@ -6,7 +6,15 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Current release
 
-**1000.0.8**
+**1000.0.9**
+
+Point cards and the graph now explicitly show average precipitation in mm/h or
+in/h. The graph also reports next-24-hour liquid accumulation with its start/end
+times. It integrates non-overlapping supported intervals from the loaded forecast,
+independently of phase, and marks incomplete windows unavailable. Shorter source
+intervals cannot be stretched over unsampled hours. Tiny positive amounts display
+as below a rounding threshold instead of falsely becoming zero. Fixed map type
+colours and the rendering/preparation cache remain unchanged.
 
 Final convenience release: a stage-weighted percentage ring follows normal map
 updates for enabled contours, shading and icons. It measures processed forecast
@@ -27,7 +35,7 @@ retains one fixed Windy colour per type; contours, shading and icons stay indepe
 
 Compact 260 px desktop / 250 px phone-width panel, with location settings collapsed after selection. Forecast and Sounding remain directly accessible. The panel sits on the left above the timeline, away from right-side map controls, and can minimize to a small button. Use Windy's existing timeline to change forecast time; the duplicate slider and day shortcuts have been removed from both views.
 
-[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.8/plugin.min.js) · [Release notes and verification](V1000.md)
+[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.9/plugin.min.js) · [Release notes and verification](V1000.md)
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
 
@@ -331,7 +339,7 @@ Below zoom 8, Shading and Icons controls are disabled and their overlays removed
 
 Palette matches the Windy precipitation-type legend: rain cyan #0099b6; freezing rain magenta #900096; mixed ice/ice pellets dark red-brown #510c0f; snow grey #b2b2b2; wet snow green #569456; rain/snow mix yellow-green #95a109. Shading, icons, point phase headings and charts share these hues. Precipitation amounts remain available in point forecasts. Ice pellets remain the plugin diagnosed class; matching the Mixed ice colour does not equate the classifications.
 
-Live Windy close-ups verified opaque wet colours and outdoor-map road/terrain visibility. Native city weather annotations still describe native Windy forecasts. Missing or unavailable forecast intervals remain transparent. A complete live grid (55/55 points at the tested noon forecast) had no missing profiles, amounts or phase diagnoses; unshaded rectangles were zero precipitation in the point feed while the native map showed precipitation type. Known limitation in this release: the point precipitation feed and native map precipitation-type mask can disagree. Do not fill those areas with invented precipitation or claim they are missing-data gaps. Differences from native ECMWF output are not an accuracy validation. Version 1000.0.8 includes opaque precipitation, geographic foreground, the revised palette, combined precipitation/lightning icons, and zoom-dependent controls. The release retains the known point/map precipitation discrepancy.
+Live Windy close-ups verified opaque wet colours and outdoor-map road/terrain visibility. Native city weather annotations still describe native Windy forecasts. Missing or unavailable forecast intervals remain transparent. A complete live grid (55/55 points at the tested noon forecast) had no missing profiles, amounts or phase diagnoses; unshaded rectangles were zero precipitation in the point feed while the native map showed precipitation type. Known limitation in this release: the point precipitation feed and native map precipitation-type mask can disagree. Do not fill those areas with invented precipitation or claim they are missing-data gaps. Differences from native ECMWF output are not an accuracy validation. Version 1000.0.9 includes opaque precipitation, geographic foreground, the revised palette, combined precipitation/lightning icons, and zoom-dependent controls. The release retains the known point/map precipitation discrepancy.
 
 
 ### Fast timeline preview (12 October 2026)
