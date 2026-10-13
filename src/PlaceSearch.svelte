@@ -352,4 +352,14 @@
 
 
   .search-line input{height:42px;font-size:14px;padding:0 10px}.utility-row button{height:40px;font-size:12px}.result-main{font-size:13px}.result-sub{font-size:11px;line-height:1.4}.result{min-height:44px}.location-message,.empty,.credit{font-size:11px;line-height:1.4}.star{min-width:36px}.utility-row.has-clear{grid-template-columns:1.2fr 1fr 36px}
+  form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px}
+  .search-line{min-width:0}
+  .search-line input{height:36px;font-size:13px;padding-inline:7px}
+  .utility-row{display:flex;gap:3px}
+  .utility-row button{width:34px;height:36px;padding:0}
+  .location-button>span:last-child,.fav-button>span:last-child{display:none}
+  .location-icon,.fav-button span:first-child,.clear-button span:first-child{font-size:18px}
+  :global(#device-mobile) .search-line input{height:44px;font-size:16px}
+  :global(#device-mobile) .utility-row button{width:44px;height:44px}
+  :global(#device-mobile) .results{top:auto;bottom:calc(100% + 4px)}
 </style>

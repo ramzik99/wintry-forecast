@@ -54,7 +54,12 @@
   .units button.active { background: rgba(80,190,255,.16); color: #dff7ff; }
   .freshness { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #a8b6bf; font-size: 9px; font-weight: 700; white-space: nowrap; }
   .units button{height:32px;font-size:11px;padding:0 7px}.freshness{font-size:11px}.release-row{font-size:10px;margin-top:6px}
-  .mobile-settings{display:none}
+  .mobile-settings{display:block;margin-top:7px}
+  .mobile-settings .units button{height:44px;padding-inline:10px;font-size:13px}
+  .v21-panel .units{display:none}
+  .v21-panel{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:5px}
+  .release-row{margin-top:0;font-size:9px}
+  .freshness{font-size:10px}
   :global(#device-mobile) .mobile-settings{display:block;margin-top:7px}
   :global(#device-mobile) .mobile-settings .units button{height:44px;padding-inline:10px}
   :global(#device-mobile) .v21-panel .units{display:none}
