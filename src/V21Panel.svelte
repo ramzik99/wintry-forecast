@@ -1,12 +1,12 @@
-<div class="v21-panel">
+<div class:v21-panel={!settingsOnly} class:mobile-settings={settingsOnly}>
   <div class="meta-row">
     <div class="units" role="group" aria-label="Display units">
       <button type="button" aria-pressed={unitSystem === 'metric'} class:active={unitSystem === 'metric'} on:click={() => setUnits('metric')}>Metric</button>
       <button type="button" aria-pressed={unitSystem === 'imperial'} class:active={unitSystem === 'imperial'} on:click={() => setUnits('imperial')}>Imperial</button>
     </div>
-    <span class="freshness" title={freshnessLabel}>{freshnessLabel}</span>
+    {#if !settingsOnly}<span class="freshness" title={freshnessLabel}>{freshnessLabel}</span>{/if}
   </div>
-  <div class="release-row"><span title="Plugin version">v{config.version}</span></div>
+  {#if !settingsOnly}<div class="release-row"><span title="Plugin version">v{config.version}</span></div>{/if}
 </div>
 
 <script lang="ts">
@@ -16,6 +16,7 @@
 
   export let unitSystem: UnitSystem = 'metric';
   export let activeRunTime: number | null = null;
+  export let settingsOnly = false;
 
   let now = Date.now();
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -36,6 +37,7 @@
   }
 
   onMount(() => {
+    if (settingsOnly) return;
     timer = setInterval(() => now = Date.now(), 60_000);
     return () => {
       if (timer) clearInterval(timer);
@@ -52,4 +54,11 @@
   .units button.active { background: rgba(80,190,255,.16); color: #dff7ff; }
   .freshness { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #a8b6bf; font-size: 9px; font-weight: 700; white-space: nowrap; }
   .units button{height:32px;font-size:11px;padding:0 7px}.freshness{font-size:11px}.release-row{font-size:10px;margin-top:6px}
+  .mobile-settings{display:none}
+  :global(#device-mobile) .mobile-settings{display:block;margin-top:7px}
+  :global(#device-mobile) .mobile-settings .units button{height:44px;padding-inline:10px}
+  :global(#device-mobile) .v21-panel .units{display:none}
+  :global(#device-mobile) .v21-panel{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:2px}
+  :global(#device-mobile) .release-row{margin-top:0;font-size:9px}
+  :global(#device-mobile) .freshness{font-size:10px}
 </style>

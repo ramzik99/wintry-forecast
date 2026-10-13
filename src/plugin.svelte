@@ -19,14 +19,7 @@
     </div>
     {#if !precipDetailAvailable}<div class="zoom-hint">Zoom in to level 8 for shading and icons</div>{/if}
     {#if precipDetailAvailable && (showShading || showIcons)}
-        <div class="shade-types" aria-label="Precipitation type colours">
-        <span>{@html precipitationIconSvg('snow')}Snow</span>
-        <span>{@html precipitationIconSvg('wet-snow')}Wet snow</span>
-        <span>{@html precipitationIconSvg('mix')}Mix</span>
-        <span>{@html precipitationIconSvg('rain')}Rain</span>
-        <span>{@html precipitationIconSvg('ice-pellets')}Ice pellets</span>
-        <span>{@html precipitationIconSvg('freezing-rain')}Freezing rain</span>
-      </div>
+      <div class="desktop-legend"><PrecipitationLegend /></div>
     {/if}
     {#if showShading && precipDetailAvailable && geographyError}<div class="storm-legend" role="status">{geographyError}</div>{/if}
     {#if (showShading || showIcons) && terrainDetailStatus}<div class="storm-legend" role="status">{terrainDetailStatus}</div>{/if}
@@ -35,8 +28,12 @@
       <div class="point-tools"><strong>{clickedPlaceName || 'Selected point'}</strong><div><button type="button" on:click={() => {forecastTab='graph';chartOpen=true}}>Forecast</button><button type="button" on:click={() => {forecastTab='sounding';chartOpen=true}}>Sounding</button></div></div>
     {/if}
     <details class="panel-options">
-      <summary>{clickedPoint ? 'Change place · settings' : 'Choose a place'}</summary>
+      <summary><span class="desktop-options-label">{clickedPoint ? 'Change place · settings' : 'Choose a place'}</span><span class="mobile-options-label">Place · colours · units</span></summary>
       <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
+      <div class="mobile-extra-settings">
+        {#if precipDetailAvailable && (showShading || showIcons)}<PrecipitationLegend />{/if}
+        <V21Panel bind:unitSystem {activeRunTime} settingsOnly={true} />
+      </div>
       {#if showContours}<div class="hatch-legend"><span>╱╱╱</span> Dry terrain above estimated snowline</div>{/if}
       <div class="data-status" aria-label="Map data status">
         <span>{mapDataStatus || 'Forecast data not loaded'}</span>
@@ -55,12 +52,14 @@
         {:else}<span class="status-dot"></span>Reading point…{/if}
       </div>
     {/if}
+    <div class="panel-actions">
     <div class="prepare-map-controls">
       {#if preparingMap}<button class="refresh-button" type="button" on:click={cancelMapPreparation}>Cancel preparation</button>
       {:else}<button class="refresh-button" type="button" disabled={!enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading} on:click={prepareMapForecast}>Prepare map forecast</button>{/if}
       <small>{prepareMessage || 'Current area · up to 144 h'}</small>
     </div>
     <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading} on:click={refreshForecast}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
+    </div>
   </div>
 {/if}
 
@@ -105,6 +104,7 @@
 
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import PrecipitationLegend from './PrecipitationLegend.svelte';
   import { map, layerOrder, getMapTiles } from '@windy/map';
   import store from '@windy/store';
   import { createFullRenderingParams, getDataZoom } from '@windy/renderUtils';
@@ -950,4 +950,17 @@
   :global(#device-mobile) .shade-types :global(svg){width:15px;height:15px}
   :global(#device-mobile) .prepare-map-controls{margin:6px 0;gap:3px}
   :global(#device-mobile) .panel-footer{position:relative;bottom:auto;padding-bottom:0}
+  .mobile-extra-settings,.mobile-options-label{display:none}
+  :global(#device-mobile) .desktop-legend,:global(#device-mobile) .desktop-options-label{display:none}
+  :global(#device-mobile) .mobile-extra-settings,:global(#device-mobile) .mobile-options-label{display:block}
+  :global(#device-mobile) .panel-options{margin-top:4px}
+  :global(#device-mobile) .panel-options summary{box-sizing:border-box;min-height:44px;padding:12px 0;font-size:11px}
+  :global(#device-mobile) .title{font-size:15px}
+  :global(#device-mobile) .hide-button,:global(#device-mobile) .switch{min-height:44px}
+  :global(#device-mobile) .panel-actions{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px}
+  :global(#device-mobile) .prepare-map-controls,:global(#device-mobile) .panel-footer{display:contents}
+  :global(#device-mobile) .prepare-map-controls button{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}
+  :global(#device-mobile) .prepare-map-controls small{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}
+  :global(#device-mobile) .panel-footer .refresh-button{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}
+  :global(#device-mobile) .panel-footer .help-link{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}
 </style>
