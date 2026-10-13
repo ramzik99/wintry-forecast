@@ -977,6 +977,12 @@
   .panel-footer .refresh-button{grid-column:2;grid-row:1;padding-inline:6px}
   .panel-footer .help-link{grid-column:3;grid-row:1;padding-inline:3px}
   :global(#device-mobile) .snowline-panel{max-height:none;overflow:visible}
+  /* Windy's small mobile host defaults to max-height:200px!important.
+     Size this host to its content so actions and point tools are not clipped. */
+  :global(#device-mobile #plugin-windy-plugin-snowline-map-100m){
+    height:auto!important;max-height:none!important;overflow:visible!important;
+    padding:0!important;
+  }
   :global(#device-mobile) .panel-head,:global(#device-mobile) .panel-actions{position:static}
   :global(#device-mobile) .settings-button{min-height:44px;min-width:36px}
   :global(#device-mobile) .point-tools strong{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
