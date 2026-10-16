@@ -1,15 +1,15 @@
 {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.1.0",
+  "version": "1000.1.1",
   "icon": "❄️",
   "title": "Wintry forecast",
-  "description": "Concise terrain-aware winter forecast: type, terrain, snowline, precipitation, estimated new snow and timing first; a clean forecast timeline and optional hover/touch sounding.",
+  "description": "Terrain-aware precipitation-type guidance with explicit unresolved states, ECMWF precipitation, approximate snowfall, forecast/sounding views and prepared-map MP4 export.",
   "author": "Ramzi Kandah",
   "repository": "https://github.com/ramzik99/wintry-forecast",
   "desktopUI": "embedded",
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1792153325359,
-  "builtReadable": "2026-10-16T12:22:05.359Z"
+  "built": 1792156651631,
+  "builtReadable": "2026-10-16T13:17:31.631Z"
 }

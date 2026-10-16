@@ -1,17 +1,17 @@
 const __pluginConfig =  {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.1.0",
+  "version": "1000.1.1",
   "icon": "❄️",
   "title": "Wintry forecast",
-  "description": "Concise terrain-aware winter forecast: type, terrain, snowline, precipitation, estimated new snow and timing first; a clean forecast timeline and optional hover/touch sounding.",
+  "description": "Terrain-aware precipitation-type guidance with explicit unresolved states, ECMWF precipitation, approximate snowfall, forecast/sounding views and prepared-map MP4 export.",
   "author": "Ramzi Kandah",
   "repository": "https://github.com/ramzik99/wintry-forecast",
   "desktopUI": "embedded",
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1792153325239,
-  "builtReadable": "2026-10-16T12:22:05.239Z"
+  "built": 1792156651449,
+  "builtReadable": "2026-10-16T13:17:31.450Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -948,7 +948,8 @@ const PRECIP_TYPE_COLOURS = {
     mix: '#95a109',
     rain: '#0099b6',
     'ice-pellets': '#510c0f',
-    'freezing-rain': '#900096'
+    'freezing-rain': '#900096',
+    uncertain: '#718096'
 };
 const PRECIP_SHADES = [
     {
@@ -971,6 +972,7 @@ const cloud = '<path d="M7 17H25a5 5 0 0 0-.6-10 7 7 0 0 0-13-1A5.6 5.6 0 0 0 7 
 const drop = '<path d="M11 20l-2 4m11-4-2 4m-2 2-2 3"/>';
 const snow = '<path d="M16 19v11m-5-8 10 5m-10 0 10-5m-5-3-2 2m2-2 2 2m-2 9-2-2m2 2 2-2"/>';
 const shapes = {
+    uncertain: cloud + '<path d="M13 22a3 3 0 1 1 5 2c-2 1-2 2-2 3"/><circle cx="16" cy="30" r=".5"/>',
     rain: cloud + drop,
     snow: '<path d="M16 3v26M5 9l22 14M5 23 27 9M16 3l-4 4m4-4 4 4m-4 22-4-4m4 4 4-4M5 9l1 5m-1-5 5-1m17 15-5 1m5-1-1-5M5 23l5 1m-5-1 1-5M27 9l-5-1m5 1-1 5"/>',
     'wet-snow': cloud + snow + '<path d="M7 21l-2 4m21-4-2 4"/>',
@@ -1102,6 +1104,10 @@ function instance$6($$self) {
 		{
 			code: 'freezing-rain',
 			label: 'Freezing rain'
+		},
+		{
+			code: 'uncertain',
+			label: 'Type unresolved'
 		}
 	];
 
@@ -2116,7 +2122,7 @@ class PlaceSearch extends SvelteComponent {
 
 const config = {
     name: 'windy-plugin-snowline-map-100m',
-    version: '1000.1.0'};
+    version: '1000.1.1'};
 
 const UNITS_STORAGE_KEY = 'wintry:units:v1';
 function loadUnitSystem() {
@@ -2149,13 +2155,17 @@ function formatElevation(m, units, stepM = 10) {
     return `${Math.round(m / stepM) * stepM} m`;
 }
 function formatSnow(cm, units) {
-    if (cm === null || !Number.isFinite(cm)) return '—';
-    if (cm < 0.05) return 'None';
+    if (cm === null || !Number.isFinite(cm) || cm < 0) return 'Unavailable';
+    if (cm === 0) return 'None';
     if (units === 'imperial') {
         const value = cmToInches(cm);
-        return value < 4 ? `${value.toFixed(1).replace(/\.0$/, '')} in` : `${Math.round(value)} in`;
+        return value < 1 ? '<1 in' : `≈ ${Math.round(value)} in`;
     }
-    return cm < 10 ? `${cm.toFixed(1).replace(/\.0$/, '')} cm` : `${Math.round(cm)} cm`;
+    return cm < 1 ? '<1 cm' : `≈ ${Math.round(cm)} cm`;
+}
+/** Display precision only; this rounding is not an uncertainty interval. */ function formatSnowline(m, units) {
+    if (m === null || !Number.isFinite(m)) return 'Unresolved';
+    return units === 'imperial' ? `≈ ${Math.round(metresToFeet(m) / 500) * 500} ft` : `≈ ${Math.round(m / 100) * 100} m`;
 }
 function formatPrecip(mm3h, units) {
     if (mm3h === null || !Number.isFinite(mm3h)) return '—';
@@ -2471,6 +2481,14 @@ const PRESSURE_LEVELS = [
     '200h',
     '150h'
 ];
+/** Public contours/labels omit a fabricated numeric zero level in an all-cold column.
+ * The raw bounded extrapolation remains available for research comparisons.
+ */ function resolvedSnowlineM(profile) {
+    const result = wetBulbZeroHeight(profile);
+    // Match the public phase-detail guardrail; a very wide crossing layer is unresolved.
+    if (result.lower && result.upper && result.upper.heightM - result.lower.heightM > 1400) return null;
+    return result.status === 'resolved' && result.snowLevelM !== null && Number.isFinite(result.snowLevelM) ? result.snowLevelM : null;
+}
 const DEFAULT_COLD_COLUMN_LAPSE_C_PER_M = -6e-3;
 const MIN_COLD_COLUMN_GRADIENT_C_PER_M = -0.012;
 const MAX_COLD_COLUMN_GRADIENT_C_PER_M = -1e-3;
@@ -2786,8 +2804,28 @@ function toThreeHourlyMillimetres(key, raw) {
     return index >= 0 && target < supportedIntervalEnd(times, index, data.__precipPeriodsH) ? precipMmAt(data, index) : null;
 }
 
-/** Qualify a model estimate without discarding its best-supported phase. */ function precipitationLabel(phase, confidence = phase.confidence) {
-    return confidence === 'low' ? `${phase.label} possible` : phase.label;
+/** Internal detail flags are not calibrated probabilities of forecast accuracy. */ function precipitationLabel(phase, confidence = phase.confidence) {
+    if (phase.label === 'Precipitation · type unresolved') return phase.label;
+    return confidence === 'low' || confidence === 'medium' ? `${phase.label} possible` : phase.label;
+}
+/** Public guidance withholds a specific phase when the profile-detail flag is low.
+ * This abstention rule is a product guardrail, not evidence of calibrated skill.
+ * Keep the raw classifier available for research and method regression checks.
+ */ function supportedPrecipitationType(profile, terrainM) {
+    if (!Number.isFinite(terrainM)) return null;
+    const phase = terrainPrecipitationType(profile, terrainM);
+    if (phase && phase.confidence !== 'low') return phase;
+    return {
+        surfaceWetBulbC: NaN,
+        meltingDegreeMetres: NaN,
+        refreezingDegreeMetres: NaN,
+        confidence: 'low',
+        ...phase,
+        key: 'uncertain',
+        label: 'Precipitation · type unresolved',
+        icon: '?',
+        detail: 'Insufficient vertical detail or site below the resolved profile; no specific type assigned'
+    };
 }
 const WARM_NODE_C = 0.2;
 const MIN_MELTING_DM = 150;
@@ -2816,7 +2854,7 @@ function terrainProfile(profile, terrainM) {
     let surface;
     let extrapolated = false;
     let start = 0;
-    if (terrainM <= p[0].heightM) {
+    if (terrainM < p[0].heightM) {
         surface = {
             ...p[0],
             heightM: terrainM
@@ -2869,7 +2907,13 @@ function classifyConfidence(points, extrapolated, warmDM, coldDM) {
     for(let i = 1; i < points.length; i++)maxGap = Math.max(maxGap, points[i].heightM - points[i - 1].heightM);
     if (maxGap > 1400) return 'low';
     const near = (value, threshold, margin)=>Math.abs(value - threshold) <= margin;
-    if (near(warmDM, MIN_MELTING_DM, 90) || near(warmDM, PARTIAL_MELTING_DM, 180) || near(warmDM, FULL_MELTING_DM, 260) || near(coldDM, ICE_PELLET_REFREEZE_DM, 220)) return 'medium';
+    if ([
+        -0.7,
+        0,
+        0.3,
+        0.6,
+        1.2
+    ].some((threshold)=>near(points[0].wetBulbC, threshold, 0.2)) || near(warmDM, MIN_MELTING_DM, 90) || near(warmDM, PARTIAL_MELTING_DM, 180) || near(warmDM, FULL_MELTING_DM, 260) || near(coldDM, ICE_PELLET_REFREEZE_DM, 220)) return 'medium';
     return maxGap <= 850 ? 'high' : 'medium';
 }
 function result(key, label, icon, detail, confidence, surfaceWetBulbC, meltingDegreeMetres, refreezingDegreeMetres) {
@@ -2918,8 +2962,7 @@ function result(key, label, icon, detail, confidence, surfaceWetBulbC, meltingDe
 
 function snowlineAt(point, index, terrainM) {
     try {
-        const result = wetBulbZeroHeight(buildProfile(point.forecast, index));
-        return result.snowLevelM !== null && Number.isFinite(result.snowLevelM) ? result.snowLevelM : null;
+        return resolvedSnowlineM(buildProfile(point.forecast, index));
     } catch  {
         return null;
     }
@@ -3068,7 +3111,7 @@ function clamp$1(value, min, max) {
         sweMm: 0,
         depthCm: 0
     };
-    if (!phase || !Number.isFinite(phase.surfaceWetBulbC)) return null;
+    if (!phase || phase.key === 'uncertain' || phase.confidence === 'low' || !Number.isFinite(phase.surfaceWetBulbC)) return null;
     const fraction = snowFraction(phase), ratio = snowToLiquidRatio(phase);
     if (![
         fraction,
@@ -3141,7 +3184,7 @@ function buildSnowForecast(point, terrainM) {
     const existing = terrains?.get(key);
     if (existing && existing.times === point.times) return existing;
     const amounts = point.times.map((_, i)=>precipMmAt(point.forecast, i));
-    const thermalPhases = point.times.map((_, i)=>Number.isFinite(key) ? terrainPrecipitationType(buildProfile(point.forecast, i), key) : null);
+    const thermalPhases = point.times.map((_, i)=>Number.isFinite(key) ? supportedPrecipitationType(buildProfile(point.forecast, i), key) : null);
     const sourcePeriods = point.forecast.__precipPeriodsH;
     const ends = point.times.map((_, i)=>supportedIntervalEnd(point.times, i, sourcePeriods));
     const cumulativeSnowfallCm = [];
@@ -3274,7 +3317,7 @@ function aggregateConfidence(event) {
     ];
     for(let i = 1; i < qualifying.length; i++){
         const gapH = (qualifying[i].time - event[event.length - 1].time) / 3600_000;
-        if (gapH > MAX_EVENT_GAP_HOURS) break;
+        if (gapH > MAX_EVENT_GAP_HOURS || qualifying[i].index !== event[event.length - 1].index + 1) break;
         event.push(qualifying[i]);
     }
     const startTime = event[0].time;
@@ -3304,7 +3347,7 @@ function aggregateConfidence(event) {
     const snow = snowForecastWindow(series, Math.max(fromTime, startTime), endTime);
     // Do not present an event cut off by missing data as a complete storm total.
     const following = last.index + 1;
-    const boundaryKnown = endTime >= horizonEnd || following < times.length && times[following] === endTime && series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null) && supportedIntervalEnd(times, following, series.sourcePeriods) > endTime;
+    const boundaryKnown = endTime >= horizonEnd || following < times.length && times[following] === endTime && series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null && series.thermalPhases[following]?.key !== 'uncertain') && supportedIntervalEnd(times, following, series.sourcePeriods) > endTime;
     return {
         startTime,
         endTime,
@@ -3340,7 +3383,11 @@ function conditionLabel(precip, phase) {
         const start = point.times[i], intervalEnd = Math.min(end, supportedIntervalEnd(point.times, i, point.forecast.__precipPeriodsH));
         if (intervalEnd <= fromTime) continue;
         const precip = precipMmAt(point.forecast, i);
-        if (start > coveredUntil || intervalEnd <= start || precip === null || isPrecipitating(precip) && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM)) {
+        const phase = isPrecipitating(precip) ? supportedPrecipitationType(buildProfile(point.forecast, i), terrainM) : null;
+        if (start <= coveredUntil && isPrecipitating(precip) && phase?.key === 'uncertain') {
+            return 'Wintry outlook uncertain · precipitation type unresolved';
+        }
+        if (start > coveredUntil || intervalEnd <= start || precip === null || isPrecipitating(precip) && !phase) {
             return partialOutlook();
         }
         coveredUntil = intervalEnd;
@@ -3348,48 +3395,8 @@ function conditionLabel(precip, phase) {
     return coveredUntil >= end ? 'No wintry precipitation in the available forecast' : partialOutlook();
 }
 
-/** Broad central difference, deliberately independent of the map's pixel zoom. */ function terrainSlopes(west, east, south, north, halfSpanM = 2000) {
-    if (![
-        west,
-        east,
-        south,
-        north
-    ].every((v)=>v !== null && Number.isFinite(v)) || !Number.isFinite(halfSpanM) || halfSpanM < 1000) return null;
-    return {
-        east: (east - west) / (2 * halfSpanM),
-        north: (north - south) / (2 * halfSpanM),
-        halfSpanM
-    };
-}
-/** Kinematic exposure diagnostic only. This is not model vertical velocity or QPF. */ function terrainFlow(forecast, index, terrainM, slopes) {
-    if (terrainM === null || !Number.isFinite(terrainM) || !slopes || ![
-        slopes.east,
-        slopes.north,
-        slopes.halfSpanM
-    ].every(Number.isFinite) || slopes.halfSpanM < 1000) return null;
-    // Never take a fixed pressure level that may be below the actual mountain.
-    const candidates = buildProfile(forecast, index).filter((p)=>p.heightM >= terrainM + 200 && p.heightM <= terrainM + 2000).sort((a, b)=>Math.abs(a.heightM - terrainM - 1000) - Math.abs(b.heightM - terrainM - 1000));
-    for (const p of candidates){
-        const u = valueAt(forecast[`wind_u-${p.level}`], index), v = valueAt(forecast[`wind_v-${p.level}`], index);
-        if (u === null || v === null || !Number.isFinite(p.tempC) || !Number.isFinite(p.dewpointC)) continue;
-        const es = (t)=>Math.exp(17.67 * t / (t + 243.5));
-        const relativeHumidity = Math.max(0, Math.min(100, 100 * es(Math.min(p.tempC, p.dewpointC)) / es(p.tempC)));
-        const upliftProxyMs = u * slopes.east + v * slopes.north;
-        if (!Number.isFinite(relativeHumidity) || !Number.isFinite(upliftProxyMs)) return null;
-        return {
-            upliftProxyMs,
-            relativeHumidity,
-            windSpeedMs: Math.hypot(u, v),
-            heightAboveTerrainM: p.heightM - terrainM,
-            level: p.level,
-            direction: Math.abs(upliftProxyMs) < 0.05 ? 'Weak/cross-slope' : upliftProxyMs > 0 ? 'Upslope' : 'Downslope'
-        };
-    }
-    return null;
-}
-
 /** A cumulative estimate is supported only up to the first unknown interval. */ function forecastCoverage(precip, phases, times) {
-    const known = precip.map((value, i)=>value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(times[i]) && (value === 0 || phases[i] != null));
+    const known = precip.map((value, i)=>value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(times[i]) && (value === 0 || phases[i] != null && phases[i].key !== 'uncertain'));
     let prefix = 0;
     while(prefix < known.length && known[prefix] && (prefix === 0 || times[prefix] > times[prefix - 1] && times[prefix] - times[prefix - 1] <= 3 * 3600_000))prefix++;
     const complete = known.length > 0 && prefix === known.length;
@@ -3767,7 +3774,7 @@ function create_if_block$2(ctx) {
 			t15 = space();
 			span5 = element("span");
 			small2 = element("small");
-			small2.textContent = "Snowline";
+			small2.textContent = "Est. snowline";
 			b2 = element("b");
 			t17 = text(t17_value);
 			t18 = space();
@@ -4304,7 +4311,7 @@ function create_if_block_3$2(ctx) {
 			line = svg_element("line");
 			rect = svg_element("rect");
 			text_1 = svg_element("text");
-			t0 = text("Snowline ");
+			t0 = text("Est. ");
 			t1 = text(t1_value);
 			attr(line, "x1", "48");
 			attr(line, "x2", "310");
@@ -5136,11 +5143,8 @@ function instance$3($$self, $$props, $$invalidate) {
 		? y(terrain)
 		: null;
 
-		const wbz = wetBulbZeroHeight(profile);
-
-		const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM)
-		? wbz.snowLevelM
-		: null;
+		wetBulbZeroHeight(profile);
+		const snowlineM = resolvedSnowlineM(profile);
 
 		const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH
 		? y(snowlineM)
@@ -5154,7 +5158,7 @@ function instance$3($$self, $$props, $$invalidate) {
 		: null;
 
 		const phase = hasPrecip && terrain !== null && Number.isFinite(terrain)
-		? terrainPrecipitationType(profile, terrain)
+		? supportedPrecipitationType(profile, terrain)
 		: null;
 
 		return {
@@ -5169,9 +5173,7 @@ function instance$3($$self, $$props, $$invalidate) {
 			surfaceTw: diagnostics
 			? `${diagnostics.extrapolated ? '~' : ''}${formatTemperature(diagnostics.wetBulbC, units)}`
 			: '—',
-			snowline: snowlineM === null
-			? 'Unresolved'
-			: (wbz.extrapolated ? '~ ' : '') + formatElevation(snowlineM, units),
+			snowline: formatSnowline(snowlineM, units),
 			warmEnergy: phase
 			? `${Math.round(phase.meltingDegreeMetres)} °C·m`
 			: '—',
@@ -5335,29 +5337,29 @@ class SoundingChart extends SvelteComponent {
 /* src\SnowlineChart.svelte generated by Svelte v4.2.20 */
 
 function add_css$1(target) {
-	append_styles(target, "svelte-1q22nou", ".chart-shell.svelte-1q22nou.svelte-1q22nou{position:fixed;z-index:10020;width:min(430px, calc(100vw - 16px));padding:11px 12px 10px;border:1px solid rgba(98, 213, 255, 0.35);border-radius:14px;background:linear-gradient(180deg, rgba(15, 24, 31, 0.99), rgba(9, 17, 23, 0.99));color:white;box-shadow:0 16px 42px rgba(0, 0, 0, 0.56);backdrop-filter:blur(6px)}.chart-head.svelte-1q22nou.svelte-1q22nou{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.chart-title.svelte-1q22nou.svelte-1q22nou{min-width:0;flex:1}.chart-title.svelte-1q22nou b.svelte-1q22nou{display:block;font-size:15px}.chart-title.svelte-1q22nou small.svelte-1q22nou,.chart-title.svelte-1q22nou em.svelte-1q22nou{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal}.chart-title.svelte-1q22nou small.svelte-1q22nou{margin-top:3px;color:#a5b4bd;font-size:9px}.chart-title.svelte-1q22nou em.svelte-1q22nou{margin-top:2px;color:#70cef4;font-size:8px}.chart-actions.svelte-1q22nou.svelte-1q22nou{display:flex;gap:4px}.chart-actions.svelte-1q22nou button.svelte-1q22nou{height:26px;min-width:26px;padding:0 7px;border:1px solid rgba(255, 255, 255, 0.08);border-radius:7px;background:rgba(255, 255, 255, 0.075);color:#fff;font-size:12px;font-weight:800;cursor:pointer}.chart-actions.svelte-1q22nou button.svelte-1q22nou:hover{background:rgba(98, 213, 255, 0.15)}.png-button.svelte-1q22nou.svelte-1q22nou{font-size:8px !important}.drag-button.svelte-1q22nou.svelte-1q22nou{cursor:grab!important;touch-action:none}.forecast-tabs.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;padding:3px;border-radius:8px;background:rgba(255, 255, 255, 0.035)}.forecast-tabs.svelte-1q22nou button.svelte-1q22nou{height:27px;border:0;border-radius:6px;background:transparent;color:#82939d;font-size:9px;font-weight:800;cursor:pointer}.forecast-tabs.svelte-1q22nou button.active.svelte-1q22nou{background:rgba(98, 213, 255, 0.13);color:#eaf7fc;box-shadow:inset 0 0 0 1px rgba(98, 213, 255, 0.22)}.plot-wrap.svelte-1q22nou.svelte-1q22nou{position:relative;margin-top:5px}svg.svelte-1q22nou.svelte-1q22nou{display:block;width:100%;height:auto;overflow:visible;touch-action:none}.plot-bg.svelte-1q22nou.svelte-1q22nou,.band-bg.svelte-1q22nou.svelte-1q22nou{fill:rgba(255, 255, 255, 0.022);stroke:rgba(104, 151, 177, 0.22);stroke-width:1}.terrain-zone.svelte-1q22nou.svelte-1q22nou{fill:rgba(55, 190, 232, 0.085)}.grid.svelte-1q22nou.svelte-1q22nou{stroke:rgba(160, 196, 216, 0.13)}.axis.svelte-1q22nou.svelte-1q22nou{fill:#8fa1ac;font-size:8px;font-family:sans-serif}.section-label.svelte-1q22nou.svelte-1q22nou{fill:#cbd8df;font-size:6.8px;font-family:sans-serif;font-weight:800;letter-spacing:0.35px}.section-label.svelte-1q22nou tspan.svelte-1q22nou{fill:#657681;font-weight:500}.snowline-title.svelte-1q22nou.svelte-1q22nou{fill:#cfeefb}.precip-title.svelte-1q22nou.svelte-1q22nou,.precip-axis.svelte-1q22nou.svelte-1q22nou{fill:#64d4f5}.phase-title.svelte-1q22nou.svelte-1q22nou{fill:#d9c75e}.snow-title.svelte-1q22nou.svelte-1q22nou,.snow-axis.svelte-1q22nou.svelte-1q22nou{fill:#82e398}.terrain-line.svelte-1q22nou.svelte-1q22nou{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag.svelte-1q22nou.svelte-1q22nou{fill:#ffbd75;font-size:6px;font-family:sans-serif}.snowline-line.svelte-1q22nou.svelte-1q22nou{fill:none;stroke:#65d5ff;stroke-width:2.7;stroke-linecap:round;stroke-linejoin:round}.min24-line.svelte-1q22nou.svelte-1q22nou{stroke:#9fe9ff;stroke-width:1;stroke-dasharray:2 3}.min24-dot.svelte-1q22nou.svelte-1q22nou{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag.svelte-1q22nou.svelte-1q22nou{fill:#bdefff;font-size:5.8px;font-family:sans-serif;font-weight:800}.now-line.svelte-1q22nou.svelte-1q22nou{stroke:#ff6658;stroke-width:1.25}.now-tag-bg.svelte-1q22nou.svelte-1q22nou{fill:#ff6658}.now-tag.svelte-1q22nou.svelte-1q22nou{fill:#fff;font-size:7px;font-family:sans-serif;font-weight:800}.cursor.svelte-1q22nou.svelte-1q22nou{stroke:#b9c6cd;stroke-width:1;stroke-dasharray:2 3}.current-dot.svelte-1q22nou.svelte-1q22nou{fill:#fff;stroke:#65d5ff;stroke-width:2.3}.crossing-line.svelte-1q22nou.svelte-1q22nou{stroke:#ffe05b;stroke-width:1.3;stroke-dasharray:3 3;cursor:pointer}.crossing-dot.svelte-1q22nou.svelte-1q22nou{fill:#12191f;stroke:#ffe05b;stroke-width:2.1;cursor:pointer}.inspect-line.svelte-1q22nou.svelte-1q22nou{stroke:#83939d}.precip-bar.svelte-1q22nou.svelte-1q22nou{fill:#3f9fbe;opacity:0.72}.precip-bar.wet.svelte-1q22nou.svelte-1q22nou{fill:#67d6f5;opacity:0.96}.phase-base.svelte-1q22nou.svelte-1q22nou{fill:#0b1419}.phase-block.svelte-1q22nou.svelte-1q22nou{opacity:0.94}.phase-snow.svelte-1q22nou.svelte-1q22nou{fill:#b2b2b2}.phase-wet-snow.svelte-1q22nou.svelte-1q22nou{fill:#569456}.phase-mix.svelte-1q22nou.svelte-1q22nou{fill:#95a109}.phase-rain.svelte-1q22nou.svelte-1q22nou{fill:#0099b6}.phase-ice-pellets.svelte-1q22nou.svelte-1q22nou{fill:#510c0f}.phase-freezing-rain.svelte-1q22nou.svelte-1q22nou{fill:#900096}.phase-legend-svg.svelte-1q22nou text.svelte-1q22nou{fill:#d4dfe6;font-size:9px;font-family:sans-serif}.new-snow-area.svelte-1q22nou.svelte-1q22nou{fill:#82e398;opacity:0.16}.new-snow-line.svelte-1q22nou.svelte-1q22nou{fill:none;stroke:#82e398;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.empty-band.svelte-1q22nou.svelte-1q22nou{fill:#778993;font-size:7px;font-family:sans-serif}.tooltip.svelte-1q22nou.svelte-1q22nou{position:absolute;z-index:4;min-width:176px;transform:translateX(-50%);padding:7px 9px;border-radius:9px;background:rgba(5, 12, 17, 0.99);border:1px solid rgba(98, 213, 255, 0.25);box-shadow:0 7px 20px rgba(0, 0, 0, 0.44);pointer-events:none}.tooltip.svelte-1q22nou>b.svelte-1q22nou{display:block;font-size:8.8px}.tooltip.svelte-1q22nou>strong.svelte-1q22nou{display:flex;align-items:center;gap:5px;margin:4px 0 5px;font-size:9.2px}.tip-phase-dot.svelte-1q22nou.svelte-1q22nou,.current-phase-dot.svelte-1q22nou.svelte-1q22nou{display:inline-block;width:8px;height:8px;border-radius:2px;flex:0 0 auto}.tip-grid.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:1fr 1fr;gap:4px 9px}.tip-grid.svelte-1q22nou span.svelte-1q22nou{font-size:7.3px;color:#8fa0aa}.tip-grid.svelte-1q22nou b.svelte-1q22nou{color:#eaf3f7;font-weight:800}.text-snow.svelte-1q22nou.svelte-1q22nou{color:#b2b2b2}.text-wet-snow.svelte-1q22nou.svelte-1q22nou{color:#569456}.text-mix.svelte-1q22nou.svelte-1q22nou{color:#95a109}.text-rain.svelte-1q22nou.svelte-1q22nou{color:#0099b6}.text-ice-pellets.svelte-1q22nou.svelte-1q22nou{color:#510c0f;text-shadow:0 0 1px #fff}.text-freezing-rain.svelte-1q22nou.svelte-1q22nou{color:#900096}.current-card.svelte-1q22nou.svelte-1q22nou{margin-top:3px;padding:7px;border:1px solid rgba(255, 255, 255, 0.07);border-left:3px solid rgba(255, 255, 255, 0.28);border-radius:9px;background:rgba(255, 255, 255, 0.028)}.active-snow.svelte-1q22nou.svelte-1q22nou{border-left-color:#b2b2b2}.active-wet-snow.svelte-1q22nou.svelte-1q22nou{border-left-color:#569456}.active-mix.svelte-1q22nou.svelte-1q22nou{border-left-color:#95a109}.active-rain.svelte-1q22nou.svelte-1q22nou{border-left-color:#0099b6}.active-ice-pellets.svelte-1q22nou.svelte-1q22nou{border-left-color:#510c0f}.active-freezing-rain.svelte-1q22nou.svelte-1q22nou{border-left-color:#900096}.current-type.svelte-1q22nou.svelte-1q22nou{text-align:center}.current-type.svelte-1q22nou b.svelte-1q22nou{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px}.current-type.svelte-1q22nou strong.svelte-1q22nou{display:block;margin-top:3px;color:#81dfff;font-size:7.3px}.metrics.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:repeat(2, 1fr);gap:4px;margin-top:6px}.metrics.svelte-1q22nou span.svelte-1q22nou{padding:5px 2px;border-radius:7px;background:rgba(255, 255, 255, 0.035);text-align:center;min-width:0}.metrics.svelte-1q22nou small.svelte-1q22nou{display:block;color:#7f909a;font-size:5.8px}.metrics.svelte-1q22nou b.svelte-1q22nou{display:block;margin-top:1px;font-size:7px;white-space:nowrap}.outlook24.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin-top:6px;padding:6px 8px;border-radius:8px;background:rgba(98, 213, 255, 0.06);border:1px solid rgba(98, 213, 255, 0.11)}.outlook24.svelte-1q22nou>b.svelte-1q22nou{grid-row:0.33333333;color:#8fdfff;font-size:7px;text-transform:uppercase;letter-spacing:0.3px}.outlook24.svelte-1q22nou span.svelte-1q22nou{color:#dceaf0;font-size:7.5px;font-weight:700}.outlook24.svelte-1q22nou button.svelte-1q22nou{justify-self:start;padding:2px 0;border:0;background:transparent;color:#f1d67d;font-size:7px;font-weight:800;cursor:pointer}.outlook24.svelte-1q22nou button.svelte-1q22nou:hover{color:#fff2ae;text-decoration:underline}.note.svelte-1q22nou.svelte-1q22nou{margin-top:4px;color:#d7bc4e;font-size:7.2px;text-align:center}.hint.svelte-1q22nou.svelte-1q22nou{margin-top:5px;color:#66757e;font-size:6.7px;text-align:center}.empty.svelte-1q22nou.svelte-1q22nou{padding:25px 8px;text-align:center;color:#8a9aa4;font-size:10px}@media(max-width: 520px){.chart-shell.svelte-1q22nou.svelte-1q22nou{width:calc(100vw - 12px);padding:9px;border-radius:12px}.png-button.svelte-1q22nou.svelte-1q22nou{display:none !important}.chart-title.svelte-1q22nou small.svelte-1q22nou,.chart-title.svelte-1q22nou em.svelte-1q22nou{max-width:180px}.metrics.svelte-1q22nou.svelte-1q22nou{gap:3px}.metrics.svelte-1q22nou small.svelte-1q22nou{font-size:5.3px}.metrics.svelte-1q22nou b.svelte-1q22nou{font-size:6.4px}.tooltip.svelte-1q22nou.svelte-1q22nou{min-width:158px}.outlook24.svelte-1q22nou span.svelte-1q22nou,.outlook24.svelte-1q22nou button.svelte-1q22nou{font-size:6.6px}}.event-head.svelte-1q22nou.svelte-1q22nou,.elevation-head.svelte-1q22nou.svelte-1q22nou{display:flex;align-items:center;justify-content:space-between;gap:8px}.confidence.svelte-1q22nou.svelte-1q22nou{padding:2px 5px;border-radius:8px;font-size:6.5px;font-style:normal;font-weight:850}.confidence-high.svelte-1q22nou.svelte-1q22nou{background:rgba(96, 211, 139, 0.12);color:#87e5aa}.confidence-medium.svelte-1q22nou.svelte-1q22nou{background:rgba(255, 209, 84, 0.12);color:#f5d76d}.confidence-low.svelte-1q22nou.svelte-1q22nou{background:rgba(255, 136, 104, 0.12);color:#ffad96}.event-hazard.svelte-1q22nou.svelte-1q22nou{border-color:rgba(193, 132, 255, 0.38) !important;box-shadow:inset 3px 0 rgba(193, 132, 255, 0.8)}.event-timeline.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:repeat(3, 1fr);gap:4px;margin-top:3px}.elevation-impact.svelte-1q22nou.svelte-1q22nou{margin-top:6px;padding:7px;border:1px solid rgba(255, 255, 255, 0.08);border-radius:8px;background:rgba(255, 255, 255, 0.025)}.impact-band.svelte-1q22nou.svelte-1q22nou{color:#87a7b7;font-size:6.8px}.impact-band.svelte-1q22nou.svelte-1q22nou{margin-top:3px}.elevation-grid.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:repeat(5, 1fr);gap:3px;margin-top:5px}.chart-shell.svelte-1q22nou.svelte-1q22nou{box-sizing:border-box;max-height:calc(100dvh - 48px);overflow-y:auto;overscroll-behavior:contain}.chart-head.svelte-1q22nou.svelte-1q22nou{position:sticky;top:-11px;z-index:5;padding:8px 0;background:#101a22}.chart-actions.svelte-1q22nou.svelte-1q22nou{flex-wrap:wrap;justify-content:flex-end}.chart-actions.svelte-1q22nou button.svelte-1q22nou{min-height:32px}.png-button.svelte-1q22nou.svelte-1q22nou{display:inline-block !important;font-size:10px !important}.current-type.svelte-1q22nou b.svelte-1q22nou{font-size:15px}.current-type.svelte-1q22nou strong.svelte-1q22nou{font-size:11px}.metrics.svelte-1q22nou small.svelte-1q22nou{font-size:10px}.metrics.svelte-1q22nou b.svelte-1q22nou{font-size:13px}.outlook24.svelte-1q22nou.svelte-1q22nou{display:flex;flex-direction:column;gap:5px}.outlook24.svelte-1q22nou>b.svelte-1q22nou{font-size:10px}.outlook24.svelte-1q22nou span.svelte-1q22nou,.outlook24.svelte-1q22nou button.svelte-1q22nou{font-size:12px;line-height:1.4}.crossing-action.svelte-1q22nou.svelte-1q22nou{width:100%;margin-top:7px;padding:9px;border:1px solid #35515c;border-radius:8px;background:#172932;color:#b7e6f8;text-align:left;font-size:11px;cursor:pointer}.quality-note.svelte-1q22nou.svelte-1q22nou{margin-top:6px;color:#edc881;font-size:11px;line-height:1.4}.hint.svelte-1q22nou.svelte-1q22nou{font-size:10px;line-height:1.35}.forecast-tabs.svelte-1q22nou button.svelte-1q22nou{height:40px;font-size:13px}.chart-title.svelte-1q22nou small.svelte-1q22nou{font-size:12px}.chart-title.svelte-1q22nou em.svelte-1q22nou{font-size:11px}.chart-actions.svelte-1q22nou button.svelte-1q22nou{min-height:36px;min-width:36px}.tooltip.svelte-1q22nou>b.svelte-1q22nou,.tooltip.svelte-1q22nou>strong.svelte-1q22nou{font-size:12px}.tip-grid.svelte-1q22nou span.svelte-1q22nou{font-size:11px}.current-card.svelte-1q22nou.svelte-1q22nou{padding:12px}.metrics.svelte-1q22nou b.svelte-1q22nou{font-size:18px}.section-label.svelte-1q22nou.svelte-1q22nou{font-size:8px}.terrain-tag.svelte-1q22nou.svelte-1q22nou{font-size:8px}button.svelte-1q22nou.svelte-1q22nou:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}");
+	append_styles(target, "svelte-72n019", ".chart-shell.svelte-72n019.svelte-72n019{position:fixed;z-index:10020;width:min(430px, calc(100vw - 16px));padding:11px 12px 10px;border:1px solid rgba(98, 213, 255, 0.35);border-radius:14px;background:linear-gradient(180deg, rgba(15, 24, 31, 0.99), rgba(9, 17, 23, 0.99));color:white;box-shadow:0 16px 42px rgba(0, 0, 0, 0.56);backdrop-filter:blur(6px)}.chart-head.svelte-72n019.svelte-72n019{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.chart-title.svelte-72n019.svelte-72n019{min-width:0;flex:1}.chart-title.svelte-72n019 b.svelte-72n019{display:block;font-size:15px}.chart-title.svelte-72n019 small.svelte-72n019,.chart-title.svelte-72n019 em.svelte-72n019{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal}.chart-title.svelte-72n019 small.svelte-72n019{margin-top:3px;color:#a5b4bd;font-size:9px}.chart-title.svelte-72n019 em.svelte-72n019{margin-top:2px;color:#70cef4;font-size:8px}.chart-actions.svelte-72n019.svelte-72n019{display:flex;gap:4px}.chart-actions.svelte-72n019 button.svelte-72n019{height:26px;min-width:26px;padding:0 7px;border:1px solid rgba(255, 255, 255, 0.08);border-radius:7px;background:rgba(255, 255, 255, 0.075);color:#fff;font-size:12px;font-weight:800;cursor:pointer}.chart-actions.svelte-72n019 button.svelte-72n019:hover{background:rgba(98, 213, 255, 0.15)}.png-button.svelte-72n019.svelte-72n019{font-size:8px !important}.drag-button.svelte-72n019.svelte-72n019{cursor:grab!important;touch-action:none}.forecast-tabs.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;padding:3px;border-radius:8px;background:rgba(255, 255, 255, 0.035)}.forecast-tabs.svelte-72n019 button.svelte-72n019{height:27px;border:0;border-radius:6px;background:transparent;color:#82939d;font-size:9px;font-weight:800;cursor:pointer}.forecast-tabs.svelte-72n019 button.active.svelte-72n019{background:rgba(98, 213, 255, 0.13);color:#eaf7fc;box-shadow:inset 0 0 0 1px rgba(98, 213, 255, 0.22)}.plot-wrap.svelte-72n019.svelte-72n019{position:relative;margin-top:5px}svg.svelte-72n019.svelte-72n019{display:block;width:100%;height:auto;overflow:visible;touch-action:none}.plot-bg.svelte-72n019.svelte-72n019,.band-bg.svelte-72n019.svelte-72n019{fill:rgba(255, 255, 255, 0.022);stroke:rgba(104, 151, 177, 0.22);stroke-width:1}.terrain-zone.svelte-72n019.svelte-72n019{fill:rgba(55, 190, 232, 0.085)}.grid.svelte-72n019.svelte-72n019{stroke:rgba(160, 196, 216, 0.13)}.axis.svelte-72n019.svelte-72n019{fill:#8fa1ac;font-size:8px;font-family:sans-serif}.section-label.svelte-72n019.svelte-72n019{fill:#cbd8df;font-size:6.8px;font-family:sans-serif;font-weight:800;letter-spacing:0.35px}.section-label.svelte-72n019 tspan.svelte-72n019{fill:#657681;font-weight:500}.snowline-title.svelte-72n019.svelte-72n019{fill:#cfeefb}.precip-title.svelte-72n019.svelte-72n019,.precip-axis.svelte-72n019.svelte-72n019{fill:#64d4f5}.phase-title.svelte-72n019.svelte-72n019{fill:#d9c75e}.snow-title.svelte-72n019.svelte-72n019,.snow-axis.svelte-72n019.svelte-72n019{fill:#82e398}.terrain-line.svelte-72n019.svelte-72n019{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag.svelte-72n019.svelte-72n019{fill:#ffbd75;font-size:6px;font-family:sans-serif}.snowline-line.svelte-72n019.svelte-72n019{fill:none;stroke:#65d5ff;stroke-width:2.7;stroke-linecap:round;stroke-linejoin:round}.min24-line.svelte-72n019.svelte-72n019{stroke:#9fe9ff;stroke-width:1;stroke-dasharray:2 3}.min24-dot.svelte-72n019.svelte-72n019{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag.svelte-72n019.svelte-72n019{fill:#bdefff;font-size:5.8px;font-family:sans-serif;font-weight:800}.now-line.svelte-72n019.svelte-72n019{stroke:#ff6658;stroke-width:1.25}.now-tag-bg.svelte-72n019.svelte-72n019{fill:#ff6658}.now-tag.svelte-72n019.svelte-72n019{fill:#fff;font-size:7px;font-family:sans-serif;font-weight:800}.cursor.svelte-72n019.svelte-72n019{stroke:#b9c6cd;stroke-width:1;stroke-dasharray:2 3}.current-dot.svelte-72n019.svelte-72n019{fill:#fff;stroke:#65d5ff;stroke-width:2.3}.crossing-line.svelte-72n019.svelte-72n019{stroke:#ffe05b;stroke-width:1.3;stroke-dasharray:3 3;cursor:pointer}.crossing-dot.svelte-72n019.svelte-72n019{fill:#12191f;stroke:#ffe05b;stroke-width:2.1;cursor:pointer}.inspect-line.svelte-72n019.svelte-72n019{stroke:#83939d}.precip-bar.svelte-72n019.svelte-72n019{fill:#3f9fbe;opacity:0.72}.precip-bar.wet.svelte-72n019.svelte-72n019{fill:#67d6f5;opacity:0.96}.phase-base.svelte-72n019.svelte-72n019{fill:#0b1419}.phase-block.svelte-72n019.svelte-72n019{opacity:0.94}.phase-snow.svelte-72n019.svelte-72n019{fill:#b2b2b2}.phase-wet-snow.svelte-72n019.svelte-72n019{fill:#569456}.phase-mix.svelte-72n019.svelte-72n019{fill:#95a109}.phase-rain.svelte-72n019.svelte-72n019{fill:#0099b6}.phase-ice-pellets.svelte-72n019.svelte-72n019{fill:#510c0f}.phase-freezing-rain.svelte-72n019.svelte-72n019{fill:#900096}.phase-uncertain.svelte-72n019.svelte-72n019{fill:#718096}.phase-legend-svg.svelte-72n019 text.svelte-72n019{fill:#d4dfe6;font-size:9px;font-family:sans-serif}.new-snow-area.svelte-72n019.svelte-72n019{fill:#82e398;opacity:0.16}.new-snow-line.svelte-72n019.svelte-72n019{fill:none;stroke:#82e398;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.empty-band.svelte-72n019.svelte-72n019{fill:#778993;font-size:7px;font-family:sans-serif}.tooltip.svelte-72n019.svelte-72n019{position:absolute;z-index:4;min-width:176px;transform:translateX(-50%);padding:7px 9px;border-radius:9px;background:rgba(5, 12, 17, 0.99);border:1px solid rgba(98, 213, 255, 0.25);box-shadow:0 7px 20px rgba(0, 0, 0, 0.44);pointer-events:none}.tooltip.svelte-72n019>b.svelte-72n019{display:block;font-size:8.8px}.tooltip.svelte-72n019>strong.svelte-72n019{display:flex;align-items:center;gap:5px;margin:4px 0 5px;font-size:9.2px}.tip-phase-dot.svelte-72n019.svelte-72n019,.current-phase-dot.svelte-72n019.svelte-72n019{display:inline-block;width:8px;height:8px;border-radius:2px;flex:0 0 auto}.tip-grid.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:1fr 1fr;gap:4px 9px}.tip-grid.svelte-72n019 span.svelte-72n019{font-size:7.3px;color:#8fa0aa}.tip-grid.svelte-72n019 b.svelte-72n019{color:#eaf3f7;font-weight:800}.text-snow.svelte-72n019.svelte-72n019{color:#b2b2b2}.text-wet-snow.svelte-72n019.svelte-72n019{color:#569456}.text-mix.svelte-72n019.svelte-72n019{color:#95a109}.text-rain.svelte-72n019.svelte-72n019{color:#0099b6}.text-ice-pellets.svelte-72n019.svelte-72n019{color:#510c0f;text-shadow:0 0 1px #fff}.text-freezing-rain.svelte-72n019.svelte-72n019{color:#900096}.current-card.svelte-72n019.svelte-72n019{margin-top:3px;padding:7px;border:1px solid rgba(255, 255, 255, 0.07);border-left:3px solid rgba(255, 255, 255, 0.28);border-radius:9px;background:rgba(255, 255, 255, 0.028)}.active-snow.svelte-72n019.svelte-72n019{border-left-color:#b2b2b2}.active-wet-snow.svelte-72n019.svelte-72n019{border-left-color:#569456}.active-mix.svelte-72n019.svelte-72n019{border-left-color:#95a109}.active-rain.svelte-72n019.svelte-72n019{border-left-color:#0099b6}.active-ice-pellets.svelte-72n019.svelte-72n019{border-left-color:#510c0f}.active-freezing-rain.svelte-72n019.svelte-72n019{border-left-color:#900096}.current-type.svelte-72n019.svelte-72n019{text-align:center}.current-type.svelte-72n019 b.svelte-72n019{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px}.current-type.svelte-72n019 strong.svelte-72n019{display:block;margin-top:3px;color:#81dfff;font-size:7.3px}.metrics.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:repeat(2, 1fr);gap:4px;margin-top:6px}.metrics.svelte-72n019 span.svelte-72n019{padding:5px 2px;border-radius:7px;background:rgba(255, 255, 255, 0.035);text-align:center;min-width:0}.metrics.svelte-72n019 small.svelte-72n019{display:block;color:#7f909a;font-size:5.8px}.metrics.svelte-72n019 b.svelte-72n019{display:block;margin-top:1px;font-size:7px;white-space:nowrap}.outlook24.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin-top:6px;padding:6px 8px;border-radius:8px;background:rgba(98, 213, 255, 0.06);border:1px solid rgba(98, 213, 255, 0.11)}.outlook24.svelte-72n019>b.svelte-72n019{grid-row:0.33333333;color:#8fdfff;font-size:7px;text-transform:uppercase;letter-spacing:0.3px}.outlook24.svelte-72n019 span.svelte-72n019{color:#dceaf0;font-size:7.5px;font-weight:700}.outlook24.svelte-72n019 button.svelte-72n019{justify-self:start;padding:2px 0;border:0;background:transparent;color:#f1d67d;font-size:7px;font-weight:800;cursor:pointer}.outlook24.svelte-72n019 button.svelte-72n019:hover{color:#fff2ae;text-decoration:underline}.note.svelte-72n019.svelte-72n019{margin-top:4px;color:#d7bc4e;font-size:7.2px;text-align:center}.hint.svelte-72n019.svelte-72n019{margin-top:5px;color:#66757e;font-size:6.7px;text-align:center}.empty.svelte-72n019.svelte-72n019{padding:25px 8px;text-align:center;color:#8a9aa4;font-size:10px}@media(max-width: 520px){.chart-shell.svelte-72n019.svelte-72n019{width:calc(100vw - 12px);padding:9px;border-radius:12px}.png-button.svelte-72n019.svelte-72n019{display:none !important}.chart-title.svelte-72n019 small.svelte-72n019,.chart-title.svelte-72n019 em.svelte-72n019{max-width:180px}.metrics.svelte-72n019.svelte-72n019{gap:3px}.metrics.svelte-72n019 small.svelte-72n019{font-size:5.3px}.metrics.svelte-72n019 b.svelte-72n019{font-size:6.4px}.tooltip.svelte-72n019.svelte-72n019{min-width:158px}.outlook24.svelte-72n019 span.svelte-72n019,.outlook24.svelte-72n019 button.svelte-72n019{font-size:6.6px}}.event-head.svelte-72n019.svelte-72n019,.elevation-head.svelte-72n019.svelte-72n019{display:flex;align-items:center;justify-content:space-between;gap:8px}.confidence.svelte-72n019.svelte-72n019{padding:2px 5px;border-radius:8px;font-size:6.5px;font-style:normal;font-weight:850}.confidence-high.svelte-72n019.svelte-72n019{background:rgba(96, 211, 139, 0.12);color:#87e5aa}.confidence-medium.svelte-72n019.svelte-72n019{background:rgba(255, 209, 84, 0.12);color:#f5d76d}.confidence-low.svelte-72n019.svelte-72n019{background:rgba(255, 136, 104, 0.12);color:#ffad96}.event-hazard.svelte-72n019.svelte-72n019{border-color:rgba(193, 132, 255, 0.38) !important;box-shadow:inset 3px 0 rgba(193, 132, 255, 0.8)}.event-timeline.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:repeat(3, 1fr);gap:4px;margin-top:3px}.elevation-impact.svelte-72n019.svelte-72n019{margin-top:6px;padding:7px;border:1px solid rgba(255, 255, 255, 0.08);border-radius:8px;background:rgba(255, 255, 255, 0.025)}.impact-band.svelte-72n019.svelte-72n019{color:#87a7b7;font-size:6.8px}.impact-band.svelte-72n019.svelte-72n019{margin-top:3px}.elevation-grid.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:repeat(5, 1fr);gap:3px;margin-top:5px}.chart-shell.svelte-72n019.svelte-72n019{box-sizing:border-box;max-height:calc(100dvh - 48px);overflow-y:auto;overscroll-behavior:contain}.chart-head.svelte-72n019.svelte-72n019{position:sticky;top:-11px;z-index:5;padding:8px 0;background:#101a22}.chart-actions.svelte-72n019.svelte-72n019{flex-wrap:wrap;justify-content:flex-end}.chart-actions.svelte-72n019 button.svelte-72n019{min-height:32px}.png-button.svelte-72n019.svelte-72n019{display:inline-block !important;font-size:10px !important}.current-type.svelte-72n019 b.svelte-72n019{font-size:15px}.current-type.svelte-72n019 strong.svelte-72n019{font-size:11px}.metrics.svelte-72n019 small.svelte-72n019{font-size:10px}.metrics.svelte-72n019 b.svelte-72n019{font-size:13px}.outlook24.svelte-72n019.svelte-72n019{display:flex;flex-direction:column;gap:5px}.outlook24.svelte-72n019>b.svelte-72n019{font-size:10px}.outlook24.svelte-72n019 span.svelte-72n019,.outlook24.svelte-72n019 button.svelte-72n019{font-size:12px;line-height:1.4}.crossing-action.svelte-72n019.svelte-72n019{width:100%;margin-top:7px;padding:9px;border:1px solid #35515c;border-radius:8px;background:#172932;color:#b7e6f8;text-align:left;font-size:11px;cursor:pointer}.quality-note.svelte-72n019.svelte-72n019{margin-top:6px;color:#edc881;font-size:11px;line-height:1.4}.hint.svelte-72n019.svelte-72n019{font-size:10px;line-height:1.35}.forecast-tabs.svelte-72n019 button.svelte-72n019{height:40px;font-size:13px}.chart-title.svelte-72n019 small.svelte-72n019{font-size:12px}.chart-title.svelte-72n019 em.svelte-72n019{font-size:11px}.chart-actions.svelte-72n019 button.svelte-72n019{min-height:36px;min-width:36px}.tooltip.svelte-72n019>b.svelte-72n019,.tooltip.svelte-72n019>strong.svelte-72n019{font-size:12px}.tip-grid.svelte-72n019 span.svelte-72n019{font-size:11px}.current-card.svelte-72n019.svelte-72n019{padding:12px}.metrics.svelte-72n019 b.svelte-72n019{font-size:18px}.section-label.svelte-72n019.svelte-72n019{font-size:8px}.terrain-tag.svelte-72n019.svelte-72n019{font-size:8px}button.svelte-72n019.svelte-72n019:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}");
 }
 
 function get_each_context(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[47] = list[i];
+	child_ctx[45] = list[i];
 	return child_ctx;
 }
 
 function get_each_context_1(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[50] = list[i];
+	child_ctx[48] = list[i];
 	return child_ctx;
 }
 
 function get_each_context_2(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[53] = list[i];
+	child_ctx[51] = list[i];
 	return child_ctx;
 }
 
 // (9:6) {#if tab === 'graph' && showNow}
-function create_if_block_24(ctx) {
+function create_if_block_23(ctx) {
 	let button;
 	let mounted;
 	let dispose;
@@ -5366,7 +5368,7 @@ function create_if_block_24(ctx) {
 		c() {
 			button = element("button");
 			button.textContent = "Now";
-			attr(button, "class", "now-action svelte-1q22nou");
+			attr(button, "class", "now-action svelte-72n019");
 			attr(button, "type", "button");
 			attr(button, "title", "Back to now");
 			attr(button, "aria-label", "Back to now");
@@ -5375,7 +5377,7 @@ function create_if_block_24(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*resetToNow*/ ctx[20]);
+				dispose = listen(button, "click", /*resetToNow*/ ctx[19]);
 				mounted = true;
 			}
 		},
@@ -5392,7 +5394,7 @@ function create_if_block_24(ctx) {
 }
 
 // (10:6) {#if tab === 'graph' && chart}
-function create_if_block_23(ctx) {
+function create_if_block_22(ctx) {
 	let button;
 	let t_value = (/*pngBusy*/ ctx[7] ? 'Saving…' : 'Save image') + "";
 	let t;
@@ -5403,7 +5405,7 @@ function create_if_block_23(ctx) {
 		c() {
 			button = element("button");
 			t = text(t_value);
-			attr(button, "class", "png-button svelte-1q22nou");
+			attr(button, "class", "png-button svelte-72n019");
 			attr(button, "type", "button");
 			button.disabled = /*pngBusy*/ ctx[7];
 		},
@@ -5412,7 +5414,7 @@ function create_if_block_23(ctx) {
 			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*downloadPng*/ ctx[22]);
+				dispose = listen(button, "click", /*downloadPng*/ ctx[21]);
 				mounted = true;
 			}
 		},
@@ -5434,7 +5436,7 @@ function create_if_block_23(ctx) {
 	};
 }
 
-// (134:2) {:else}
+// (135:2) {:else}
 function create_else_block_5(ctx) {
 	let soundingchart;
 	let current;
@@ -5526,7 +5528,7 @@ function create_if_block$1(ctx) {
 	};
 }
 
-// (131:2) {:else}
+// (132:2) {:else}
 function create_else_block_4(ctx) {
 	let div;
 
@@ -5534,7 +5536,7 @@ function create_else_block_4(ctx) {
 		c() {
 			div = element("div");
 			div.textContent = "Wintry forecast unavailable.";
-			attr(div, "class", "empty svelte-1q22nou");
+			attr(div, "class", "empty svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -5601,83 +5603,80 @@ function create_if_block_1$1(ctx) {
 	let rect8;
 	let text11;
 	let t13;
+	let rect9;
 	let text12;
 	let t14;
-	let tspan2;
-	let t15_value = (/*units*/ ctx[4] === 'imperial' ? 'est. in' : 'est. cm') + "";
+	let text13;
 	let t15;
-	let rect9;
+	let tspan2;
+	let t16_value = (/*units*/ ctx[4] === 'imperial' ? 'in' : 'cm') + "";
+	let t16;
+	let rect10;
 	let if_block3_anchor;
 	let if_block4_anchor;
 	let if_block5_anchor;
 	let if_block6_anchor;
-	let t16;
 	let t17;
+	let t18;
 	let div3;
 	let div1;
 	let b0;
-	let t18;
 	let t19;
+	let t20;
 	let div2;
 	let span0;
 	let small0;
 	let b1;
-
-	let t21_value = (/*chart*/ ctx[12].currentSnowline === null
-	? 'WBZ unresolved'
-	: formatElevation(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4])) + "";
-
-	let t21;
+	let t22_value = formatSnowline(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4]) + "";
 	let t22;
+	let t23;
 	let span1;
 	let small1;
 	let b2;
-	let t24_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "";
-	let t24;
+	let t25_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "";
 	let t25;
+	let t26;
 	let div4;
 	let b3;
-	let t27;
-	let span2;
-	let t28_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "";
 	let t28;
+	let span2;
+	let t29_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "";
 	let t29;
-	let span3;
-	let t30_value = /*chart*/ ctx[12].precip24Range + "";
 	let t30;
+	let span3;
+	let t31_value = /*chart*/ ctx[12].precip24Range + "";
 	let t31;
 	let t32;
-	let span4;
 	let t33;
-	let t34_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "";
+	let span4;
 	let t34;
+	let t35_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "";
 	let t35;
-	let t36_value = formatSnow(/*chart*/ ctx[12].remainingSnow24h, /*units*/ ctx[4]) + "";
 	let t36;
-	let t37;
 	let small2;
-	let t39;
-	let t40;
+	let t38;
 	let div5;
 	let b4;
 
-	let t41_value = ((/*event*/ ctx[13]?.activeNow)
+	let t39_value = ((/*event*/ ctx[13]?.activeNow)
 	? 'Current wintry period'
 	: 'Next wintry period') + "";
 
+	let t39;
+	let t40;
 	let t41;
 	let t42;
 	let t43;
-	let t44;
+	let div6;
 	let t45;
-	let if_block15_anchor;
+	let if_block14_anchor;
 	let mounted;
 	let dispose;
-	let if_block0 = /*chart*/ ctx[12].terrainY !== null && create_if_block_22(ctx);
-	let if_block1 = show_if && create_if_block_21();
+	let if_block0 = /*chart*/ ctx[12].terrainY !== null && create_if_block_21(ctx);
+	let if_block1 = show_if && create_if_block_20();
 
 	function select_block_type_2(ctx, dirty) {
-		if (/*chart*/ ctx[12].hasPrecip) return create_if_block_20;
+		if (/*chart*/ ctx[12].hasPrecip) return create_if_block_19;
 		return create_else_block_3;
 	}
 
@@ -5691,15 +5690,15 @@ function create_if_block_1$1(ctx) {
 	}
 
 	function select_block_type_3(ctx, dirty) {
-		if (/*chart*/ ctx[12].newSnowMax > 0.05) return create_if_block_19;
+		if (/*chart*/ ctx[12].newSnowMax > 0) return create_if_block_18;
 		return create_else_block_2$1;
 	}
 
 	let current_block_type_1 = select_block_type_3(ctx);
 	let if_block3 = current_block_type_1(ctx);
-	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_18(ctx);
-	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_17(ctx);
-	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_16(ctx);
+	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_17(ctx);
+	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_16$1(ctx);
+	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_15$1(ctx);
 	let each_value = ensure_array_like([24, 48, 72, 96, 120, 144]);
 	let each_blocks = [];
 
@@ -5707,18 +5706,17 @@ function create_if_block_1$1(ctx) {
 		each_blocks[i] = create_each_block(get_each_context(ctx, each_value, i));
 	}
 
-	let if_block7 = /*tooltip*/ ctx[11] && create_if_block_13$1(ctx);
+	let if_block7 = /*tooltip*/ ctx[11] && create_if_block_12$1(ctx);
 
 	function select_block_type_4(ctx, dirty) {
-		if (/*chart*/ ctx[12].currentPhase) return create_if_block_12$1;
+		if (/*chart*/ ctx[12].currentPhase) return create_if_block_11$1;
 		return create_else_block_1$1;
 	}
 
 	let current_block_type_2 = select_block_type_4(ctx);
 	let if_block8 = current_block_type_2(ctx);
-	let if_block9 = /*chart*/ ctx[12].currentPosition && create_if_block_11$1(ctx);
-	let if_block10 = /*chart*/ ctx[12].precip24h === null && create_if_block_10$1();
-	let if_block11 = /*flow*/ ctx[14] && create_if_block_9$1(ctx);
+	let if_block9 = /*chart*/ ctx[12].currentPosition && create_if_block_10$1(ctx);
+	let if_block10 = /*chart*/ ctx[12].precip24h === null && create_if_block_9$1();
 
 	function select_block_type_5(ctx, dirty) {
 		if (/*event*/ ctx[13]) return create_if_block_5$1;
@@ -5726,17 +5724,17 @@ function create_if_block_1$1(ctx) {
 	}
 
 	let current_block_type_3 = select_block_type_5(ctx);
-	let if_block12 = current_block_type_3(ctx);
-	let if_block13 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
-	let if_block14 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
-	let if_block15 = /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
+	let if_block11 = current_block_type_3(ctx);
+	let if_block12 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
+	let if_block13 = /*chart*/ ctx[12].currentPhase?.key === 'uncertain' && create_if_block_3$1();
+	let if_block14 = /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
 
 	return {
 		c() {
 			div0 = element("div");
 			svg = svg_element("svg");
 			text0 = svg_element("text");
-			t0 = text("SNOWLINE ");
+			t0 = text("ESTIMATED THERMAL SNOWLINE ");
 			tspan0 = svg_element("tspan");
 			t1 = text(t1_value);
 			rect0 = svg_element("rect");
@@ -5785,11 +5783,14 @@ function create_if_block_1$1(ctx) {
 			rect8 = svg_element("rect");
 			text11 = svg_element("text");
 			t13 = text("Freezing rain");
-			text12 = svg_element("text");
-			t14 = text("SNOWFALL TOTAL ");
-			tspan2 = svg_element("tspan");
-			t15 = text(t15_value);
 			rect9 = svg_element("rect");
+			text12 = svg_element("text");
+			t14 = text("Type unresolved");
+			text13 = svg_element("text");
+			t15 = text("SNOWFALL ESTIMATE ");
+			tspan2 = svg_element("tspan");
+			t16 = text(t16_value);
+			rect10 = svg_element("rect");
 			if_block3.c();
 			if_block3_anchor = empty();
 			if (if_block4) if_block4.c();
@@ -5803,216 +5804,225 @@ function create_if_block_1$1(ctx) {
 				each_blocks[i].c();
 			}
 
-			t16 = space();
-			if (if_block7) if_block7.c();
 			t17 = space();
+			if (if_block7) if_block7.c();
+			t18 = space();
 			div3 = element("div");
 			div1 = element("div");
 			b0 = element("b");
 			if_block8.c();
-			t18 = space();
-			if (if_block9) if_block9.c();
 			t19 = space();
+			if (if_block9) if_block9.c();
+			t20 = space();
 			div2 = element("div");
 			span0 = element("span");
 			small0 = element("small");
-			small0.textContent = "Snowline";
+			small0.textContent = "Est. snowline";
 			b1 = element("b");
-			t21 = text(t21_value);
-			t22 = space();
+			t22 = text(t22_value);
+			t23 = space();
 			span1 = element("span");
 			small1 = element("small");
 			small1.textContent = "Avg precip";
 			b2 = element("b");
-			t24 = text(t24_value);
-			t25 = space();
+			t25 = text(t25_value);
+			t26 = space();
 			div4 = element("div");
 			b3 = element("b");
-			b3.textContent = "Next 24 h precipitation";
-			t27 = space();
+			b3.textContent = "Next 24 h · ECMWF precipitation";
+			t28 = space();
 			span2 = element("span");
-			t28 = text(t28_value);
+			t29 = text(t29_value);
 			if (if_block10) if_block10.c();
-			t29 = space();
+			t30 = space();
 			span3 = element("span");
-			t30 = text(t30_value);
-			t31 = text(" · liquid equivalent");
-			t32 = space();
+			t31 = text(t31_value);
+			t32 = text(" · liquid equivalent");
+			t33 = space();
 			span4 = element("span");
-			t33 = text("Snowfall: ");
-			t34 = text(t34_value);
-			t35 = text(" · remaining layer*: ");
-			t36 = text(t36_value);
-			t37 = space();
+			t34 = text("Snowfall estimate: ");
+			t35 = text(t35_value);
+			t36 = space();
 			small2 = element("small");
-			small2.textContent = "*Experimental settling/melt estimate; excludes existing snow and ground heat.";
-			t39 = space();
-			if (if_block11) if_block11.c();
-			t40 = space();
+			small2.textContent = "Approximate fresh snowfall, not snow depth on the ground. Amount withheld when type is unresolved.";
+			t38 = space();
 			div5 = element("div");
 			b4 = element("b");
-			t41 = text(t41_value);
+			t39 = text(t39_value);
+			t40 = space();
+			if_block11.c();
+			t41 = space();
+			if (if_block12) if_block12.c();
 			t42 = space();
-			if_block12.c();
-			t43 = space();
 			if (if_block13) if_block13.c();
-			t44 = space();
-			if (if_block14) if_block14.c();
+			t43 = space();
+			div6 = element("div");
+			div6.textContent = "Model guidance · accuracy has not been independently validated.";
 			t45 = space();
-			if (if_block15) if_block15.c();
-			if_block15_anchor = empty();
-			attr(tspan0, "class", "svelte-1q22nou");
+			if (if_block14) if_block14.c();
+			if_block14_anchor = empty();
+			attr(tspan0, "class", "svelte-72n019");
 			attr(text0, "x", "42");
 			attr(text0, "y", "11");
-			attr(text0, "class", "section-label snowline-title svelte-1q22nou");
+			attr(text0, "class", "section-label snowline-title svelte-72n019");
 			attr(rect0, "x", "42");
 			attr(rect0, "y", "18");
 			attr(rect0, "width", "306");
 			attr(rect0, "height", "112");
 			attr(rect0, "rx", "8");
-			attr(rect0, "class", "plot-bg svelte-1q22nou");
+			attr(rect0, "class", "plot-bg svelte-72n019");
 			attr(line0, "x1", "42");
 			attr(line0, "x2", "348");
 			attr(line0, "y1", "18");
 			attr(line0, "y2", "18");
-			attr(line0, "class", "grid svelte-1q22nou");
+			attr(line0, "class", "grid svelte-72n019");
 			attr(line1, "x1", "42");
 			attr(line1, "x2", "348");
 			attr(line1, "y1", "74");
 			attr(line1, "y2", "74");
-			attr(line1, "class", "grid svelte-1q22nou");
+			attr(line1, "class", "grid svelte-72n019");
 			attr(line2, "x1", "42");
 			attr(line2, "x2", "348");
 			attr(line2, "y1", "130");
 			attr(line2, "y2", "130");
-			attr(line2, "class", "grid svelte-1q22nou");
+			attr(line2, "class", "grid svelte-72n019");
 			attr(text1, "x", "37");
 			attr(text1, "y", "22");
 			attr(text1, "text-anchor", "end");
-			attr(text1, "class", "axis svelte-1q22nou");
+			attr(text1, "class", "axis svelte-72n019");
 			attr(text2, "x", "37");
 			attr(text2, "y", "78");
 			attr(text2, "text-anchor", "end");
-			attr(text2, "class", "axis svelte-1q22nou");
+			attr(text2, "class", "axis svelte-72n019");
 			attr(text3, "x", "37");
 			attr(text3, "y", "134");
 			attr(text3, "text-anchor", "end");
-			attr(text3, "class", "axis svelte-1q22nou");
+			attr(text3, "class", "axis svelte-72n019");
 			attr(path, "d", path_d_value = /*chart*/ ctx[12].points);
-			attr(path, "class", "snowline-line svelte-1q22nou");
-			attr(tspan1, "class", "svelte-1q22nou");
+			attr(path, "class", "snowline-line svelte-72n019");
+			attr(tspan1, "class", "svelte-72n019");
 			attr(text4, "x", "42");
 			attr(text4, "y", "147");
-			attr(text4, "class", "section-label precip-title svelte-1q22nou");
+			attr(text4, "class", "section-label precip-title svelte-72n019");
 			attr(rect1, "x", "42");
 			attr(rect1, "y", "153");
 			attr(rect1, "width", "306");
 			attr(rect1, "height", "36");
 			attr(rect1, "rx", "7");
-			attr(rect1, "class", "band-bg svelte-1q22nou");
+			attr(rect1, "class", "band-bg svelte-72n019");
 			attr(text5, "x", "42");
 			attr(text5, "y", "205");
-			attr(text5, "class", "section-label phase-title svelte-1q22nou");
+			attr(text5, "class", "section-label phase-title svelte-72n019");
 			attr(rect2, "x", "42");
 			attr(rect2, "y", "211");
 			attr(rect2, "width", "306");
 			attr(rect2, "height", "25");
 			attr(rect2, "rx", "7");
-			attr(rect2, "class", "band-bg phase-base svelte-1q22nou");
+			attr(rect2, "class", "band-bg phase-base svelte-72n019");
 			attr(rect3, "x", "42");
 			attr(rect3, "y", "244");
 			attr(rect3, "width", "7");
 			attr(rect3, "height", "7");
 			attr(rect3, "rx", "1.5");
-			attr(rect3, "class", "phase-snow svelte-1q22nou");
+			attr(rect3, "class", "phase-snow svelte-72n019");
 			attr(text6, "x", "53");
 			attr(text6, "y", "251");
-			attr(text6, "class", "svelte-1q22nou");
+			attr(text6, "class", "svelte-72n019");
 			attr(rect4, "x", "145");
 			attr(rect4, "y", "244");
 			attr(rect4, "width", "7");
 			attr(rect4, "height", "7");
 			attr(rect4, "rx", "1.5");
-			attr(rect4, "class", "phase-wet-snow svelte-1q22nou");
+			attr(rect4, "class", "phase-wet-snow svelte-72n019");
 			attr(text7, "x", "156");
 			attr(text7, "y", "251");
-			attr(text7, "class", "svelte-1q22nou");
+			attr(text7, "class", "svelte-72n019");
 			attr(rect5, "x", "246");
 			attr(rect5, "y", "244");
 			attr(rect5, "width", "7");
 			attr(rect5, "height", "7");
 			attr(rect5, "rx", "1.5");
-			attr(rect5, "class", "phase-mix svelte-1q22nou");
+			attr(rect5, "class", "phase-mix svelte-72n019");
 			attr(text8, "x", "257");
 			attr(text8, "y", "251");
-			attr(text8, "class", "svelte-1q22nou");
+			attr(text8, "class", "svelte-72n019");
 			attr(rect6, "x", "42");
 			attr(rect6, "y", "258");
 			attr(rect6, "width", "7");
 			attr(rect6, "height", "7");
 			attr(rect6, "rx", "1.5");
-			attr(rect6, "class", "phase-rain svelte-1q22nou");
+			attr(rect6, "class", "phase-rain svelte-72n019");
 			attr(text9, "x", "53");
 			attr(text9, "y", "265");
-			attr(text9, "class", "svelte-1q22nou");
+			attr(text9, "class", "svelte-72n019");
 			attr(rect7, "x", "145");
 			attr(rect7, "y", "258");
 			attr(rect7, "width", "7");
 			attr(rect7, "height", "7");
 			attr(rect7, "rx", "1.5");
-			attr(rect7, "class", "phase-ice-pellets svelte-1q22nou");
+			attr(rect7, "class", "phase-ice-pellets svelte-72n019");
 			attr(text10, "x", "156");
 			attr(text10, "y", "265");
-			attr(text10, "class", "svelte-1q22nou");
+			attr(text10, "class", "svelte-72n019");
 			attr(rect8, "x", "246");
 			attr(rect8, "y", "258");
 			attr(rect8, "width", "7");
 			attr(rect8, "height", "7");
 			attr(rect8, "rx", "1.5");
-			attr(rect8, "class", "phase-freezing-rain svelte-1q22nou");
+			attr(rect8, "class", "phase-freezing-rain svelte-72n019");
 			attr(text11, "x", "257");
 			attr(text11, "y", "265");
-			attr(text11, "class", "svelte-1q22nou");
-			attr(g, "class", "phase-legend-svg svelte-1q22nou");
-			attr(tspan2, "class", "svelte-1q22nou");
-			attr(text12, "x", "42");
-			attr(text12, "y", "282");
-			attr(text12, "class", "section-label snow-title svelte-1q22nou");
+			attr(text11, "class", "svelte-72n019");
 			attr(rect9, "x", "42");
-			attr(rect9, "y", "288");
-			attr(rect9, "width", "306");
-			attr(rect9, "height", "28");
-			attr(rect9, "rx", "7");
-			attr(rect9, "class", "band-bg svelte-1q22nou");
+			attr(rect9, "y", "270");
+			attr(rect9, "width", "7");
+			attr(rect9, "height", "7");
+			attr(rect9, "rx", "1.5");
+			attr(rect9, "class", "phase-uncertain svelte-72n019");
+			attr(text12, "x", "53");
+			attr(text12, "y", "277");
+			attr(text12, "class", "svelte-72n019");
+			attr(g, "class", "phase-legend-svg svelte-72n019");
+			attr(tspan2, "class", "svelte-72n019");
+			attr(text13, "x", "188");
+			attr(text13, "y", "282");
+			attr(text13, "class", "section-label snow-title svelte-72n019");
+			attr(rect10, "x", "42");
+			attr(rect10, "y", "288");
+			attr(rect10, "width", "306");
+			attr(rect10, "height", "28");
+			attr(rect10, "rx", "7");
+			attr(rect10, "class", "band-bg svelte-72n019");
 			attr(svg, "viewBox", "0 0 360 338");
 			attr(svg, "role", "img");
 			attr(svg, "aria-label", "Terrain-aware wintry forecast through 144 hours");
-			attr(svg, "class", "svelte-1q22nou");
-			attr(div0, "class", "plot-wrap svelte-1q22nou");
-			attr(b0, "class", "svelte-1q22nou");
-			attr(div1, "class", "current-type svelte-1q22nou");
-			attr(small0, "class", "svelte-1q22nou");
-			attr(b1, "class", "svelte-1q22nou");
-			attr(span0, "class", "svelte-1q22nou");
-			attr(small1, "class", "svelte-1q22nou");
-			attr(b2, "class", "svelte-1q22nou");
-			attr(span1, "class", "svelte-1q22nou");
-			attr(div2, "class", "metrics svelte-1q22nou");
-			attr(div3, "class", "current-card svelte-1q22nou");
+			attr(svg, "class", "svelte-72n019");
+			attr(div0, "class", "plot-wrap svelte-72n019");
+			attr(b0, "class", "svelte-72n019");
+			attr(div1, "class", "current-type svelte-72n019");
+			attr(small0, "class", "svelte-72n019");
+			attr(b1, "class", "svelte-72n019");
+			attr(span0, "class", "svelte-72n019");
+			attr(small1, "class", "svelte-72n019");
+			attr(b2, "class", "svelte-72n019");
+			attr(span1, "class", "svelte-72n019");
+			attr(div2, "class", "metrics svelte-72n019");
+			attr(div3, "class", "current-card svelte-72n019");
 			toggle_class(div3, "active-snow", /*chart*/ ctx[12].currentPhase?.key === 'snow');
 			toggle_class(div3, "active-wet-snow", /*chart*/ ctx[12].currentPhase?.key === 'wet-snow');
 			toggle_class(div3, "active-mix", /*chart*/ ctx[12].currentPhase?.key === 'mix');
 			toggle_class(div3, "active-rain", /*chart*/ ctx[12].currentPhase?.key === 'rain');
 			toggle_class(div3, "active-ice-pellets", /*chart*/ ctx[12].currentPhase?.key === 'ice-pellets');
 			toggle_class(div3, "active-freezing-rain", /*chart*/ ctx[12].currentPhase?.key === 'freezing-rain');
-			attr(b3, "class", "svelte-1q22nou");
-			attr(span2, "class", "svelte-1q22nou");
-			attr(span3, "class", "svelte-1q22nou");
-			attr(span4, "class", "svelte-1q22nou");
-			attr(div4, "class", "outlook24 svelte-1q22nou");
+			attr(b3, "class", "svelte-72n019");
+			attr(span2, "class", "svelte-72n019");
+			attr(span3, "class", "svelte-72n019");
+			attr(span4, "class", "svelte-72n019");
+			attr(div4, "class", "outlook24 svelte-72n019");
 			attr(div4, "aria-label", "Next 24 hours precipitation");
-			attr(b4, "class", "svelte-1q22nou");
-			attr(div5, "class", "outlook24 event-intelligence svelte-1q22nou");
+			attr(b4, "class", "svelte-72n019");
+			attr(div5, "class", "outlook24 event-intelligence svelte-72n019");
+			attr(div6, "class", "quality-note svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, div0, anchor);
@@ -6069,11 +6079,14 @@ function create_if_block_1$1(ctx) {
 			append(g, rect8);
 			append(g, text11);
 			append(text11, t13);
-			append(svg, text12);
+			append(g, rect9);
+			append(g, text12);
 			append(text12, t14);
-			append(text12, tspan2);
-			append(tspan2, t15);
-			append(svg, rect9);
+			append(svg, text13);
+			append(text13, t15);
+			append(text13, tspan2);
+			append(tspan2, t16);
+			append(svg, rect10);
 			if_block3.m(svg, null);
 			append(svg, if_block3_anchor);
 			if (if_block4) if_block4.m(svg, null);
@@ -6089,67 +6102,65 @@ function create_if_block_1$1(ctx) {
 				}
 			}
 
-			/*svg_binding*/ ctx[28](svg);
-			append(div0, t16);
+			/*svg_binding*/ ctx[26](svg);
+			append(div0, t17);
 			if (if_block7) if_block7.m(div0, null);
-			insert(target, t17, anchor);
+			insert(target, t18, anchor);
 			insert(target, div3, anchor);
 			append(div3, div1);
 			append(div1, b0);
 			if_block8.m(b0, null);
-			append(div1, t18);
+			append(div1, t19);
 			if (if_block9) if_block9.m(div1, null);
-			append(div3, t19);
+			append(div3, t20);
 			append(div3, div2);
 			append(div2, span0);
 			append(span0, small0);
 			append(span0, b1);
-			append(b1, t21);
-			append(div2, t22);
+			append(b1, t22);
+			append(div2, t23);
 			append(div2, span1);
 			append(span1, small1);
 			append(span1, b2);
-			append(b2, t24);
-			insert(target, t25, anchor);
+			append(b2, t25);
+			insert(target, t26, anchor);
 			insert(target, div4, anchor);
 			append(div4, b3);
-			append(div4, t27);
+			append(div4, t28);
 			append(div4, span2);
-			append(span2, t28);
+			append(span2, t29);
 			if (if_block10) if_block10.m(span2, null);
-			append(div4, t29);
+			append(div4, t30);
 			append(div4, span3);
-			append(span3, t30);
 			append(span3, t31);
-			append(div4, t32);
+			append(span3, t32);
+			append(div4, t33);
 			append(div4, span4);
-			append(span4, t33);
 			append(span4, t34);
 			append(span4, t35);
-			append(span4, t36);
-			append(div4, t37);
+			append(div4, t36);
 			append(div4, small2);
-			append(div4, t39);
-			if (if_block11) if_block11.m(div4, null);
-			insert(target, t40, anchor);
+			insert(target, t38, anchor);
 			insert(target, div5, anchor);
 			append(div5, b4);
-			append(b4, t41);
-			append(div5, t42);
-			if_block12.m(div5, null);
-			insert(target, t43, anchor);
+			append(b4, t39);
+			append(div5, t40);
+			if_block11.m(div5, null);
+			insert(target, t41, anchor);
+			if (if_block12) if_block12.m(target, anchor);
+			insert(target, t42, anchor);
 			if (if_block13) if_block13.m(target, anchor);
-			insert(target, t44, anchor);
-			if (if_block14) if_block14.m(target, anchor);
+			insert(target, t43, anchor);
+			insert(target, div6, anchor);
 			insert(target, t45, anchor);
-			if (if_block15) if_block15.m(target, anchor);
-			insert(target, if_block15_anchor, anchor);
+			if (if_block14) if_block14.m(target, anchor);
+			insert(target, if_block14_anchor, anchor);
 
 			if (!mounted) {
 				dispose = [
-					listen(svg, "pointermove", /*handlePointer*/ ctx[21]),
-					listen(svg, "pointerdown", /*handlePointer*/ ctx[21]),
-					listen(svg, "pointerleave", /*pointerleave_handler*/ ctx[29])
+					listen(svg, "pointermove", /*handlePointer*/ ctx[20]),
+					listen(svg, "pointerdown", /*handlePointer*/ ctx[20]),
+					listen(svg, "pointerleave", /*pointerleave_handler*/ ctx[27])
 				];
 
 				mounted = true;
@@ -6162,7 +6173,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_22(ctx);
+					if_block0 = create_if_block_21(ctx);
 					if_block0.c();
 					if_block0.m(svg, line0);
 				}
@@ -6183,7 +6194,7 @@ function create_if_block_1$1(ctx) {
 
 			if (show_if) {
 				if (if_block1) ; else {
-					if_block1 = create_if_block_21();
+					if_block1 = create_if_block_20();
 					if_block1.c();
 					if_block1.m(svg, text4);
 				}
@@ -6229,7 +6240,7 @@ function create_if_block_1$1(ctx) {
 				each_blocks_1.length = each_value_1.length;
 			}
 
-			if (dirty[0] & /*units*/ 16 && t15_value !== (t15_value = (/*units*/ ctx[4] === 'imperial' ? 'est. in' : 'est. cm') + "")) set_data(t15, t15_value);
+			if (dirty[0] & /*units*/ 16 && t16_value !== (t16_value = (/*units*/ ctx[4] === 'imperial' ? 'in' : 'cm') + "")) set_data(t16, t16_value);
 
 			if (current_block_type_1 === (current_block_type_1 = select_block_type_3(ctx)) && if_block3) {
 				if_block3.p(ctx, dirty);
@@ -6247,7 +6258,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block4) {
 					if_block4.p(ctx, dirty);
 				} else {
-					if_block4 = create_if_block_18(ctx);
+					if_block4 = create_if_block_17(ctx);
 					if_block4.c();
 					if_block4.m(svg, if_block4_anchor);
 				}
@@ -6260,7 +6271,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block5) {
 					if_block5.p(ctx, dirty);
 				} else {
-					if_block5 = create_if_block_17(ctx);
+					if_block5 = create_if_block_16$1(ctx);
 					if_block5.c();
 					if_block5.m(svg, if_block5_anchor);
 				}
@@ -6273,7 +6284,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block6) {
 					if_block6.p(ctx, dirty);
 				} else {
-					if_block6 = create_if_block_16(ctx);
+					if_block6 = create_if_block_15$1(ctx);
 					if_block6.c();
 					if_block6.m(svg, if_block6_anchor);
 				}
@@ -6286,7 +6297,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block7) {
 					if_block7.p(ctx, dirty);
 				} else {
-					if_block7 = create_if_block_13$1(ctx);
+					if_block7 = create_if_block_12$1(ctx);
 					if_block7.c();
 					if_block7.m(div0, null);
 				}
@@ -6311,7 +6322,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block9) {
 					if_block9.p(ctx, dirty);
 				} else {
-					if_block9 = create_if_block_11$1(ctx);
+					if_block9 = create_if_block_10$1(ctx);
 					if_block9.c();
 					if_block9.m(div1, null);
 				}
@@ -6320,11 +6331,8 @@ function create_if_block_1$1(ctx) {
 				if_block9 = null;
 			}
 
-			if (dirty[0] & /*chart, units*/ 4112 && t21_value !== (t21_value = (/*chart*/ ctx[12].currentSnowline === null
-			? 'WBZ unresolved'
-			: formatElevation(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4])) + "")) set_data(t21, t21_value);
-
-			if (dirty[0] & /*chart, units*/ 4112 && t24_value !== (t24_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "")) set_data(t24, t24_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t22_value !== (t22_value = formatSnowline(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4]) + "")) set_data(t22, t22_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t25_value !== (t25_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "")) set_data(t25, t25_value);
 
 			if (dirty[0] & /*chart*/ 4096) {
 				toggle_class(div3, "active-snow", /*chart*/ ctx[12].currentPhase?.key === 'snow');
@@ -6350,11 +6358,11 @@ function create_if_block_1$1(ctx) {
 				toggle_class(div3, "active-freezing-rain", /*chart*/ ctx[12].currentPhase?.key === 'freezing-rain');
 			}
 
-			if (dirty[0] & /*chart, units*/ 4112 && t28_value !== (t28_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "")) set_data(t28, t28_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t29_value !== (t29_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "")) set_data(t29, t29_value);
 
 			if (/*chart*/ ctx[12].precip24h === null) {
 				if (if_block10) ; else {
-					if_block10 = create_if_block_10$1();
+					if_block10 = create_if_block_9$1();
 					if_block10.c();
 					if_block10.m(span2, null);
 				}
@@ -6363,89 +6371,77 @@ function create_if_block_1$1(ctx) {
 				if_block10 = null;
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && t30_value !== (t30_value = /*chart*/ ctx[12].precip24Range + "")) set_data(t30, t30_value);
-			if (dirty[0] & /*chart, units*/ 4112 && t34_value !== (t34_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "")) set_data(t34, t34_value);
-			if (dirty[0] & /*chart, units*/ 4112 && t36_value !== (t36_value = formatSnow(/*chart*/ ctx[12].remainingSnow24h, /*units*/ ctx[4]) + "")) set_data(t36, t36_value);
+			if (dirty[0] & /*chart*/ 4096 && t31_value !== (t31_value = /*chart*/ ctx[12].precip24Range + "")) set_data(t31, t31_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t35_value !== (t35_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "")) set_data(t35, t35_value);
 
-			if (/*flow*/ ctx[14]) {
-				if (if_block11) {
-					if_block11.p(ctx, dirty);
-				} else {
-					if_block11 = create_if_block_9$1(ctx);
-					if_block11.c();
-					if_block11.m(div4, null);
-				}
-			} else if (if_block11) {
-				if_block11.d(1);
-				if_block11 = null;
-			}
-
-			if (dirty[0] & /*event*/ 8192 && t41_value !== (t41_value = ((/*event*/ ctx[13]?.activeNow)
+			if (dirty[0] & /*event*/ 8192 && t39_value !== (t39_value = ((/*event*/ ctx[13]?.activeNow)
 			? 'Current wintry period'
-			: 'Next wintry period') + "")) set_data(t41, t41_value);
+			: 'Next wintry period') + "")) set_data(t39, t39_value);
 
-			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block12) {
-				if_block12.p(ctx, dirty);
+			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block11) {
+				if_block11.p(ctx, dirty);
 			} else {
-				if_block12.d(1);
-				if_block12 = current_block_type_3(ctx);
+				if_block11.d(1);
+				if_block11 = current_block_type_3(ctx);
 
-				if (if_block12) {
-					if_block12.c();
-					if_block12.m(div5, null);
+				if (if_block11) {
+					if_block11.c();
+					if_block11.m(div5, null);
 				}
 			}
 
 			if (/*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5]) {
-				if (if_block13) {
-					if_block13.p(ctx, dirty);
+				if (if_block12) {
+					if_block12.p(ctx, dirty);
 				} else {
-					if_block13 = create_if_block_4$1(ctx);
+					if_block12 = create_if_block_4$1(ctx);
+					if_block12.c();
+					if_block12.m(t42.parentNode, t42);
+				}
+			} else if (if_block12) {
+				if_block12.d(1);
+				if_block12 = null;
+			}
+
+			if (/*chart*/ ctx[12].currentPhase?.key === 'uncertain') {
+				if (if_block13) ; else {
+					if_block13 = create_if_block_3$1();
 					if_block13.c();
-					if_block13.m(t44.parentNode, t44);
+					if_block13.m(t43.parentNode, t43);
 				}
 			} else if (if_block13) {
 				if_block13.d(1);
 				if_block13 = null;
 			}
 
-			if (/*chart*/ ctx[12].currentPhase?.confidence === 'low') {
-				if (if_block14) ; else {
-					if_block14 = create_if_block_3$1();
+			if (/*chart*/ ctx[12].coverageNote) {
+				if (if_block14) {
+					if_block14.p(ctx, dirty);
+				} else {
+					if_block14 = create_if_block_2$1(ctx);
 					if_block14.c();
-					if_block14.m(t45.parentNode, t45);
+					if_block14.m(if_block14_anchor.parentNode, if_block14_anchor);
 				}
 			} else if (if_block14) {
 				if_block14.d(1);
 				if_block14 = null;
 			}
-
-			if (/*chart*/ ctx[12].coverageNote) {
-				if (if_block15) {
-					if_block15.p(ctx, dirty);
-				} else {
-					if_block15 = create_if_block_2$1(ctx);
-					if_block15.c();
-					if_block15.m(if_block15_anchor.parentNode, if_block15_anchor);
-				}
-			} else if (if_block15) {
-				if_block15.d(1);
-				if_block15 = null;
-			}
 		},
 		d(detaching) {
 			if (detaching) {
 				detach(div0);
-				detach(t17);
+				detach(t18);
 				detach(div3);
-				detach(t25);
+				detach(t26);
 				detach(div4);
-				detach(t40);
+				detach(t38);
 				detach(div5);
+				detach(t41);
+				detach(t42);
 				detach(t43);
-				detach(t44);
+				detach(div6);
 				detach(t45);
-				detach(if_block15_anchor);
+				detach(if_block14_anchor);
 			}
 
 			if (if_block0) if_block0.d();
@@ -6457,16 +6453,15 @@ function create_if_block_1$1(ctx) {
 			if (if_block5) if_block5.d();
 			if (if_block6) if_block6.d();
 			destroy_each(each_blocks, detaching);
-			/*svg_binding*/ ctx[28](null);
+			/*svg_binding*/ ctx[26](null);
 			if (if_block7) if_block7.d();
 			if_block8.d();
 			if (if_block9) if_block9.d();
 			if (if_block10) if_block10.d();
-			if (if_block11) if_block11.d();
-			if_block12.d();
+			if_block11.d();
+			if (if_block12) if_block12.d(detaching);
 			if (if_block13) if_block13.d(detaching);
 			if (if_block14) if_block14.d(detaching);
-			if (if_block15) if_block15.d(detaching);
 			mounted = false;
 			run_all(dispose);
 		}
@@ -6474,7 +6469,7 @@ function create_if_block_1$1(ctx) {
 }
 
 // (23:8) {#if chart.terrainY !== null}
-function create_if_block_22(ctx) {
+function create_if_block_21(ctx) {
 	let rect;
 	let rect_y_value;
 	let rect_height_value;
@@ -6495,16 +6490,16 @@ function create_if_block_22(ctx) {
 			attr(rect, "y", rect_y_value = /*chart*/ ctx[12].terrainY);
 			attr(rect, "width", "306");
 			attr(rect, "height", rect_height_value = Math.max(0, 130 - /*chart*/ ctx[12].terrainY));
-			attr(rect, "class", "terrain-zone svelte-1q22nou");
+			attr(rect, "class", "terrain-zone svelte-72n019");
 			attr(line, "x1", "42");
 			attr(line, "x2", "348");
 			attr(line, "y1", line_y__value = /*chart*/ ctx[12].terrainY);
 			attr(line, "y2", line_y__value_1 = /*chart*/ ctx[12].terrainY);
-			attr(line, "class", "terrain-line svelte-1q22nou");
+			attr(line, "class", "terrain-line svelte-72n019");
 			attr(text_1, "x", "344");
 			attr(text_1, "y", text_1_y_value = Math.max(27, /*chart*/ ctx[12].terrainY - 4));
 			attr(text_1, "text-anchor", "end");
-			attr(text_1, "class", "terrain-tag svelte-1q22nou");
+			attr(text_1, "class", "terrain-tag svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
@@ -6544,7 +6539,7 @@ function create_if_block_22(ctx) {
 }
 
 // (35:8) {#if !chart.points.trim()}
-function create_if_block_21(ctx) {
+function create_if_block_20(ctx) {
 	let text_1;
 	let t;
 
@@ -6555,7 +6550,7 @@ function create_if_block_21(ctx) {
 			attr(text_1, "x", "195");
 			attr(text_1, "y", "65");
 			attr(text_1, "text-anchor", "middle");
-			attr(text_1, "class", "empty-band svelte-1q22nou");
+			attr(text_1, "class", "empty-band svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -6588,7 +6583,7 @@ function create_else_block_3(ctx) {
 			attr(text_1, "x", "195");
 			attr(text_1, "y", "175");
 			attr(text_1, "text-anchor", "middle");
-			attr(text_1, "class", "empty-band svelte-1q22nou");
+			attr(text_1, "class", "empty-band svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -6610,7 +6605,7 @@ function create_else_block_3(ctx) {
 }
 
 // (39:8) {#if chart.hasPrecip}
-function create_if_block_20(ctx) {
+function create_if_block_19(ctx) {
 	let text0;
 	let t0_value = /*chart*/ ctx[12].precipMaxLabel + "";
 	let t0;
@@ -6639,11 +6634,11 @@ function create_if_block_20(ctx) {
 			attr(text0, "x", "37");
 			attr(text0, "y", "159");
 			attr(text0, "text-anchor", "end");
-			attr(text0, "class", "axis precip-axis svelte-1q22nou");
+			attr(text0, "class", "axis precip-axis svelte-72n019");
 			attr(text1, "x", "37");
 			attr(text1, "y", "190");
 			attr(text1, "text-anchor", "end");
-			attr(text1, "class", "axis svelte-1q22nou");
+			attr(text1, "class", "axis svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, text0, anchor);
@@ -6708,36 +6703,36 @@ function create_each_block_2(ctx) {
 	return {
 		c() {
 			rect = svg_element("rect");
-			attr(rect, "x", rect_x_value = /*bar*/ ctx[53].x);
-			attr(rect, "y", rect_y_value = /*bar*/ ctx[53].y);
-			attr(rect, "width", rect_width_value = /*bar*/ ctx[53].width);
-			attr(rect, "height", rect_height_value = /*bar*/ ctx[53].height);
+			attr(rect, "x", rect_x_value = /*bar*/ ctx[51].x);
+			attr(rect, "y", rect_y_value = /*bar*/ ctx[51].y);
+			attr(rect, "width", rect_width_value = /*bar*/ ctx[51].width);
+			attr(rect, "height", rect_height_value = /*bar*/ ctx[51].height);
 			attr(rect, "rx", "1.1");
-			attr(rect, "class", "precip-bar svelte-1q22nou");
-			toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[53].mm));
+			attr(rect, "class", "precip-bar svelte-72n019");
+			toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[51].mm));
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*bar*/ ctx[53].x)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*bar*/ ctx[51].x)) {
 				attr(rect, "x", rect_x_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_y_value !== (rect_y_value = /*bar*/ ctx[53].y)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_y_value !== (rect_y_value = /*bar*/ ctx[51].y)) {
 				attr(rect, "y", rect_y_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*bar*/ ctx[53].width)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*bar*/ ctx[51].width)) {
 				attr(rect, "width", rect_width_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_height_value !== (rect_height_value = /*bar*/ ctx[53].height)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_height_value !== (rect_height_value = /*bar*/ ctx[51].height)) {
 				attr(rect, "height", rect_height_value);
 			}
 
 			if (dirty[0] & /*chart*/ 4096) {
-				toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[53].mm));
+				toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[51].mm));
 			}
 		},
 		d(detaching) {
@@ -6758,26 +6753,26 @@ function create_each_block_1(ctx) {
 	return {
 		c() {
 			rect = svg_element("rect");
-			attr(rect, "x", rect_x_value = /*block*/ ctx[50].x);
+			attr(rect, "x", rect_x_value = /*block*/ ctx[48].x);
 			attr(rect, "y", "212");
-			attr(rect, "width", rect_width_value = /*block*/ ctx[50].width);
+			attr(rect, "width", rect_width_value = /*block*/ ctx[48].width);
 			attr(rect, "height", "23");
 			attr(rect, "rx", "2.8");
-			attr(rect, "class", rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[50].key}`) + " svelte-1q22nou"));
+			attr(rect, "class", rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-72n019"));
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*block*/ ctx[50].x)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*block*/ ctx[48].x)) {
 				attr(rect, "x", rect_x_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*block*/ ctx[50].width)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*block*/ ctx[48].width)) {
 				attr(rect, "width", rect_width_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_class_value !== (rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[50].key}`) + " svelte-1q22nou"))) {
+			if (dirty[0] & /*chart*/ 4096 && rect_class_value !== (rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-72n019"))) {
 				attr(rect, "class", rect_class_value);
 			}
 		},
@@ -6789,7 +6784,7 @@ function create_each_block_1(ctx) {
 	};
 }
 
-// (66:8) {:else}
+// (67:8) {:else}
 function create_else_block_2$1(ctx) {
 	let text_1;
 
@@ -6808,7 +6803,7 @@ function create_else_block_2$1(ctx) {
 			attr(text_1, "x", "195");
 			attr(text_1, "y", "305");
 			attr(text_1, "text-anchor", "middle");
-			attr(text_1, "class", "empty-band svelte-1q22nou");
+			attr(text_1, "class", "empty-band svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -6829,8 +6824,8 @@ function create_else_block_2$1(ctx) {
 	};
 }
 
-// (62:8) {#if chart.newSnowMax > 0.05}
-function create_if_block_19(ctx) {
+// (63:8) {#if chart.newSnowMax > 0}
+function create_if_block_18(ctx) {
 	let text_1;
 	let t_value = /*chart*/ ctx[12].newSnowMaxLabel + "";
 	let t;
@@ -6848,11 +6843,11 @@ function create_if_block_19(ctx) {
 			attr(text_1, "x", "37");
 			attr(text_1, "y", "294");
 			attr(text_1, "text-anchor", "end");
-			attr(text_1, "class", "axis snow-axis svelte-1q22nou");
+			attr(text_1, "class", "axis snow-axis svelte-72n019");
 			attr(path, "d", path_d_value = /*chart*/ ctx[12].newSnowArea);
-			attr(path, "class", "new-snow-area svelte-1q22nou");
+			attr(path, "class", "new-snow-area svelte-72n019");
 			attr(polyline, "points", polyline_points_value = /*chart*/ ctx[12].newSnowPoints);
-			attr(polyline, "class", "new-snow-line svelte-1q22nou");
+			attr(polyline, "class", "new-snow-line svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -6881,8 +6876,8 @@ function create_if_block_19(ctx) {
 	};
 }
 
-// (70:8) {#if chart.nowX !== null}
-function create_if_block_18(ctx) {
+// (71:8) {#if chart.nowX !== null}
+function create_if_block_17(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6902,17 +6897,17 @@ function create_if_block_18(ctx) {
 			attr(line, "x2", line_x__value_1 = /*chart*/ ctx[12].nowX);
 			attr(line, "y1", "18");
 			attr(line, "y2", "316");
-			attr(line, "class", "now-line svelte-1q22nou");
+			attr(line, "class", "now-line svelte-72n019");
 			attr(rect, "x", rect_x_value = Math.max(43, Math.min(322, /*chart*/ ctx[12].nowX - 13)));
 			attr(rect, "y", "20");
 			attr(rect, "width", "26");
 			attr(rect, "height", "12");
 			attr(rect, "rx", "3");
-			attr(rect, "class", "now-tag-bg svelte-1q22nou");
+			attr(rect, "class", "now-tag-bg svelte-72n019");
 			attr(text_1, "x", text_1_x_value = Math.max(56, Math.min(335, /*chart*/ ctx[12].nowX)));
 			attr(text_1, "y", "29");
 			attr(text_1, "text-anchor", "middle");
-			attr(text_1, "class", "now-tag svelte-1q22nou");
+			attr(text_1, "class", "now-tag svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, line, anchor);
@@ -6947,8 +6942,8 @@ function create_if_block_18(ctx) {
 	};
 }
 
-// (75:8) {#if chart.currentX !== null && chart.currentY !== null}
-function create_if_block_17(ctx) {
+// (76:8) {#if chart.currentX !== null && chart.currentY !== null}
+function create_if_block_16$1(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6964,11 +6959,11 @@ function create_if_block_17(ctx) {
 			attr(line, "x2", line_x__value_1 = /*chart*/ ctx[12].currentX);
 			attr(line, "y1", "18");
 			attr(line, "y2", "316");
-			attr(line, "class", "cursor svelte-1q22nou");
+			attr(line, "class", "cursor svelte-72n019");
 			attr(circle, "cx", circle_cx_value = /*chart*/ ctx[12].currentX);
 			attr(circle, "cy", circle_cy_value = /*chart*/ ctx[12].currentY);
 			attr(circle, "r", "4.2");
-			attr(circle, "class", "current-dot svelte-1q22nou");
+			attr(circle, "class", "current-dot svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, line, anchor);
@@ -7000,8 +6995,8 @@ function create_if_block_17(ctx) {
 	};
 }
 
-// (79:8) {#if tooltip}
-function create_if_block_16(ctx) {
+// (80:8) {#if tooltip}
+function create_if_block_15$1(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -7013,7 +7008,7 @@ function create_if_block_16(ctx) {
 			attr(line, "x2", line_x__value_1 = /*tooltip*/ ctx[11].x);
 			attr(line, "y1", "18");
 			attr(line, "y2", "316");
-			attr(line, "class", "inspect-line svelte-1q22nou");
+			attr(line, "class", "inspect-line svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, line, anchor);
@@ -7035,7 +7030,7 @@ function create_if_block_16(ctx) {
 	};
 }
 
-// (81:8) {#each [24,48,72,96,120,144] as hour}
+// (82:8) {#each [24,48,72,96,120,144] as hour}
 function create_each_block(ctx) {
 	let text_1;
 	let t0;
@@ -7046,12 +7041,12 @@ function create_each_block(ctx) {
 		c() {
 			text_1 = svg_element("text");
 			t0 = text("+");
-			t1 = text(/*hour*/ ctx[47]);
+			t1 = text(/*hour*/ ctx[45]);
 			t2 = text(" h");
-			attr(text_1, "x", 42 + 306 * /*hour*/ ctx[47] / 144);
+			attr(text_1, "x", 42 + 306 * /*hour*/ ctx[45] / 144);
 			attr(text_1, "y", "334");
-			attr(text_1, "text-anchor", /*hour*/ ctx[47] === 144 ? 'end' : 'middle');
-			attr(text_1, "class", "axis timeline-tick svelte-1q22nou");
+			attr(text_1, "text-anchor", /*hour*/ ctx[45] === 144 ? 'end' : 'middle');
+			attr(text_1, "class", "axis timeline-tick svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -7068,8 +7063,8 @@ function create_each_block(ctx) {
 	};
 }
 
-// (86:6) {#if tooltip}
-function create_if_block_13$1(ctx) {
+// (87:6) {#if tooltip}
+function create_if_block_12$1(ctx) {
 	let div1;
 	let b0;
 	let t0_value = /*tooltip*/ ctx[11].timeLabel + "";
@@ -7080,11 +7075,7 @@ function create_if_block_13$1(ctx) {
 	let span0;
 	let t3;
 	let b1;
-
-	let t4_value = (/*tooltip*/ ctx[11].snowline === null
-	? 'Unresolved'
-	: formatElevation(/*tooltip*/ ctx[11].snowline, /*units*/ ctx[4])) + "";
-
+	let t4_value = formatSnowline(/*tooltip*/ ctx[11].snowline, /*units*/ ctx[4]) + "";
 	let t4;
 	let t5;
 	let span1;
@@ -7100,8 +7091,8 @@ function create_if_block_13$1(ctx) {
 	let t10;
 	let t11;
 	let div1_style_value;
-	let if_block0 = /*tooltip*/ ctx[11].phase && create_if_block_15$1(ctx);
-	let if_block1 = /*terrainM*/ ctx[2] !== null && create_if_block_14$1(ctx);
+	let if_block0 = /*tooltip*/ ctx[11].phase && create_if_block_14$1(ctx);
+	let if_block1 = /*terrainM*/ ctx[2] !== null && create_if_block_13$1(ctx);
 
 	return {
 		c() {
@@ -7113,7 +7104,7 @@ function create_if_block_13$1(ctx) {
 			t2 = space();
 			div0 = element("div");
 			span0 = element("span");
-			t3 = text("SL ");
+			t3 = text("Est. snowline ");
 			b1 = element("b");
 			t4 = text(t4_value);
 			t5 = space();
@@ -7128,15 +7119,15 @@ function create_if_block_13$1(ctx) {
 			t10 = text(t10_value);
 			t11 = space();
 			if (if_block1) if_block1.c();
-			attr(b0, "class", "svelte-1q22nou");
-			attr(b1, "class", "svelte-1q22nou");
-			attr(span0, "class", "svelte-1q22nou");
-			attr(b2, "class", "svelte-1q22nou");
-			attr(span1, "class", "svelte-1q22nou");
-			attr(b3, "class", "svelte-1q22nou");
-			attr(span2, "class", "svelte-1q22nou");
-			attr(div0, "class", "tip-grid svelte-1q22nou");
-			attr(div1, "class", "tooltip svelte-1q22nou");
+			attr(b0, "class", "svelte-72n019");
+			attr(b1, "class", "svelte-72n019");
+			attr(span0, "class", "svelte-72n019");
+			attr(b2, "class", "svelte-72n019");
+			attr(span1, "class", "svelte-72n019");
+			attr(b3, "class", "svelte-72n019");
+			attr(span2, "class", "svelte-72n019");
+			attr(div0, "class", "tip-grid svelte-72n019");
+			attr(div1, "class", "tooltip svelte-72n019");
 			attr(div1, "style", div1_style_value = `left:${/*tooltip*/ ctx[11].cssX}px;top:${/*tooltip*/ ctx[11].cssY}px;`);
 		},
 		m(target, anchor) {
@@ -7171,7 +7162,7 @@ function create_if_block_13$1(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_15$1(ctx);
+					if_block0 = create_if_block_14$1(ctx);
 					if_block0.c();
 					if_block0.m(div1, t2);
 				}
@@ -7180,10 +7171,7 @@ function create_if_block_13$1(ctx) {
 				if_block0 = null;
 			}
 
-			if (dirty[0] & /*tooltip, units*/ 2064 && t4_value !== (t4_value = (/*tooltip*/ ctx[11].snowline === null
-			? 'Unresolved'
-			: formatElevation(/*tooltip*/ ctx[11].snowline, /*units*/ ctx[4])) + "")) set_data(t4, t4_value);
-
+			if (dirty[0] & /*tooltip, units*/ 2064 && t4_value !== (t4_value = formatSnowline(/*tooltip*/ ctx[11].snowline, /*units*/ ctx[4]) + "")) set_data(t4, t4_value);
 			if (dirty[0] & /*tooltip, units*/ 2064 && t7_value !== (t7_value = formatPrecip(/*tooltip*/ ctx[11].precip, /*units*/ ctx[4]) + "")) set_data(t7, t7_value);
 			if (dirty[0] & /*tooltip, units*/ 2064 && t10_value !== (t10_value = formatSnow(/*tooltip*/ ctx[11].newSnow, /*units*/ ctx[4]) + "")) set_data(t10, t10_value);
 
@@ -7191,7 +7179,7 @@ function create_if_block_13$1(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_14$1(ctx);
+					if_block1 = create_if_block_13$1(ctx);
 					if_block1.c();
 					if_block1.m(div0, null);
 				}
@@ -7215,8 +7203,8 @@ function create_if_block_13$1(ctx) {
 	};
 }
 
-// (89:10) {#if tooltip.phase}
-function create_if_block_15$1(ctx) {
+// (90:10) {#if tooltip.phase}
+function create_if_block_14$1(ctx) {
 	let strong;
 	let i;
 	let i_class_value;
@@ -7229,8 +7217,8 @@ function create_if_block_15$1(ctx) {
 			strong = element("strong");
 			i = element("i");
 			t = text(t_value);
-			attr(i, "class", i_class_value = "" + (null_to_empty(`tip-phase-dot phase-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-1q22nou"));
-			attr(strong, "class", strong_class_value = "" + (null_to_empty(`text-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-1q22nou"));
+			attr(i, "class", i_class_value = "" + (null_to_empty(`tip-phase-dot phase-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-72n019"));
+			attr(strong, "class", strong_class_value = "" + (null_to_empty(`text-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-72n019"));
 		},
 		m(target, anchor) {
 			insert(target, strong, anchor);
@@ -7238,13 +7226,13 @@ function create_if_block_15$1(ctx) {
 			append(strong, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*tooltip*/ 2048 && i_class_value !== (i_class_value = "" + (null_to_empty(`tip-phase-dot phase-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-1q22nou"))) {
+			if (dirty[0] & /*tooltip*/ 2048 && i_class_value !== (i_class_value = "" + (null_to_empty(`tip-phase-dot phase-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-72n019"))) {
 				attr(i, "class", i_class_value);
 			}
 
 			if (dirty[0] & /*tooltip*/ 2048 && t_value !== (t_value = precipitationLabel(/*tooltip*/ ctx[11].phase) + "")) set_data(t, t_value);
 
-			if (dirty[0] & /*tooltip*/ 2048 && strong_class_value !== (strong_class_value = "" + (null_to_empty(`text-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-1q22nou"))) {
+			if (dirty[0] & /*tooltip*/ 2048 && strong_class_value !== (strong_class_value = "" + (null_to_empty(`text-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-72n019"))) {
 				attr(strong, "class", strong_class_value);
 			}
 		},
@@ -7256,8 +7244,8 @@ function create_if_block_15$1(ctx) {
 	};
 }
 
-// (94:12) {#if terrainM !== null}
-function create_if_block_14$1(ctx) {
+// (95:12) {#if terrainM !== null}
+function create_if_block_13$1(ctx) {
 	let span;
 	let t0;
 	let b;
@@ -7270,8 +7258,8 @@ function create_if_block_14$1(ctx) {
 			t0 = text("Terrain ");
 			b = element("b");
 			t1 = text(t1_value);
-			attr(b, "class", "svelte-1q22nou");
-			attr(span, "class", "svelte-1q22nou");
+			attr(b, "class", "svelte-72n019");
+			attr(span, "class", "svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -7290,7 +7278,7 @@ function create_if_block_14$1(ctx) {
 	};
 }
 
-// (102:142) {:else}
+// (103:142) {:else}
 function create_else_block_1$1(ctx) {
 	let t_value = /*chart*/ ctx[12].currentCondition + "";
 	let t;
@@ -7313,8 +7301,8 @@ function create_else_block_1$1(ctx) {
 	};
 }
 
-// (102:11) {#if chart.currentPhase}
-function create_if_block_12$1(ctx) {
+// (103:11) {#if chart.currentPhase}
+function create_if_block_11$1(ctx) {
 	let i;
 	let i_class_value;
 	let t_value = precipitationLabel(/*chart*/ ctx[12].currentPhase) + "";
@@ -7324,14 +7312,14 @@ function create_if_block_12$1(ctx) {
 		c() {
 			i = element("i");
 			t = text(t_value);
-			attr(i, "class", i_class_value = "" + (null_to_empty(`current-phase-dot phase-${/*chart*/ ctx[12].currentPhase.key}`) + " svelte-1q22nou"));
+			attr(i, "class", i_class_value = "" + (null_to_empty(`current-phase-dot phase-${/*chart*/ ctx[12].currentPhase.key}`) + " svelte-72n019"));
 		},
 		m(target, anchor) {
 			insert(target, i, anchor);
 			insert(target, t, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*chart*/ 4096 && i_class_value !== (i_class_value = "" + (null_to_empty(`current-phase-dot phase-${/*chart*/ ctx[12].currentPhase.key}`) + " svelte-1q22nou"))) {
+			if (dirty[0] & /*chart*/ 4096 && i_class_value !== (i_class_value = "" + (null_to_empty(`current-phase-dot phase-${/*chart*/ ctx[12].currentPhase.key}`) + " svelte-72n019"))) {
 				attr(i, "class", i_class_value);
 			}
 
@@ -7346,8 +7334,8 @@ function create_if_block_12$1(ctx) {
 	};
 }
 
-// (103:8) {#if chart.currentPosition}
-function create_if_block_11$1(ctx) {
+// (104:8) {#if chart.currentPosition}
+function create_if_block_10$1(ctx) {
 	let strong;
 	let t_value = /*chart*/ ctx[12].currentPosition + "";
 	let t;
@@ -7356,7 +7344,7 @@ function create_if_block_11$1(ctx) {
 		c() {
 			strong = element("strong");
 			t = text(t_value);
-			attr(strong, "class", "svelte-1q22nou");
+			attr(strong, "class", "svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, strong, anchor);
@@ -7373,8 +7361,8 @@ function create_if_block_11$1(ctx) {
 	};
 }
 
-// (113:54) {#if chart.precip24h===null}
-function create_if_block_10$1(ctx) {
+// (114:54) {#if chart.precip24h===null}
+function create_if_block_9$1(ctx) {
 	let t;
 
 	return {
@@ -7392,48 +7380,6 @@ function create_if_block_10$1(ctx) {
 	};
 }
 
-// (117:6) {#if flow}
-function create_if_block_9$1(ctx) {
-	let span;
-	let t0;
-	let t1_value = /*flow*/ ctx[14].direction + "";
-	let t1;
-	let t2;
-	let t3_value = Math.round(/*flow*/ ctx[14].relativeHumidity) + "";
-	let t3;
-	let t4;
-
-	return {
-		c() {
-			span = element("span");
-			t0 = text("Terrain flow: ");
-			t1 = text(t1_value);
-			t2 = text(" · ");
-			t3 = text(t3_value);
-			t4 = text("% RH · experimental");
-			attr(span, "title", "Kinematic wind–terrain exposure over a 4 km span. Does not change forecast precipitation amounts.");
-			attr(span, "class", "svelte-1q22nou");
-		},
-		m(target, anchor) {
-			insert(target, span, anchor);
-			append(span, t0);
-			append(span, t1);
-			append(span, t2);
-			append(span, t3);
-			append(span, t4);
-		},
-		p(ctx, dirty) {
-			if (dirty[0] & /*flow*/ 16384 && t1_value !== (t1_value = /*flow*/ ctx[14].direction + "")) set_data(t1, t1_value);
-			if (dirty[0] & /*flow*/ 16384 && t3_value !== (t3_value = Math.round(/*flow*/ ctx[14].relativeHumidity) + "")) set_data(t3, t3_value);
-		},
-		d(detaching) {
-			if (detaching) {
-				detach(span);
-			}
-		}
-	};
-}
-
 // (124:6) {:else}
 function create_else_block$1(ctx) {
 	let span;
@@ -7444,7 +7390,7 @@ function create_else_block$1(ctx) {
 		c() {
 			span = element("span");
 			t = text(t_value);
-			attr(span, "class", "svelte-1q22nou");
+			attr(span, "class", "svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -7477,7 +7423,7 @@ function create_if_block_5$1(ctx) {
 
 	function select_block_type_6(ctx, dirty) {
 		if (/*event*/ ctx[13].incomplete) return create_if_block_7$1;
-		if (/*event*/ ctx[13].newSnowCm > 0.05) return create_if_block_8$1;
+		if (/*event*/ ctx[13].newSnowCm > 0) return create_if_block_8$1;
 	}
 
 	let current_block_type = select_block_type_6(ctx);
@@ -7496,7 +7442,7 @@ function create_if_block_5$1(ctx) {
 			t5 = space();
 			if (if_block1) if_block1.c();
 			if_block1_anchor = empty();
-			attr(span, "class", "svelte-1q22nou");
+			attr(span, "class", "svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -7556,7 +7502,7 @@ function create_if_block_5$1(ctx) {
 	};
 }
 
-// (122:226) 
+// (122:223) 
 function create_if_block_8$1(ctx) {
 	let t0;
 	let t1_value = formatSnow(/*event*/ ctx[13].newSnowCm, /*units*/ ctx[4]) + "";
@@ -7621,13 +7567,13 @@ function create_if_block_6$1(ctx) {
 			button.textContent = "Go to event →";
 			attr(button, "type", "button");
 			attr(button, "title", "Jump to event start");
-			attr(button, "class", "svelte-1q22nou");
+			attr(button, "class", "svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*jumpToEvent*/ ctx[19]);
+				dispose = listen(button, "click", /*jumpToEvent*/ ctx[18]);
 				mounted = true;
 			}
 		},
@@ -7646,27 +7592,29 @@ function create_if_block_6$1(ctx) {
 // (128:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
 function create_if_block_4$1(ctx) {
 	let button;
-
-	let t0_value = (/*crossing*/ ctx[6].direction === 'below'
-	? 'Snowline falls below this elevation'
-	: 'Snowline rises above this elevation') + "";
-
 	let t0;
+
+	let t1_value = (/*crossing*/ ctx[6].direction === 'below'
+	? 'below'
+	: 'above') + "";
+
 	let t1;
-	let t2_value = formatShortTime(/*crossing*/ ctx[6].crossingTime) + "";
 	let t2;
+	let t3_value = formatShortTime(Math.round(/*crossing*/ ctx[6].crossingTime / 3600_000) * 3600_000) + "";
 	let t3;
+	let t4;
 	let mounted;
 	let dispose;
 
 	return {
 		c() {
 			button = element("button");
-			t0 = text(t0_value);
-			t1 = text(" · ");
-			t2 = text(t2_value);
-			t3 = text(" →");
-			attr(button, "class", "crossing-action svelte-1q22nou");
+			t0 = text("Est. thermal snowline ");
+			t1 = text(t1_value);
+			t2 = text(" terrain around ");
+			t3 = text(t3_value);
+			t4 = text(" →");
+			attr(button, "class", "crossing-action svelte-72n019");
 			attr(button, "type", "button");
 		},
 		m(target, anchor) {
@@ -7675,18 +7623,19 @@ function create_if_block_4$1(ctx) {
 			append(button, t1);
 			append(button, t2);
 			append(button, t3);
+			append(button, t4);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*click_handler_3*/ ctx[30]);
+				dispose = listen(button, "click", /*click_handler_3*/ ctx[28]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*crossing*/ 64 && t0_value !== (t0_value = (/*crossing*/ ctx[6].direction === 'below'
-			? 'Snowline falls below this elevation'
-			: 'Snowline rises above this elevation') + "")) set_data(t0, t0_value);
+			if (dirty[0] & /*crossing*/ 64 && t1_value !== (t1_value = (/*crossing*/ ctx[6].direction === 'below'
+			? 'below'
+			: 'above') + "")) set_data(t1, t1_value);
 
-			if (dirty[0] & /*crossing*/ 64 && t2_value !== (t2_value = formatShortTime(/*crossing*/ ctx[6].crossingTime) + "")) set_data(t2, t2_value);
+			if (dirty[0] & /*crossing*/ 64 && t3_value !== (t3_value = formatShortTime(Math.round(/*crossing*/ ctx[6].crossingTime / 3600_000) * 3600_000) + "")) set_data(t3, t3_value);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -7699,15 +7648,15 @@ function create_if_block_4$1(ctx) {
 	};
 }
 
-// (129:4) {#if chart.currentPhase?.confidence === 'low'}
+// (129:4) {#if chart.currentPhase?.key === 'uncertain'}
 function create_if_block_3$1(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
-			div.textContent = "Limited atmospheric detail at this elevation; type may differ.";
-			attr(div, "class", "quality-note svelte-1q22nou");
+			div.textContent = "Precipitation is forecast, but the vertical profile cannot support a specific type.";
+			attr(div, "class", "quality-note svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -7720,7 +7669,7 @@ function create_if_block_3$1(ctx) {
 	};
 }
 
-// (130:4) {#if chart.coverageNote}
+// (131:4) {#if chart.coverageNote}
 function create_if_block_2$1(ctx) {
 	let div;
 	let t_value = /*chart*/ ctx[12].coverageNote + "";
@@ -7730,7 +7679,7 @@ function create_if_block_2$1(ctx) {
 		c() {
 			div = element("div");
 			t = text(t_value);
-			attr(div, "class", "quality-note svelte-1q22nou");
+			attr(div, "class", "quality-note svelte-72n019");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -7782,8 +7731,8 @@ function create_fragment$2(ctx) {
 	let current;
 	let mounted;
 	let dispose;
-	let if_block0 = /*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[15] && create_if_block_24(ctx);
-	let if_block1 = /*tab*/ ctx[0] === 'graph' && /*chart*/ ctx[12] && create_if_block_23(ctx);
+	let if_block0 = /*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[14] && create_if_block_23(ctx);
+	let if_block1 = /*tab*/ ctx[0] === 'graph' && /*chart*/ ctx[12] && create_if_block_22(ctx);
 	const if_block_creators = [create_if_block$1, create_else_block_5];
 	const if_blocks = [];
 
@@ -7827,34 +7776,34 @@ function create_fragment$2(ctx) {
 			t13 = text("Sounding");
 			t14 = space();
 			if_block2.c();
-			attr(b, "class", "svelte-1q22nou");
-			attr(small, "class", "svelte-1q22nou");
-			attr(em, "class", "svelte-1q22nou");
-			attr(div0, "class", "chart-title svelte-1q22nou");
-			attr(button0, "class", "drag-button svelte-1q22nou");
+			attr(b, "class", "svelte-72n019");
+			attr(small, "class", "svelte-72n019");
+			attr(em, "class", "svelte-72n019");
+			attr(div0, "class", "chart-title svelte-72n019");
+			attr(button0, "class", "drag-button svelte-72n019");
 			attr(button0, "type", "button");
 			attr(button0, "title", "Drag graph");
 			attr(button0, "aria-label", "Drag graph");
 			attr(button1, "type", "button");
 			attr(button1, "title", "Close");
 			attr(button1, "aria-label", "Close graph");
-			attr(button1, "class", "svelte-1q22nou");
-			attr(div1, "class", "chart-actions svelte-1q22nou");
-			attr(div2, "class", "chart-head svelte-1q22nou");
+			attr(button1, "class", "svelte-72n019");
+			attr(div1, "class", "chart-actions svelte-72n019");
+			attr(div2, "class", "chart-head svelte-72n019");
 			attr(button2, "type", "button");
 			attr(button2, "role", "tab");
 			attr(button2, "aria-selected", button2_aria_selected_value = /*tab*/ ctx[0] === 'graph');
-			attr(button2, "class", "svelte-1q22nou");
+			attr(button2, "class", "svelte-72n019");
 			toggle_class(button2, "active", /*tab*/ ctx[0] === 'graph');
 			attr(button3, "type", "button");
 			attr(button3, "role", "tab");
 			attr(button3, "aria-selected", button3_aria_selected_value = /*tab*/ ctx[0] === 'sounding');
-			attr(button3, "class", "svelte-1q22nou");
+			attr(button3, "class", "svelte-72n019");
 			toggle_class(button3, "active", /*tab*/ ctx[0] === 'sounding');
-			attr(div3, "class", "forecast-tabs svelte-1q22nou");
+			attr(div3, "class", "forecast-tabs svelte-72n019");
 			attr(div3, "role", "tablist");
 			attr(div3, "aria-label", "Forecast view");
-			attr(div4, "class", "chart-shell svelte-1q22nou");
+			attr(div4, "class", "chart-shell svelte-72n019");
 			attr(div4, "role", "dialog");
 			attr(div4, "aria-modal", "false");
 			attr(div4, "aria-label", "Wintry forecast graph");
@@ -7888,15 +7837,15 @@ function create_fragment$2(ctx) {
 			append(button3, t13);
 			append(div4, t14);
 			if_blocks[current_block_type_index].m(div4, null);
-			/*div4_binding*/ ctx[31](div4);
+			/*div4_binding*/ ctx[29](div4);
 			current = true;
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "pointerdown", /*startDrag*/ ctx[17]),
-					listen(button1, "click", /*click_handler*/ ctx[25]),
-					listen(button2, "click", /*click_handler_1*/ ctx[26]),
-					listen(button3, "click", /*click_handler_2*/ ctx[27])
+					listen(button0, "pointerdown", /*startDrag*/ ctx[16]),
+					listen(button1, "click", /*click_handler*/ ctx[23]),
+					listen(button2, "click", /*click_handler_1*/ ctx[24]),
+					listen(button3, "click", /*click_handler_2*/ ctx[25])
 				];
 
 				mounted = true;
@@ -7906,11 +7855,11 @@ function create_fragment$2(ctx) {
 			if ((!current || dirty[0] & /*placeName*/ 8) && t2_value !== (t2_value = (/*placeName*/ ctx[3] || 'Selected point') + "")) set_data(t2, t2_value);
 			if ((!current || dirty[0] & /*chart*/ 4096) && t4_value !== (t4_value = (/*chart*/ ctx[12]?.validLabel ?? 'ECMWF profile · Windy terrain') + "")) set_data(t4, t4_value);
 
-			if (/*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[15]) {
+			if (/*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[14]) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_24(ctx);
+					if_block0 = create_if_block_23(ctx);
 					if_block0.c();
 					if_block0.m(div1, t6);
 				}
@@ -7923,7 +7872,7 @@ function create_fragment$2(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_23(ctx);
+					if_block1 = create_if_block_22(ctx);
 					if_block1.c();
 					if_block1.m(div1, t7);
 				}
@@ -7995,7 +7944,7 @@ function create_fragment$2(ctx) {
 			if (if_block0) if_block0.d();
 			if (if_block1) if_block1.d();
 			if_blocks[current_block_type_index].d();
-			/*div4_binding*/ ctx[31](null);
+			/*div4_binding*/ ctx[29](null);
 			mounted = false;
 			run_all(dispose);
 		}
@@ -8033,7 +7982,8 @@ function phaseName(key) {
 		mix: 'Mix',
 		rain: 'Rain',
 		'ice-pellets': 'Ice pellets',
-		'freezing-rain': 'Freezing rain'
+		'freezing-rain': 'Freezing rain',
+		uncertain: 'Type unresolved'
 	};
 
 	return labels[key];
@@ -8053,10 +8003,8 @@ function instance$2($$self, $$props, $$invalidate) {
 	let event;
 	let chart;
 	let showNow;
-	let flow;
 	let { point } = $$props;
 	let { terrainM = null } = $$props;
-	let { terrainSlopes = null } = $$props;
 	let { placeName = '' } = $$props;
 	let { tab = 'graph' } = $$props;
 	let { units = 'metric' } = $$props;
@@ -8075,8 +8023,7 @@ function instance$2($$self, $$props, $$invalidate) {
 
 	function snowlineAt(p, index) {
 		try {
-			const v = wetBulbZeroHeight(buildProfile(p.forecast, index)).snowLevelM;
-			return v !== null && Number.isFinite(v) ? v : null;
+			return resolvedSnowlineM(buildProfile(p.forecast, index));
 		} catch {
 			return null;
 		}
@@ -8090,7 +8037,7 @@ function instance$2($$self, $$props, $$invalidate) {
 
 	function terrainPosition(difference) {
 		if (difference === null) return '';
-		const value = formatElevation(Math.abs(difference), units);
+		const value = formatSnowline(Math.abs(difference), units);
 		if (difference > 100) return `${value} above snowline`;
 		if (difference < -100) return `${value} below snowline`;
 		return 'Terrain near snowline';
@@ -8156,7 +8103,7 @@ function instance$2($$self, $$props, $$invalidate) {
 
 	function resetToNow() {
 		if (!point?.times?.length) return;
-		$$invalidate(24, realNow = Date.now());
+		$$invalidate(22, realNow = Date.now());
 		setTimeline(realNow);
 	}
 
@@ -8351,7 +8298,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			precipCount: coverage.precipCount,
 			snowPrefix,
 			coverageNote: coverage.note || (snowPrefix < p.times.filter(t => t < t1).length
-			? 'Snowfall estimate stops at missing data'
+			? 'Snowfall estimate stops at missing data or unresolved type'
 			: ''),
 			midTimeLabel: '+' + Math.round((t1 - t0) / 7200000) + ' h',
 			endTimeLabel: '+' + Math.round((t1 - t0) / 3600000) + ' h',
@@ -8372,7 +8319,6 @@ function instance$2($$self, $$props, $$invalidate) {
 			min24Snowline,
 			window24Complete: snow24.complete,
 			newSnow24h: snow24.snowfallCm,
-			remainingSnow24h: snow24.remainingLayerCm,
 			nextChangeLabel,
 			nextChangeTime
 		};
@@ -8428,7 +8374,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			clone.setAttribute('width', '1080');
 			clone.setAttribute('height', '1002');
 			const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-			style.textContent = 'text{font-family:Arial,sans-serif}.plot-bg,.band-bg{fill:#101b22;stroke:#29404d}.terrain-zone{fill:#17313a}.grid{stroke:#29404d}.axis{fill:#9fb0ba;font-size:8px}.section-label{fill:#dce8ee;font-size:7px;font-weight:700}.section-label tspan{fill:#72838d}.snowline-line{fill:none;stroke:#67d7ff;stroke-width:2.7}.terrain-line{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag{fill:#ffbd75;font-size:6px}.min24-line{stroke:#9fe9ff;stroke-dasharray:2 3}.min24-dot{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag{fill:#bdefff;font-size:6px}.precip-bar{fill:#3794b8}.precip-bar.wet{fill:#64d4f5}.phase-snow{fill:#b2b2b2}.phase-wet-snow{fill:#569456}.phase-mix{fill:#95a109}.phase-rain{fill:#0099b6}.phase-ice-pellets{fill:#510c0f}.phase-freezing-rain{fill:#900096}.phase-block{opacity:.94}.phase-legend-svg text{fill:#d4dfe6;font-size:9px}.new-snow-line{fill:none;stroke:#82e398;stroke-width:2}.new-snow-area{fill:#82e398;opacity:.18}.now-line{stroke:#ff6759}.now-tag-bg{fill:#ff6759}.now-tag{fill:#fff;font-size:7px}.cursor{stroke:#dce8ee;stroke-dasharray:2 3}.current-dot{fill:#fff;stroke:#67d7ff;stroke-width:2}.crossing-line{stroke:#ffe05b;stroke-dasharray:3 3}.crossing-dot{fill:#111;stroke:#ffe05b;stroke-width:2}.empty-band{fill:#8596a2;font-size:7px}';
+			style.textContent = 'text{font-family:Arial,sans-serif}.plot-bg,.band-bg{fill:#101b22;stroke:#29404d}.terrain-zone{fill:#17313a}.grid{stroke:#29404d}.axis{fill:#9fb0ba;font-size:8px}.section-label{fill:#dce8ee;font-size:7px;font-weight:700}.section-label tspan{fill:#72838d}.snowline-line{fill:none;stroke:#67d7ff;stroke-width:2.7}.terrain-line{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag{fill:#ffbd75;font-size:6px}.min24-line{stroke:#9fe9ff;stroke-dasharray:2 3}.min24-dot{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag{fill:#bdefff;font-size:6px}.precip-bar{fill:#3794b8}.precip-bar.wet{fill:#64d4f5}.phase-snow{fill:#b2b2b2}.phase-wet-snow{fill:#569456}.phase-mix{fill:#95a109}.phase-rain{fill:#0099b6}.phase-ice-pellets{fill:#510c0f}.phase-freezing-rain{fill:#900096}.phase-uncertain{fill:#718096}.phase-block{opacity:.94}.phase-legend-svg text{fill:#d4dfe6;font-size:9px}.new-snow-line{fill:none;stroke:#82e398;stroke-width:2}.new-snow-area{fill:#82e398;opacity:.18}.now-line{stroke:#ff6759}.now-tag-bg{fill:#ff6759}.now-tag{fill:#fff;font-size:7px}.cursor{stroke:#dce8ee;stroke-dasharray:2 3}.current-dot{fill:#fff;stroke:#67d7ff;stroke-width:2}.crossing-line{stroke:#ffe05b;stroke-dasharray:3 3}.crossing-dot{fill:#111;stroke:#ffe05b;stroke-width:2}.empty-band{fill:#8596a2;font-size:7px}';
 			clone.insertBefore(style, clone.firstChild);
 
 			const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }),
@@ -8474,15 +8420,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			y += 34;
 			ctx.fillStyle = '#b8c8d1';
 			ctx.font = '22px Arial';
-
-			ctx.fillText(
-				`Snowline ${chart.currentSnowline === null
-				? 'WBZ unresolved'
-				: formatElevation(chart.currentSnowline, units)}   ·   Avg precip ${formatPrecip(chart.currentPrecip, units)}`,
-				52,
-				y
-			);
-
+			ctx.fillText(`Est. thermal snowline ${formatSnowline(chart.currentSnowline, units)}   ·   Avg precip ${formatPrecip(chart.currentPrecip, units)}`, 52, y);
 			y += 30;
 			ctx.fillStyle = '#b8c8d1';
 			ctx.font = '22px Arial';
@@ -8492,7 +8430,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			ctx.font = '700 21px Arial';
 
 			ctx.fillText(
-				`Next 24 h · min estimated snowline ${formatElevation(chart.min24Snowline, units)} · snowfall ${chart.window24Complete
+				`Next 24 h · min estimated snowline ${formatSnowline(chart.min24Snowline, units)} · snowfall ${chart.window24Complete
 				? formatSnow(chart.newSnow24h, units)
 				: 'unavailable'}`,
 				52,
@@ -8533,8 +8471,8 @@ function instance$2($$self, $$props, $$invalidate) {
 			y: window.innerWidth <= 520 ? 34 : 54
 		});
 
-		$$invalidate(24, realNow = Date.now());
-		realNowTimer = setInterval(() => $$invalidate(24, realNow = Date.now()), 30000);
+		$$invalidate(22, realNow = Date.now());
+		realNowTimer = setInterval(() => $$invalidate(22, realNow = Date.now()), 30000);
 		window.addEventListener('resize', keepChartVisible);
 
 		try {
@@ -8587,7 +8525,6 @@ function instance$2($$self, $$props, $$invalidate) {
 	$$self.$$set = $$props => {
 		if ('point' in $$props) $$invalidate(1, point = $$props.point);
 		if ('terrainM' in $$props) $$invalidate(2, terrainM = $$props.terrainM);
-		if ('terrainSlopes' in $$props) $$invalidate(23, terrainSlopes = $$props.terrainSlopes);
 		if ('placeName' in $$props) $$invalidate(3, placeName = $$props.placeName);
 		if ('tab' in $$props) $$invalidate(0, tab = $$props.tab);
 		if ('units' in $$props) $$invalidate(4, units = $$props.units);
@@ -8602,18 +8539,12 @@ function instance$2($$self, $$props, $$invalidate) {
 			$$invalidate(13, event = nextWintryEvent(point, terrainM, timestamp));
 		}
 
-		if ($$self.$$.dirty[0] & /*point, terrainM, timestamp, crossing, realNow, units*/ 16777334) {
+		if ($$self.$$.dirty[0] & /*point, terrainM, timestamp, crossing, realNow, units*/ 4194422) {
 			$$invalidate(12, chart = buildChart(point, terrainM, timestamp, crossing?.crossingTime ?? null, realNow, units));
 		}
 
-		if ($$self.$$.dirty[0] & /*timestamp, realNow*/ 16777248) {
-			$$invalidate(15, showNow = Math.abs(timestamp - realNow) > 90 * 60_000);
-		}
-
-		if ($$self.$$.dirty[0] & /*point, timestamp, terrainM, terrainSlopes*/ 8388646) {
-			$$invalidate(14, flow = point
-			? terrainFlow(point.forecast, forecastIntervalIndex(point.times, timestamp), terrainM, terrainSlopes)
-			: null);
+		if ($$self.$$.dirty[0] & /*timestamp, realNow*/ 4194336) {
+			$$invalidate(14, showNow = Math.abs(timestamp - realNow) > 90 * 60_000);
 		}
 	};
 
@@ -8632,7 +8563,6 @@ function instance$2($$self, $$props, $$invalidate) {
 		tooltip,
 		chart,
 		event,
-		flow,
 		showNow,
 		dispatch,
 		startDrag,
@@ -8641,7 +8571,6 @@ function instance$2($$self, $$props, $$invalidate) {
 		resetToNow,
 		handlePointer,
 		downloadPng,
-		terrainSlopes,
 		realNow,
 		click_handler,
 		click_handler_1,
@@ -8666,7 +8595,6 @@ class SnowlineChart extends SvelteComponent {
 			{
 				point: 1,
 				terrainM: 2,
-				terrainSlopes: 23,
 				placeName: 3,
 				tab: 0,
 				units: 4
@@ -9423,93 +9351,16 @@ const MIN_SNOWLINE_CONTOUR_M = -500;
     };
 }
 
-function median(values) {
-    if (!values.length) return 0;
-    const sorted = [
-        ...values
-    ].sort((a, b)=>a - b);
-    const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 ? sorted[mid] : 0.5 * (sorted[mid - 1] + sorted[mid]);
-}
-function reconstructAxis(known, length) {
-    if (!known.length) return Array.from({
-        length
-    }, (_, i)=>i);
-    if (known.length === 1) return Array.from({
-        length
-    }, ()=>known[0].value);
-    const ordered = [
-        ...known
-    ].sort((a, b)=>a.index - b.index);
-    const slopes = [];
-    for(let i = 1; i < ordered.length; i++){
-        const di = ordered[i].index - ordered[i - 1].index;
-        if (di > 0) slopes.push((ordered[i].value - ordered[i - 1].value) / di);
-    }
-    const step = median(slopes);
-    const anchor = ordered[Math.floor(ordered.length / 2)];
-    return Array.from({
-        length
-    }, (_, i)=>anchor.value + (i - anchor.index) * step);
-}
-/**
- * Contours are a visual interpolation of a regularly sampled viewport field.
- * A single failed profile request must not punch a four-cell hole in marching
- * squares. Reconstruct missing grid geometry and fill missing values from the
- * nearest available samples in grid space. The raw point data remain untouched.
- */ function continuousContourGrid(grid) {
-    const rows = grid.length;
-    const cols = grid[0]?.length ?? 0;
-    if (!rows || !cols) return grid;
-    const valid = [];
-    for(let r = 0; r < rows; r++){
-        for(let c = 0; c < cols; c++){
-            const p = grid[r][c];
-            if (p && p.value !== null && Number.isFinite(p.value)) valid.push({
-                ...p,
-                r,
-                c
-            });
-        }
-    }
-    if (!valid.length) return grid;
-    const rowLatKnown = [];
-    for(let r = 0; r < rows; r++){
-        const latitudes = valid.filter((p)=>p.r === r).map((p)=>p.lat).filter(Number.isFinite);
-        if (latitudes.length) rowLatKnown.push({
-            index: r,
-            value: latitudes.reduce((a, b)=>a + b, 0) / latitudes.length
-        });
-    }
-    const colLonKnown = [];
-    for(let c = 0; c < cols; c++){
-        const longitudes = valid.filter((p)=>p.c === c).map((p)=>p.lon).filter(Number.isFinite);
-        if (longitudes.length) colLonKnown.push({
-            index: c,
-            value: longitudes.reduce((a, b)=>a + b, 0) / longitudes.length
-        });
-    }
-    const rowLat = reconstructAxis(rowLatKnown, rows);
-    const colLon = reconstructAxis(colLonKnown, cols);
-    return grid.map((row, r)=>row.map((p, c)=>{
-            if (p.value !== null && Number.isFinite(p.value)) return p;
-            const neighbours = valid.map((v)=>({
-                    v,
-                    d2: (v.r - r) ** 2 + (v.c - c) ** 2
-                })).sort((a, b)=>a.d2 - b.d2).slice(0, 8);
-            let weighted = 0;
-            let weights = 0;
-            for (const item of neighbours){
-                const weight = 1 / Math.max(0.25, item.d2);
-                weighted += item.v.value * weight;
-                weights += weight;
-            }
-            return {
-                lat: Number.isFinite(p.lat) && (p.lat !== 0 || rowLat[r] === 0) ? p.lat : rowLat[r],
-                lon: Number.isFinite(p.lon) && (p.lon !== 0 || colLon[c] === 0) ? p.lon : colLon[c],
-                value: weights > 0 ? weighted / weights : null
-            };
-        }));
+/** Missing or invalid samples remain gaps; contours never invent support there. */ function continuousContourGrid(grid) {
+    return grid.map((row)=>row.map((p)=>({
+                lat: p?.lat ?? NaN,
+                lon: p?.lon ?? NaN,
+                value: p && p.value !== null && [
+                    p.value,
+                    p.lat,
+                    p.lon
+                ].every(Number.isFinite) ? p.value : null
+            })));
 }
 function interp(p1, p2, v1, v2, level) {
     if (Math.abs(v2 - v1) < 1e-9) {
@@ -21837,7 +21688,7 @@ function geocode(path, params, signal) {
 /* src\plugin.svelte generated by Svelte v4.2.20 */
 
 function add_css(target) {
-	append_styles(target, "svelte-1gu5mnn", ".snowline-click-label>span>b{text-shadow:0 0 1px #fff}.snowline-point-place{font-size:12px;line-height:1.3;font-weight:750;color:#d9e7ef;overflow-wrap:anywhere;max-height:3.9em;overflow:auto;padding:0 2px}.wintry-point-pointer{background:transparent!important;border:0!important;pointer-events:none !important}.wintry-point-pointer>span{display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #fff;border-radius:50%;background:var(--probe-accent, #fff);box-shadow:0 0 0 2px rgba(0, 0, 0, 0.55)}.storm-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:9px;color:#f5df91;margin-top:5px}.wintry-storm-symbol{background:none!important;border:0!important;pointer-events:none !important}.wintry-storm-symbol span{font-size:23px;color:#ffe04b;text-shadow:0 1px 2px #111, 0 0 3px #111;line-height:28px}.wintry-precip-icon{background:none!important;border:0!important;pointer-events:none !important}.wintry-precip-icon span{display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}.wintry-precip-icon svg{width:25px;height:25px;padding:1.5px;filter:drop-shadow(0 0 0.75px #ffffffc0)}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;grid-template-columns:repeat(2, 1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn{accent-color:#67d7ff;margin:0;width:15px;height:15px}.zoom-hint.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls.svelte-1gu5mnn label.unavailable.svelte-1gu5mnn.svelte-1gu5mnn{opacity:0.45;cursor:not-allowed}.layer-controls.svelte-1gu5mnn label.unavailable input.svelte-1gu5mnn.svelte-1gu5mnn{cursor:not-allowed}.prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px}.prepare-ring.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress), #324857 0)}.prepare-ring.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.loading-stage.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}.data-status.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;flex-direction:column;gap:5px;padding:8px 0;font-size:10px;line-height:1.4;color:#b5cad8}#device-desktop #plugin-windy-plugin-snowline-map-100m{height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible !important}.refresh-error.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}.forecast-quality{margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{color:#ef70cf;font-weight:700;margin-right:4px}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{box-sizing:border-box;width:240px;max-width:calc(100vw - 28px);padding:8px;border-radius:9px;background:rgba(38, 42, 46, 0.96);color:white;box-shadow:0 4px 16px rgba(0, 0, 0, 0.28)}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;justify-content:space-between;gap:10px}.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:6px}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:16px;font-weight:850;letter-spacing:-0.2px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:1px solid rgba(255, 255, 255, 0.11);border-radius:7px;background:rgba(255, 255, 255, 0.035);font-size:9px;font-weight:850;white-space:nowrap;cursor:pointer}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn{appearance:none;-webkit-appearance:none;position:relative;margin:0;width:24px;height:14px;border:0;border-radius:8px;background:rgba(255, 255, 255, 0.16);cursor:pointer;transition:background 0.15s ease}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#aebbc2;transition:transform 0.15s ease, background 0.15s ease}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:checked{background:rgba(80, 190, 255, 0.35)}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:checked:after{transform:translateX(10px);background:#8ee2ff}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:24px;height:24px;padding:0;border:1px solid rgba(255, 255, 255, 0.1);border-radius:7px;background:rgba(255, 255, 255, 0.035);color:rgba(255, 255, 255, 0.74);font-size:15px;font-weight:800;cursor:pointer}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn:hover{background:rgba(255, 255, 255, 0.075);color:#fff}.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{padding:7px 10px;border:1px solid rgba(255, 255, 255, 0.16);border-radius:8px;background:rgba(38, 42, 46, 0.96);color:#fff;box-shadow:0 3px 12px rgba(0, 0, 0, 0.24);font-size:11px;font-weight:800;cursor:pointer}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px;padding:4px 7px;border-radius:6px;background:rgba(10, 14, 18, 0.72);color:rgba(255, 255, 255, 0.92);font-size:10px;font-weight:700}.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:7px;height:7px;border-radius:50%;background:#70d7ff;animation:svelte-1gu5mnn-snowline-pulse 1s ease-in-out infinite}@keyframes svelte-1gu5mnn-snowline-pulse{0%,100%{opacity:0.45;transform:scale(0.85)}50%{opacity:1;transform:scale(1)}}.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0, 0, 0, 0.3)}.info-window.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:min(360px, calc(100vw - 24px));max-height:min(74vh, 540px);overflow:hidden;border:1px solid rgba(80, 190, 255, 0.48);border-radius:10px;background:rgba(24, 28, 32, 0.99);color:white;box-shadow:0 8px 30px rgba(0, 0, 0, 0.48)}.info-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;justify-content:space-between;align-items:center;padding:9px 10px 7px;border-bottom:1px solid rgba(255, 255, 255, 0.1);font-size:12px}.info-head.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{width:22px;height:22px;border:0;border-radius:6px;background:rgba(255, 255, 255, 0.08);color:white;font-size:17px;cursor:pointer}.info-body.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:calc(min(74vh, 540px) - 40px);overflow-y:auto;padding:9px 10px 10px;font-size:10px;line-height:1.4;color:rgba(255, 255, 255, 0.84)}.info-body.svelte-1gu5mnn>div.svelte-1gu5mnn+div.svelte-1gu5mnn{margin-top:8px}.info-caveat.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{padding-top:8px;border-top:1px solid rgba(255, 255, 255, 0.1);color:rgba(255, 228, 92, 0.9)}.snowline-label{text-align:center;pointer-events:none}.snowline-label,.snowline-click-label{background:transparent!important;border:0 !important}.snowline-label span{display:inline-block;padding:1px 4px 1px 6px;border-radius:3px;border-left:4px solid var(--snowline-color, white);background:rgba(15, 17, 20, 0.86);color:white;font-size:10px;font-weight:800;white-space:nowrap;text-shadow:0 1px 2px rgba(0, 0, 0, 0.8);box-shadow:0 0 0 1px rgba(255, 255, 255, 0.12)}.snowline-label-major span{padding-left:7px;border-left-width:5px;background:rgba(10, 13, 16, 0.92);font-weight:900;box-shadow:0 0 0 1px rgba(255, 255, 255, 0.18), 0 2px 5px rgba(0, 0, 0, 0.28)}.snowline-click-label{pointer-events:none !important}.snowline-click-label>span{position:absolute;bottom:20px;left:0;transform:translateX(-50%);pointer-events:auto;display:flex;flex-direction:column;gap:6px;width:228px;min-height:146px;box-sizing:border-box;padding:40px 9px 9px;border-radius:14px;border:1px solid rgba(255, 255, 255, 0.11);border-top:2px solid var(--probe-accent, rgba(255, 255, 255, 0.4));border-bottom:3px solid var(--snowline-color, white);background:linear-gradient(180deg, rgba(11, 17, 21, 0.985), rgba(7, 12, 16, 0.99));color:#fff;text-align:center;white-space:normal;text-shadow:none;box-shadow:0 10px 30px rgba(0, 0, 0, 0.54)}.snowline-card-kicker{position:absolute;top:12px;left:74px;right:74px;color:#7f929e;font-size:6px;line-height:1;font-weight:900;letter-spacing:1.15px;text-align:center;white-space:nowrap;pointer-events:none}.snowline-label-close,.snowline-label-share,.snowline-label-chart,.snowline-label-favourite{position:absolute;top:7px;height:27px;padding:0;border:1px solid rgba(255, 255, 255, 0.085);border-radius:8px;background:rgba(255, 255, 255, 0.045);color:#dfe9ee;font-size:12px;line-height:25px;font-weight:800;text-shadow:none;cursor:pointer;pointer-events:auto;transition:background 0.12s ease, border-color 0.12s ease}.snowline-label-close:hover,.snowline-label-share:hover,.snowline-label-chart:hover,.snowline-label-favourite:hover{background:rgba(255, 255, 255, 0.09);border-color:rgba(255, 255, 255, 0.16)}.snowline-label-close{right:7px;width:27px;font-size:17px}.snowline-label-share{right:40px;width:27px;font-size:0;background-repeat:no-repeat;background-position:center;background-size:14px;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3Ccircle cx='6' cy='12' r='3'/%3E%3Ccircle cx='18' cy='19' r='3'/%3E%3Cpath d='M8.6 10.5l6.8-4M8.6 13.5l6.8 4'/%3E%3C/svg%3E\")}.snowline-label-chart{left:7px;width:29px;font-size:15px}.snowline-label-favourite{left:42px;width:29px;font-size:16px;color:#aab6bd}.snowline-label-favourite.saved{color:#ffe45c;border-color:rgba(255, 228, 92, 0.42);background:rgba(255, 228, 92, 0.08)}.snowline-click-label b{display:block;padding:4px 7px 2px;border-radius:8px;background:transparent;color:var(--probe-accent, white);font-size:15px;line-height:1.05;font-weight:900;letter-spacing:0.25px}.snowline-card-dry>span>b{padding:3px 7px 1px;background:transparent;font-size:12px;letter-spacing:0.8px;opacity:0.95}.snowline-label-detail{width:100%}.snowline-position{padding:6px 8px;border-radius:8px;background:rgba(255, 255, 255, 0.055);color:var(--probe-accent, white);line-height:1.05}.snowline-position strong{display:block;font-size:11px;font-weight:900}.snowline-position small{display:block;margin-top:3px;color:rgba(255, 255, 255, 0.68);font-size:7.5px;font-weight:750}.snowline-label-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;width:100%}.snowline-label-grid span,.snowline-outlook-grid span{min-width:0;padding:6px 4px 5px;border-radius:8px;background:rgba(255, 255, 255, 0.028);border:1px solid rgba(255, 255, 255, 0.045);text-align:center}.snowline-label-grid small,.snowline-outlook-grid small{display:block;color:#7f919b;font-size:6.2px;line-height:1;text-transform:uppercase;letter-spacing:0.42px;font-weight:800}.snowline-label-grid strong,.snowline-outlook-grid strong{display:block;margin-top:4px;color:#eef5f8;font-size:10.5px;line-height:1;font-weight:900}.metric-terrain strong{color:#ffd39a}.metric-snowline strong{color:#dff6ff}.metric-precip strong{color:#9fe5ff}.snowline-label-grid.has-precip .metric-precip{grid-column:-1}.snowline-outlook{padding:5px;border:1px solid rgba(110, 203, 255, 0.08);border-radius:8px;background:rgba(60, 150, 205, 0.035)}.snowline-outlook-title{margin-bottom:4px;color:#79badc;font-size:6.5px;font-weight:900;letter-spacing:0.75px}.snowline-outlook-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}.snowline-outlook-grid span{padding:4px 3px;background:rgba(255, 255, 255, 0.028)}.snowline-outlook-grid strong{font-size:8.8px}.snowline-no-snow strong{color:#8f9da5;font-weight:700}.snowline-transition{margin-top:4px;padding:4px 5px;border-radius:6px;background:rgba(255, 255, 255, 0.035);color:#dce9ef;font-size:8px;line-height:1.12;font-weight:800}.snowline-valid{margin:-1px 0 1px;color:#8799a4;font-size:7.2px;line-height:1;font-weight:800;text-align:center}.snowline-compact-relation{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:5px 7px;border-radius:8px;background:rgba(255, 255, 255, 0.025);color:var(--probe-accent, white);font-size:8.2px;line-height:1.1;font-weight:850;text-align:left}.snowline-compact-relation strong{display:inline!important;padding:0!important;background:none!important;color:inherit!important;font-size:8px!important;letter-spacing:0 !important}.snowline-compact-relation small{display:none}.snowline-compact-relation span{color:#aebbc2;font-weight:750;white-space:nowrap}.snowline-event-line{width:100%;box-sizing:border-box;padding:6px 7px;border:0;border-radius:8px;background:rgba(110, 203, 255, 0.045);color:#d8e5eb;text-align:left;font-family:inherit;font-size:7.8px;line-height:1.2;font-weight:800}button.snowline-event-line{display:flex;align-items:center;justify-content:space-between;gap:6px;cursor:pointer;pointer-events:auto}button.snowline-event-line:hover{background:rgba(110, 203, 255, 0.11)}button.snowline-event-line span{flex:0 0 auto;color:#8edcff;font-size:14px;line-height:8px}.snowline-loading{padding:20px 0 14px;color:#9fb0ba;font-size:10px}.snowline-probe-above>span{background:linear-gradient(180deg, rgba(8, 25, 34, 0.99), rgba(8, 14, 18, 0.99))}.snowline-probe-below>span{background:linear-gradient(180deg, rgba(32, 21, 12, 0.99), rgba(18, 13, 10, 0.99))}.snowline-probe-near>span{background:linear-gradient(180deg, rgba(29, 27, 11, 0.99), rgba(17, 16, 9, 0.99))}.snowline-card-hazard>span{border-top-color:#c184ff !important;box-shadow:0 0 0 1px rgba(193, 132, 255, 0.35), 0 12px 32px rgba(77, 27, 107, 0.58)}.snowline-card-hazard>span>b{color:#e7c8ff !important;background:rgba(174, 91, 230, 0.12) !important}@media(max-width: 520px){.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{align-items:flex-start;padding-top:54px}.snowline-click-label>span{width:220px;min-height:142px;padding:40px 8px 8px}.snowline-card-kicker{left:72px;right:72px}.snowline-click-label b{font-size:13px}.snowline-card-dry>span>b{font-size:10.5px}.snowline-position strong{font-size:10.5px}.snowline-label-grid strong,.snowline-outlook-grid strong{font-size:8.5px}}.snowline-label-chart{left:7px;width:69px;font-size:10px}.snowline-label-favourite{left:81px;width:46px;font-size:10px}.snowline-label-share{right:40px;width:45px;background-image:none;font-size:10px}.snowline-card-kicker{display:none}.snowline-valid{font-size:10px;line-height:1.25}.snowline-label-grid small{font-size:9px;line-height:1.2}.snowline-label-grid strong{font-size:13px;line-height:1.2}.snowline-event-line{font-size:11px;line-height:1.4;padding:8px}.snowline-compact-relation,.snowline-compact-relation strong{font-size:10px!important;line-height:1.3}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:13px;white-space:nowrap}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:3px}.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{z-index:10030}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:fixed;left:max(16px, env(safe-area-inset-left, 0px));bottom:calc(var(--wintry-bottom-clearance, 84px) + env(safe-area-inset-bottom, 0px));z-index:10005;box-sizing:border-box;max-width:calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:280px;padding:10px;border:1px solid #355363;border-radius:12px;background:linear-gradient(155deg, #142b3b, #0c1822);max-height:calc(100vh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));max-height:calc(100dvh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}@media(max-width: 600px){.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{left:max(12px, env(safe-area-inset-left, 0px));right:max(12px, env(safe-area-inset-right, 0px));bottom:calc(var(--wintry-bottom-clearance, 88px) + env(safe-area-inset-bottom, 0px));margin-inline:auto;max-width:calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:440px;border-radius:16px;padding:10px 12px;max-height:min(45vh, calc(100vh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)));max-height:min(45dvh, calc(100dvh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)))}.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:max-content;min-height:44px}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{flex-wrap:wrap}}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:18px}.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:4px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:34px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{height:34px;font-size:11px}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:11px;margin:9px 0}.point-tools.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools.svelte-1gu5mnn>div.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;gap:8px;margin-top:9px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel.svelte-1gu5mnn button:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:12px;padding:8px}.info-body.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:13px;line-height:1.55}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:15px;white-space:nowrap}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:5px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:32px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{height:32px;padding:0 5px;font-size:10px}.point-tools.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:7px;padding:0;background:none}.point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools.svelte-1gu5mnn>div.svelte-1gu5mnn.svelte-1gu5mnn{gap:6px;margin-top:6px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:36px;font-size:12px}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;margin:6px 0}.help-link.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;padding:4px}.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;top:-10px;z-index:3;margin:-10px -10px 0;padding:10px 10px 6px;background:linear-gradient(155deg, #142b3b, #102330);border-bottom:1px solid #304655}@media(max-width: 600px){.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-inline:-12px;padding-inline:12px}}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:6px;margin-top:10px}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls.svelte-1gu5mnn label.active.svelte-1gu5mnn.svelte-1gu5mnn{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn:focus-within{outline:2px solid #8de4ff;outline-offset:2px}.storm-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;bottom:-10px;z-index:3;background:#102330;border-top:1px solid #304655;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn:disabled{opacity:0.45;cursor:default}.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:11px;min-height:22px}.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{flex-shrink:0}@media(prefers-reduced-motion: reduce){.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{animation:none}}@media(pointer: coarse){.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn,.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:40px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:relative;left:auto;right:auto;bottom:auto;z-index:auto;margin:0;width:100%;max-width:100%}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{border-radius:0;padding:8px 12px;max-height:38vh;max-height:38dvh;padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px))}#device-mobile .panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{top:-8px;margin-top:-8px;padding-top:8px}#device-mobile .layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}#device-mobile .layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px;padding:6px 4px;justify-content:center;font-size:11px}#device-mobile .prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin:6px 0;gap:3px}#device-mobile .panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:relative;bottom:auto;padding-bottom:0}#device-mobile .title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:15px}#device-mobile .hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}#device-mobile .panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px}#device-mobile .prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:contents}#device-mobile .prepare-map-controls.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}#device-mobile .prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}#device-mobile .panel-footer.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}#device-mobile .panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:visible}.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:static}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{padding-inline:4px;justify-content:center;font-size:11px}.settings-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:32px;border:1px solid #304655;border-radius:7px;background:#152735;color:#dff5ff;font-size:17px;cursor:pointer}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:14px}.panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px;padding-top:7px}.prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:contents}.prepare-map-controls.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:1;grid-row:1;min-height:34px;padding-inline:5px}.prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}.panel-footer.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:2;grid-row:1;padding-inline:6px}.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:3;grid-row:1;padding-inline:3px}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:visible}#device-mobile #plugin-windy-plugin-snowline-map-100m{height:auto!important;max-height:none!important;overflow:visible!important;padding:0!important}#device-mobile .panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:static}#device-mobile .settings-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px;min-width:36px}#device-mobile .point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#device-mobile .status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:4px;padding:3px;justify-content:flex-start}#device-mobile .prepare-ring.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:30px;flex-basis:30px}#device-mobile .prepare-ring.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{width:24px;height:24px;font-size:9px}");
+	append_styles(target, "svelte-1raysdx", ".guidance-key.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;gap:5px;margin-top:4px;color:#c0cbd3;font-size:10px;line-height:1.3}.guidance-key.svelte-1raysdx i.svelte-1raysdx.svelte-1raysdx{width:9px;height:9px;border-radius:2px;background:#718096;flex:none}.snowline-click-label>span>b{text-shadow:0 0 1px #fff}.snowline-point-place{font-size:12px;line-height:1.3;font-weight:750;color:#d9e7ef;overflow-wrap:anywhere;max-height:3.9em;overflow:auto;padding:0 2px}.wintry-point-pointer{background:transparent!important;border:0!important;pointer-events:none !important}.wintry-point-pointer>span{display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #fff;border-radius:50%;background:var(--probe-accent, #fff);box-shadow:0 0 0 2px rgba(0, 0, 0, 0.55)}.storm-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:9px;color:#f5df91;margin-top:5px}.wintry-storm-symbol{background:none!important;border:0!important;pointer-events:none !important}.wintry-storm-symbol span{font-size:23px;color:#ffe04b;text-shadow:0 1px 2px #111, 0 0 3px #111;line-height:28px}.wintry-precip-icon{background:none!important;border:0!important;pointer-events:none !important}.wintry-precip-icon span{display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}.wintry-precip-icon svg{width:25px;height:25px;padding:1.5px;filter:drop-shadow(0 0 0.75px #ffffffc0)}.layer-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:grid;grid-template-columns:repeat(2, 1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx{accent-color:#67d7ff;margin:0;width:15px;height:15px}.zoom-hint.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls.svelte-1raysdx label.unavailable.svelte-1raysdx.svelte-1raysdx{opacity:0.45;cursor:not-allowed}.layer-controls.svelte-1raysdx label.unavailable input.svelte-1raysdx.svelte-1raysdx{cursor:not-allowed}.prepare-map-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls.svelte-1raysdx small.svelte-1raysdx.svelte-1raysdx{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls.svelte-1raysdx .refresh-button.svelte-1raysdx.svelte-1raysdx{min-height:34px}.prepare-ring.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress), #324857 0)}.prepare-ring.svelte-1raysdx span.svelte-1raysdx.svelte-1raysdx{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.loading-stage.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}.data-status.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;flex-direction:column;gap:5px;padding:8px 0;font-size:10px;line-height:1.4;color:#b5cad8}#device-desktop #plugin-windy-plugin-snowline-map-100m{height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible !important}.refresh-error.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}.forecast-quality{margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}.hatch-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend.svelte-1raysdx span.svelte-1raysdx.svelte-1raysdx{color:#ef70cf;font-weight:700;margin-right:4px}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{box-sizing:border-box;width:240px;max-width:calc(100vw - 28px);padding:8px;border-radius:9px;background:rgba(38, 42, 46, 0.96);color:white;box-shadow:0 4px 16px rgba(0, 0, 0, 0.28)}.top-row.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;justify-content:space-between;gap:10px}.top-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;gap:6px}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:16px;font-weight:850;letter-spacing:-0.2px}.switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:1px solid rgba(255, 255, 255, 0.11);border-radius:7px;background:rgba(255, 255, 255, 0.035);font-size:9px;font-weight:850;white-space:nowrap;cursor:pointer}.switch.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx{appearance:none;-webkit-appearance:none;position:relative;margin:0;width:24px;height:14px;border:0;border-radius:8px;background:rgba(255, 255, 255, 0.16);cursor:pointer;transition:background 0.15s ease}.switch.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#aebbc2;transition:transform 0.15s ease, background 0.15s ease}.switch.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx:checked{background:rgba(80, 190, 255, 0.35)}.switch.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx:checked:after{transform:translateX(10px);background:#8ee2ff}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:24px;height:24px;padding:0;border:1px solid rgba(255, 255, 255, 0.1);border-radius:7px;background:rgba(255, 255, 255, 0.035);color:rgba(255, 255, 255, 0.74);font-size:15px;font-weight:800;cursor:pointer}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx:hover{background:rgba(255, 255, 255, 0.075);color:#fff}.show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{padding:7px 10px;border:1px solid rgba(255, 255, 255, 0.16);border-radius:8px;background:rgba(38, 42, 46, 0.96);color:#fff;box-shadow:0 3px 12px rgba(0, 0, 0, 0.24);font-size:11px;font-weight:800;cursor:pointer}.status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px;padding:4px 7px;border-radius:6px;background:rgba(10, 14, 18, 0.72);color:rgba(255, 255, 255, 0.92);font-size:10px;font-weight:700}.status-dot.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:7px;height:7px;border-radius:50%;background:#70d7ff;animation:svelte-1raysdx-snowline-pulse 1s ease-in-out infinite}@keyframes svelte-1raysdx-snowline-pulse{0%,100%{opacity:0.45;transform:scale(0.85)}50%{opacity:1;transform:scale(1)}}.info-overlay.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0, 0, 0, 0.3)}.info-window.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:min(360px, calc(100vw - 24px));max-height:min(74vh, 540px);overflow:hidden;border:1px solid rgba(80, 190, 255, 0.48);border-radius:10px;background:rgba(24, 28, 32, 0.99);color:white;box-shadow:0 8px 30px rgba(0, 0, 0, 0.48)}.info-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;justify-content:space-between;align-items:center;padding:9px 10px 7px;border-bottom:1px solid rgba(255, 255, 255, 0.1);font-size:12px}.info-head.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{width:22px;height:22px;border:0;border-radius:6px;background:rgba(255, 255, 255, 0.08);color:white;font-size:17px;cursor:pointer}.info-body.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{max-height:calc(min(74vh, 540px) - 40px);overflow-y:auto;padding:9px 10px 10px;font-size:10px;line-height:1.4;color:rgba(255, 255, 255, 0.84)}.info-body.svelte-1raysdx>div.svelte-1raysdx+div.svelte-1raysdx{margin-top:8px}.info-caveat.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{padding-top:8px;border-top:1px solid rgba(255, 255, 255, 0.1);color:rgba(255, 228, 92, 0.9)}.snowline-label{text-align:center;pointer-events:none}.snowline-label,.snowline-click-label{background:transparent!important;border:0 !important}.snowline-label span{display:inline-block;padding:1px 4px 1px 6px;border-radius:3px;border-left:4px solid var(--snowline-color, white);background:rgba(15, 17, 20, 0.86);color:white;font-size:10px;font-weight:800;white-space:nowrap;text-shadow:0 1px 2px rgba(0, 0, 0, 0.8);box-shadow:0 0 0 1px rgba(255, 255, 255, 0.12)}.snowline-label-major span{padding-left:7px;border-left-width:5px;background:rgba(10, 13, 16, 0.92);font-weight:900;box-shadow:0 0 0 1px rgba(255, 255, 255, 0.18), 0 2px 5px rgba(0, 0, 0, 0.28)}.snowline-click-label{pointer-events:none !important}.snowline-click-label>span{position:absolute;bottom:20px;left:0;transform:translateX(-50%);pointer-events:auto;display:flex;flex-direction:column;gap:6px;width:228px;min-height:146px;box-sizing:border-box;padding:40px 9px 9px;border-radius:14px;border:1px solid rgba(255, 255, 255, 0.11);border-top:2px solid var(--probe-accent, rgba(255, 255, 255, 0.4));border-bottom:3px solid var(--snowline-color, white);background:linear-gradient(180deg, rgba(11, 17, 21, 0.985), rgba(7, 12, 16, 0.99));color:#fff;text-align:center;white-space:normal;text-shadow:none;box-shadow:0 10px 30px rgba(0, 0, 0, 0.54)}.snowline-card-kicker{position:absolute;top:12px;left:74px;right:74px;color:#7f929e;font-size:6px;line-height:1;font-weight:900;letter-spacing:1.15px;text-align:center;white-space:nowrap;pointer-events:none}.snowline-label-close,.snowline-label-share,.snowline-label-chart,.snowline-label-favourite{position:absolute;top:7px;height:27px;padding:0;border:1px solid rgba(255, 255, 255, 0.085);border-radius:8px;background:rgba(255, 255, 255, 0.045);color:#dfe9ee;font-size:12px;line-height:25px;font-weight:800;text-shadow:none;cursor:pointer;pointer-events:auto;transition:background 0.12s ease, border-color 0.12s ease}.snowline-label-close:hover,.snowline-label-share:hover,.snowline-label-chart:hover,.snowline-label-favourite:hover{background:rgba(255, 255, 255, 0.09);border-color:rgba(255, 255, 255, 0.16)}.snowline-label-close{right:7px;width:27px;font-size:17px}.snowline-label-share{right:40px;width:27px;font-size:0;background-repeat:no-repeat;background-position:center;background-size:14px;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3Ccircle cx='6' cy='12' r='3'/%3E%3Ccircle cx='18' cy='19' r='3'/%3E%3Cpath d='M8.6 10.5l6.8-4M8.6 13.5l6.8 4'/%3E%3C/svg%3E\")}.snowline-label-chart{left:7px;width:29px;font-size:15px}.snowline-label-favourite{left:42px;width:29px;font-size:16px;color:#aab6bd}.snowline-label-favourite.saved{color:#ffe45c;border-color:rgba(255, 228, 92, 0.42);background:rgba(255, 228, 92, 0.08)}.snowline-click-label b{display:block;padding:4px 7px 2px;border-radius:8px;background:transparent;color:var(--probe-accent, white);font-size:15px;line-height:1.05;font-weight:900;letter-spacing:0.25px}.snowline-card-dry>span>b{padding:3px 7px 1px;background:transparent;font-size:12px;letter-spacing:0.8px;opacity:0.95}.snowline-label-detail{width:100%}.snowline-position{padding:6px 8px;border-radius:8px;background:rgba(255, 255, 255, 0.055);color:var(--probe-accent, white);line-height:1.05}.snowline-position strong{display:block;font-size:11px;font-weight:900}.snowline-position small{display:block;margin-top:3px;color:rgba(255, 255, 255, 0.68);font-size:7.5px;font-weight:750}.snowline-label-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;width:100%}.snowline-label-grid span,.snowline-outlook-grid span{min-width:0;padding:6px 4px 5px;border-radius:8px;background:rgba(255, 255, 255, 0.028);border:1px solid rgba(255, 255, 255, 0.045);text-align:center}.snowline-label-grid small,.snowline-outlook-grid small{display:block;color:#7f919b;font-size:6.2px;line-height:1;text-transform:uppercase;letter-spacing:0.42px;font-weight:800}.snowline-label-grid strong,.snowline-outlook-grid strong{display:block;margin-top:4px;color:#eef5f8;font-size:10.5px;line-height:1;font-weight:900}.metric-terrain strong{color:#ffd39a}.metric-snowline strong{color:#dff6ff}.metric-precip strong{color:#9fe5ff}.snowline-label-grid.has-precip .metric-precip{grid-column:-1}.snowline-outlook{padding:5px;border:1px solid rgba(110, 203, 255, 0.08);border-radius:8px;background:rgba(60, 150, 205, 0.035)}.snowline-outlook-title{margin-bottom:4px;color:#79badc;font-size:6.5px;font-weight:900;letter-spacing:0.75px}.snowline-outlook-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}.snowline-outlook-grid span{padding:4px 3px;background:rgba(255, 255, 255, 0.028)}.snowline-outlook-grid strong{font-size:8.8px}.snowline-no-snow strong{color:#8f9da5;font-weight:700}.snowline-transition{margin-top:4px;padding:4px 5px;border-radius:6px;background:rgba(255, 255, 255, 0.035);color:#dce9ef;font-size:8px;line-height:1.12;font-weight:800}.snowline-valid{margin:-1px 0 1px;color:#8799a4;font-size:7.2px;line-height:1;font-weight:800;text-align:center}.snowline-compact-relation{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:5px 7px;border-radius:8px;background:rgba(255, 255, 255, 0.025);color:var(--probe-accent, white);font-size:8.2px;line-height:1.1;font-weight:850;text-align:left}.snowline-compact-relation strong{display:inline!important;padding:0!important;background:none!important;color:inherit!important;font-size:8px!important;letter-spacing:0 !important}.snowline-compact-relation small{display:none}.snowline-compact-relation span{color:#aebbc2;font-weight:750;white-space:nowrap}.snowline-event-line{width:100%;box-sizing:border-box;padding:6px 7px;border:0;border-radius:8px;background:rgba(110, 203, 255, 0.045);color:#d8e5eb;text-align:left;font-family:inherit;font-size:7.8px;line-height:1.2;font-weight:800}button.snowline-event-line{display:flex;align-items:center;justify-content:space-between;gap:6px;cursor:pointer;pointer-events:auto}button.snowline-event-line:hover{background:rgba(110, 203, 255, 0.11)}button.snowline-event-line span{flex:0 0 auto;color:#8edcff;font-size:14px;line-height:8px}.snowline-loading{padding:20px 0 14px;color:#9fb0ba;font-size:10px}.snowline-probe-above>span{background:linear-gradient(180deg, rgba(8, 25, 34, 0.99), rgba(8, 14, 18, 0.99))}.snowline-probe-below>span{background:linear-gradient(180deg, rgba(32, 21, 12, 0.99), rgba(18, 13, 10, 0.99))}.snowline-probe-near>span{background:linear-gradient(180deg, rgba(29, 27, 11, 0.99), rgba(17, 16, 9, 0.99))}.snowline-card-hazard>span{border-top-color:#c184ff !important;box-shadow:0 0 0 1px rgba(193, 132, 255, 0.35), 0 12px 32px rgba(77, 27, 107, 0.58)}.snowline-card-hazard>span>b{color:#e7c8ff !important;background:rgba(174, 91, 230, 0.12) !important}@media(max-width: 520px){.info-overlay.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{align-items:flex-start;padding-top:54px}.snowline-click-label>span{width:220px;min-height:142px;padding:40px 8px 8px}.snowline-card-kicker{left:72px;right:72px}.snowline-click-label b{font-size:13px}.snowline-card-dry>span>b{font-size:10.5px}.snowline-position strong{font-size:10.5px}.snowline-label-grid strong,.snowline-outlook-grid strong{font-size:8.5px}}.snowline-label-chart{left:7px;width:69px;font-size:10px}.snowline-label-favourite{left:81px;width:46px;font-size:10px}.snowline-label-share{right:40px;width:45px;background-image:none;font-size:10px}.snowline-card-kicker{display:none}.snowline-valid{font-size:10px;line-height:1.25}.snowline-label-grid small{font-size:9px;line-height:1.2}.snowline-label-grid strong{font-size:13px;line-height:1.2}.snowline-event-line{font-size:11px;line-height:1.4;padding:8px}.snowline-compact-relation,.snowline-compact-relation strong{font-size:10px!important;line-height:1.3}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:13px;white-space:nowrap}.top-row.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.top-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{gap:3px}.info-overlay.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{z-index:10030}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:fixed;left:max(16px, env(safe-area-inset-left, 0px));bottom:calc(var(--wintry-bottom-clearance, 84px) + env(safe-area-inset-bottom, 0px));z-index:10005;box-sizing:border-box;max-width:calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:280px;padding:10px;border:1px solid #355363;border-radius:12px;background:linear-gradient(155deg, #142b3b, #0c1822);max-height:calc(100vh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));max-height:calc(100dvh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}@media(max-width: 600px){.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{left:max(12px, env(safe-area-inset-left, 0px));right:max(12px, env(safe-area-inset-right, 0px));bottom:calc(var(--wintry-bottom-clearance, 88px) + env(safe-area-inset-bottom, 0px));margin-inline:auto;max-width:calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:440px;border-radius:16px;padding:10px 12px;max-height:min(45vh, calc(100vh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)));max-height:min(45dvh, calc(100dvh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)))}.show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:max-content;min-height:44px}.top-row.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{flex-wrap:wrap}}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:18px}.top-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{gap:4px}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:30px;height:34px}.switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{height:34px;font-size:11px}.hatch-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:11px;margin:9px 0}.point-tools.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools.svelte-1raysdx strong.svelte-1raysdx.svelte-1raysdx{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools.svelte-1raysdx>div.svelte-1raysdx.svelte-1raysdx{display:flex;gap:8px;margin-top:9px}.point-tools.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel.svelte-1raysdx button:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}.status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:12px;padding:8px}.info-body.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:13px;line-height:1.55}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:15px;white-space:nowrap}.top-row.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{gap:5px}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:30px;height:32px}.switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{height:32px;padding:0 5px;font-size:10px}.point-tools.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:7px;padding:0;background:none}.point-tools.svelte-1raysdx strong.svelte-1raysdx.svelte-1raysdx{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools.svelte-1raysdx>div.svelte-1raysdx.svelte-1raysdx{gap:6px;margin-top:6px}.point-tools.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{min-height:36px;font-size:12px}.hatch-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:10px;margin:6px 0}.help-link.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:10px;padding:4px}.panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:sticky;top:-10px;z-index:3;margin:-10px -10px 0;padding:10px 10px 6px;background:linear-gradient(155deg, #142b3b, #102330);border-bottom:1px solid #304655}@media(max-width: 600px){.panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-inline:-12px;padding-inline:12px}}.layer-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{gap:6px;margin-top:10px}.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls.svelte-1raysdx label.active.svelte-1raysdx.svelte-1raysdx{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx:focus-within{outline:2px solid #8de4ff;outline-offset:2px}.storm-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:sticky;bottom:-10px;z-index:3;background:#102330;border-top:1px solid #304655;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx:disabled{opacity:0.45;cursor:default}.panel-footer.svelte-1raysdx .help-link.svelte-1raysdx.svelte-1raysdx{min-height:34px}.status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:11px;min-height:22px}.status-dot.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{flex-shrink:0}@media(prefers-reduced-motion: reduce){.status-dot.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{animation:none}}@media(pointer: coarse){.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx,.refresh-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.panel-footer.svelte-1raysdx .help-link.svelte-1raysdx.svelte-1raysdx{min-height:44px}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{min-height:40px}.point-tools.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{min-height:44px}}#device-mobile .snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,#device-mobile .show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:relative;left:auto;right:auto;bottom:auto;z-index:auto;margin:0;width:100%;max-width:100%}#device-mobile .snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{border-radius:0;padding:8px 12px;max-height:38vh;max-height:38dvh;padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px))}#device-mobile .panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{top:-8px;margin-top:-8px;padding-top:8px}#device-mobile .layer-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}#device-mobile .layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx{min-height:44px;padding:6px 4px;justify-content:center;font-size:11px}#device-mobile .prepare-map-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin:6px 0;gap:3px}#device-mobile .panel-footer.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:relative;bottom:auto;padding-bottom:0}#device-mobile .title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:15px}#device-mobile .hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,#device-mobile .switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{min-height:44px}#device-mobile .panel-actions.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px}#device-mobile .prepare-map-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,#device-mobile .panel-footer.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:contents}#device-mobile .prepare-map-controls.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}#device-mobile .prepare-map-controls.svelte-1raysdx small.svelte-1raysdx.svelte-1raysdx{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}#device-mobile .panel-footer.svelte-1raysdx .refresh-button.svelte-1raysdx.svelte-1raysdx{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}#device-mobile .panel-footer.svelte-1raysdx .help-link.svelte-1raysdx.svelte-1raysdx{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{max-height:none;overflow:visible}.panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:static}.layer-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx{padding-inline:4px;justify-content:center;font-size:11px}.settings-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:30px;height:32px;border:1px solid #304655;border-radius:7px;background:#152735;color:#dff5ff;font-size:17px;cursor:pointer}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:14px}.panel-actions.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px;padding-top:7px}.prepare-map-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.panel-footer.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:contents}.prepare-map-controls.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{grid-column:1;grid-row:1;min-height:34px;padding-inline:5px}.prepare-map-controls.svelte-1raysdx small.svelte-1raysdx.svelte-1raysdx{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}.panel-footer.svelte-1raysdx .refresh-button.svelte-1raysdx.svelte-1raysdx{grid-column:2;grid-row:1;padding-inline:6px}.panel-footer.svelte-1raysdx .help-link.svelte-1raysdx.svelte-1raysdx{grid-column:3;grid-row:1;padding-inline:3px}#device-mobile .snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{max-height:none;overflow:visible}#device-mobile #plugin-windy-plugin-snowline-map-100m{height:auto!important;max-height:none!important;overflow:visible!important;padding:0!important}#device-mobile .panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,#device-mobile .panel-actions.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:static}#device-mobile .settings-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{min-height:44px;min-width:36px}#device-mobile .point-tools.svelte-1raysdx strong.svelte-1raysdx.svelte-1raysdx{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#device-mobile .status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:4px;padding:3px;justify-content:flex-start}#device-mobile .prepare-ring.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:30px;height:30px;flex-basis:30px}#device-mobile .prepare-ring.svelte-1raysdx span.svelte-1raysdx.svelte-1raysdx{width:24px;height:24px;font-size:9px}");
 }
 
 // (3:0) {:else}
@@ -21886,55 +21737,57 @@ function create_else_block(ctx) {
 	let t21;
 	let t22;
 	let t23;
+	let t24;
 	let div7;
 	let div5;
-	let t24;
-	let small;
-	let t25_value = (/*prepareMessage*/ ctx[17] || 'Current area · up to 144 h') + "";
 	let t25;
+	let small;
+	let t26_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "";
 	let t26;
 	let t27;
+	let t28;
 	let div6;
 	let button2;
-	let t28;
+	let t29;
 	let button2_disabled_value;
 	let button3;
 	let current;
 	let mounted;
 	let dispose;
-	let if_block0 = !/*precipDetailAvailable*/ ctx[3] && create_if_block_15();
+	let if_block0 = !/*precipDetailAvailable*/ ctx[3] && create_if_block_16();
 	placesearch = new PlaceSearch({});
-	placesearch.$on("select", /*handlePlaceSelect*/ ctx[34]);
-	placesearch.$on("clear", /*handleSearchClear*/ ctx[35]);
-	let if_block1 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[21] && create_if_block_14(ctx);
-	let if_block2 = (/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[15] && create_if_block_13(ctx);
-	let if_block3 = /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3] && create_if_block_12(ctx);
-	let if_block4 = /*clickedPoint*/ ctx[13] && create_if_block_11(ctx);
+	placesearch.$on("select", /*handlePlaceSelect*/ ctx[33]);
+	placesearch.$on("clear", /*handleSearchClear*/ ctx[34]);
+	let if_block1 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[19] && create_if_block_15(ctx);
+	let if_block2 = (/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[13] && create_if_block_14(ctx);
+	let if_block3 = /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3] && create_if_block_13(ctx);
+	let if_block4 = /*clickedPoint*/ ctx[24] && create_if_block_12(ctx);
 
 	function v21panel_unitSystem_binding(value) {
-		/*v21panel_unitSystem_binding*/ ctx[59](value);
+		/*v21panel_unitSystem_binding*/ ctx[55](value);
 	}
 
-	let v21panel_props = { activeRunTime: /*activeRunTime*/ ctx[28] };
+	let v21panel_props = { activeRunTime: /*activeRunTime*/ ctx[27] };
 
-	if (/*unitSystem*/ ctx[12] !== void 0) {
-		v21panel_props.unitSystem = /*unitSystem*/ ctx[12];
+	if (/*unitSystem*/ ctx[11] !== void 0) {
+		v21panel_props.unitSystem = /*unitSystem*/ ctx[11];
 	}
 
 	v21panel = new V21Panel({ props: v21panel_props });
 	binding_callbacks.push(() => bind(v21panel, 'unitSystem', v21panel_unitSystem_binding));
-	let if_block5 = /*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[11] && /*mapDataMissing*/ ctx[31] && create_if_block_10();
-	let if_block6 = /*refreshError*/ ctx[29] && create_if_block_9(ctx);
-	let if_block7 = /*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) && create_if_block_7(ctx);
+	let if_block5 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && create_if_block_11();
+	let if_block6 = /*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[30] && create_if_block_10();
+	let if_block7 = /*refreshError*/ ctx[28] && create_if_block_9(ctx);
+	let if_block8 = /*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) && create_if_block_7(ctx);
 
 	function select_block_type_2(ctx, dirty) {
-		if (/*preparingMap*/ ctx[16]) return create_if_block_6;
+		if (/*preparingMap*/ ctx[14]) return create_if_block_6;
 		return create_else_block_1;
 	}
 
 	let current_block_type = select_block_type_2(ctx);
-	let if_block8 = current_block_type(ctx);
-	let if_block9 = /*videoDownloadUrl*/ ctx[19] && create_if_block_5(ctx);
+	let if_block9 = current_block_type(ctx);
+	let if_block10 = /*videoDownloadUrl*/ ctx[17] && create_if_block_5(ctx);
 
 	return {
 		c() {
@@ -21989,68 +21842,70 @@ function create_else_block(ctx) {
 			t22 = space();
 			if (if_block7) if_block7.c();
 			t23 = space();
+			if (if_block8) if_block8.c();
+			t24 = space();
 			div7 = element("div");
 			div5 = element("div");
-			if_block8.c();
-			t24 = space();
+			if_block9.c();
+			t25 = space();
 			small = element("small");
-			t25 = text(t25_value);
-			t26 = space();
-			if (if_block9) if_block9.c();
+			t26 = text(t26_value);
 			t27 = space();
+			if (if_block10) if_block10.c();
+			t28 = space();
 			div6 = element("div");
 			button2 = element("button");
-			t28 = text("↻ Refresh");
+			t29 = text("↻ Refresh");
 			button3 = element("button");
 			button3.textContent = "How it works";
-			attr(div0, "class", "title svelte-1gu5mnn");
-			attr(button0, "class", "settings-button svelte-1gu5mnn");
+			attr(div0, "class", "title svelte-1raysdx");
+			attr(button0, "class", "settings-button svelte-1raysdx");
 			attr(button0, "type", "button");
 			attr(button0, "aria-label", "Open Wintry settings");
 			attr(button0, "title", "Colours, units and data status");
-			attr(button1, "class", "hide-button svelte-1gu5mnn");
+			attr(button1, "class", "hide-button svelte-1raysdx");
 			attr(button1, "type", "button");
 			attr(button1, "aria-label", "Hide Wintry forecast panel");
 			attr(button1, "title", "Hide");
 			attr(input0, "type", "checkbox");
 			attr(input0, "aria-label", "Enable Wintry forecast");
-			attr(input0, "class", "svelte-1gu5mnn");
-			attr(label0, "class", "switch svelte-1gu5mnn");
-			attr(div1, "class", "top-controls svelte-1gu5mnn");
-			attr(div2, "class", "top-row svelte-1gu5mnn");
+			attr(input0, "class", "svelte-1raysdx");
+			attr(label0, "class", "switch svelte-1raysdx");
+			attr(div1, "class", "top-controls svelte-1raysdx");
+			attr(div2, "class", "top-row svelte-1raysdx");
 			attr(input1, "type", "checkbox");
-			attr(input1, "class", "svelte-1gu5mnn");
+			attr(input1, "class", "svelte-1raysdx");
 			attr(label1, "title", "Estimated snowline contours and dry-terrain hatching");
-			attr(label1, "class", "svelte-1gu5mnn");
+			attr(label1, "class", "svelte-1raysdx");
 			toggle_class(label1, "active", /*showContours*/ ctx[0]);
 			attr(input2, "type", "checkbox");
 			input2.disabled = input2_disabled_value = !/*precipDetailAvailable*/ ctx[3];
-			attr(input2, "class", "svelte-1gu5mnn");
+			attr(input2, "class", "svelte-1raysdx");
 			attr(label2, "title", "Precipitation type colours");
-			attr(label2, "class", "svelte-1gu5mnn");
+			attr(label2, "class", "svelte-1raysdx");
 			toggle_class(label2, "active", /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3]);
 			toggle_class(label2, "unavailable", !/*precipDetailAvailable*/ ctx[3]);
 			attr(input3, "type", "checkbox");
 			input3.disabled = input3_disabled_value = !/*precipDetailAvailable*/ ctx[3];
-			attr(input3, "class", "svelte-1gu5mnn");
+			attr(input3, "class", "svelte-1raysdx");
 			attr(label3, "title", "Precipitation-type symbols and ECMWF forecast lightning");
-			attr(label3, "class", "svelte-1gu5mnn");
+			attr(label3, "class", "svelte-1raysdx");
 			toggle_class(label3, "active", /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3]);
 			toggle_class(label3, "unavailable", !/*precipDetailAvailable*/ ctx[3]);
-			attr(div3, "class", "layer-controls svelte-1gu5mnn");
+			attr(div3, "class", "layer-controls svelte-1raysdx");
 			attr(div3, "role", "group");
 			attr(div3, "aria-label", "Map layers");
-			attr(div4, "class", "panel-head svelte-1gu5mnn");
-			attr(small, "class", "svelte-1gu5mnn");
-			attr(div5, "class", "prepare-map-controls svelte-1gu5mnn");
-			attr(button2, "class", "refresh-button svelte-1gu5mnn");
+			attr(div4, "class", "panel-head svelte-1raysdx");
+			attr(small, "class", "svelte-1raysdx");
+			attr(div5, "class", "prepare-map-controls svelte-1raysdx");
+			attr(button2, "class", "refresh-button svelte-1raysdx");
 			attr(button2, "type", "button");
-			button2.disabled = button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6];
-			attr(button3, "class", "help-link svelte-1gu5mnn");
+			button2.disabled = button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6];
+			attr(button3, "class", "help-link svelte-1raysdx");
 			attr(button3, "type", "button");
-			attr(div6, "class", "panel-footer svelte-1gu5mnn");
-			attr(div7, "class", "panel-actions svelte-1gu5mnn");
-			attr(div8, "class", "snowline-panel svelte-1gu5mnn");
+			attr(div6, "class", "panel-footer svelte-1raysdx");
+			attr(div7, "class", "panel-actions svelte-1raysdx");
+			attr(div8, "class", "snowline-panel svelte-1raysdx");
 		},
 		m(target, anchor) {
 			insert(target, div8, anchor);
@@ -22105,35 +21960,37 @@ function create_else_block(ctx) {
 			append(div8, t22);
 			if (if_block7) if_block7.m(div8, null);
 			append(div8, t23);
+			if (if_block8) if_block8.m(div8, null);
+			append(div8, t24);
 			append(div8, div7);
 			append(div7, div5);
-			if_block8.m(div5, null);
-			append(div5, t24);
+			if_block9.m(div5, null);
+			append(div5, t25);
 			append(div5, small);
-			append(small, t25);
-			append(div5, t26);
-			if (if_block9) if_block9.m(div5, null);
-			append(div7, t27);
+			append(small, t26);
+			append(div5, t27);
+			if (if_block10) if_block10.m(div5, null);
+			append(div7, t28);
 			append(div7, div6);
 			append(div6, button2);
-			append(button2, t28);
+			append(button2, t29);
 			append(div6, button3);
 			current = true;
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "click", /*click_handler_1*/ ctx[51]),
-					listen(button1, "click", /*click_handler_2*/ ctx[52]),
-					listen(input0, "change", /*input0_change_handler*/ ctx[53]),
-					listen(input0, "change", /*toggleEnabled*/ ctx[39]),
-					listen(input1, "change", /*input1_change_handler*/ ctx[54]),
-					listen(input1, "change", /*toggleMapLayers*/ ctx[38]),
-					listen(input2, "change", /*input2_change_handler*/ ctx[55]),
-					listen(input2, "change", /*toggleMapLayers*/ ctx[38]),
-					listen(input3, "change", /*input3_change_handler*/ ctx[56]),
-					listen(input3, "change", /*toggleMapLayers*/ ctx[38]),
-					listen(button2, "click", /*refreshForecast*/ ctx[33]),
-					listen(button3, "click", /*click_handler_5*/ ctx[60])
+					listen(button0, "click", /*click_handler_1*/ ctx[47]),
+					listen(button1, "click", /*click_handler_2*/ ctx[48]),
+					listen(input0, "change", /*input0_change_handler*/ ctx[49]),
+					listen(input0, "change", /*toggleEnabled*/ ctx[38]),
+					listen(input1, "change", /*input1_change_handler*/ ctx[50]),
+					listen(input1, "change", /*toggleMapLayers*/ ctx[37]),
+					listen(input2, "change", /*input2_change_handler*/ ctx[51]),
+					listen(input2, "change", /*toggleMapLayers*/ ctx[37]),
+					listen(input3, "change", /*input3_change_handler*/ ctx[52]),
+					listen(input3, "change", /*toggleMapLayers*/ ctx[37]),
+					listen(button2, "click", /*refreshForecast*/ ctx[32]),
+					listen(button3, "click", /*click_handler_5*/ ctx[56])
 				];
 
 				mounted = true;
@@ -22188,7 +22045,7 @@ function create_else_block(ctx) {
 
 			if (!/*precipDetailAvailable*/ ctx[3]) {
 				if (if_block0) ; else {
-					if_block0 = create_if_block_15();
+					if_block0 = create_if_block_16();
 					if_block0.c();
 					if_block0.m(div8, t14);
 				}
@@ -22197,11 +22054,11 @@ function create_else_block(ctx) {
 				if_block0 = null;
 			}
 
-			if (/*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[21]) {
+			if (/*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[19]) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_14(ctx);
+					if_block1 = create_if_block_15(ctx);
 					if_block1.c();
 					if_block1.m(div8, t16);
 				}
@@ -22210,11 +22067,11 @@ function create_else_block(ctx) {
 				if_block1 = null;
 			}
 
-			if ((/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[15]) {
+			if ((/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[13]) {
 				if (if_block2) {
 					if_block2.p(ctx, dirty);
 				} else {
-					if_block2 = create_if_block_13(ctx);
+					if_block2 = create_if_block_14(ctx);
 					if_block2.c();
 					if_block2.m(div8, t17);
 				}
@@ -22227,7 +22084,7 @@ function create_else_block(ctx) {
 				if (if_block3) {
 					if_block3.p(ctx, dirty);
 				} else {
-					if_block3 = create_if_block_12(ctx);
+					if_block3 = create_if_block_13(ctx);
 					if_block3.c();
 					if_block3.m(div8, t18);
 				}
@@ -22236,11 +22093,11 @@ function create_else_block(ctx) {
 				if_block3 = null;
 			}
 
-			if (/*clickedPoint*/ ctx[13]) {
+			if (/*clickedPoint*/ ctx[24]) {
 				if (if_block4) {
 					if_block4.p(ctx, dirty);
 				} else {
-					if_block4 = create_if_block_11(ctx);
+					if_block4 = create_if_block_12(ctx);
 					if_block4.c();
 					if_block4.m(div8, t19);
 				}
@@ -22250,19 +22107,19 @@ function create_else_block(ctx) {
 			}
 
 			const v21panel_changes = {};
-			if (dirty[0] & /*activeRunTime*/ 268435456) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[28];
+			if (dirty[0] & /*activeRunTime*/ 134217728) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[27];
 
-			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 4096) {
+			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 2048) {
 				updating_unitSystem = true;
-				v21panel_changes.unitSystem = /*unitSystem*/ ctx[12];
+				v21panel_changes.unitSystem = /*unitSystem*/ ctx[11];
 				add_flush_callback(() => updating_unitSystem = false);
 			}
 
 			v21panel.$set(v21panel_changes);
 
-			if (/*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[11] && /*mapDataMissing*/ ctx[31]) {
+			if (/*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3]) {
 				if (if_block5) ; else {
-					if_block5 = create_if_block_10();
+					if_block5 = create_if_block_11();
 					if_block5.c();
 					if_block5.m(div8, t21);
 				}
@@ -22271,11 +22128,9 @@ function create_else_block(ctx) {
 				if_block5 = null;
 			}
 
-			if (/*refreshError*/ ctx[29]) {
-				if (if_block6) {
-					if_block6.p(ctx, dirty);
-				} else {
-					if_block6 = create_if_block_9(ctx);
+			if (/*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[30]) {
+				if (if_block6) ; else {
+					if_block6 = create_if_block_10();
 					if_block6.c();
 					if_block6.m(div8, t22);
 				}
@@ -22284,11 +22139,11 @@ function create_else_block(ctx) {
 				if_block6 = null;
 			}
 
-			if (/*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
+			if (/*refreshError*/ ctx[28]) {
 				if (if_block7) {
 					if_block7.p(ctx, dirty);
 				} else {
-					if_block7 = create_if_block_7(ctx);
+					if_block7 = create_if_block_9(ctx);
 					if_block7.c();
 					if_block7.m(div8, t23);
 				}
@@ -22297,34 +22152,47 @@ function create_else_block(ctx) {
 				if_block7 = null;
 			}
 
-			if (current_block_type === (current_block_type = select_block_type_2(ctx)) && if_block8) {
-				if_block8.p(ctx, dirty);
-			} else {
-				if_block8.d(1);
-				if_block8 = current_block_type(ctx);
-
+			if (/*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
 				if (if_block8) {
-					if_block8.c();
-					if_block8.m(div5, t24);
-				}
-			}
-
-			if ((!current || dirty[0] & /*prepareMessage*/ 131072) && t25_value !== (t25_value = (/*prepareMessage*/ ctx[17] || 'Current area · up to 144 h') + "")) set_data(t25, t25_value);
-
-			if (/*videoDownloadUrl*/ ctx[19]) {
-				if (if_block9) {
-					if_block9.p(ctx, dirty);
+					if_block8.p(ctx, dirty);
 				} else {
-					if_block9 = create_if_block_5(ctx);
-					if_block9.c();
-					if_block9.m(div5, null);
+					if_block8 = create_if_block_7(ctx);
+					if_block8.c();
+					if_block8.m(div8, t24);
 				}
-			} else if (if_block9) {
-				if_block9.d(1);
-				if_block9 = null;
+			} else if (if_block8) {
+				if_block8.d(1);
+				if_block8 = null;
 			}
 
-			if (!current || dirty[0] & /*enabled, viewportLoading, probeLoading, terrainLoading, stormLoading, rasterLoading*/ 16779504 && button2_disabled_value !== (button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
+			if (current_block_type === (current_block_type = select_block_type_2(ctx)) && if_block9) {
+				if_block9.p(ctx, dirty);
+			} else {
+				if_block9.d(1);
+				if_block9 = current_block_type(ctx);
+
+				if (if_block9) {
+					if_block9.c();
+					if_block9.m(div5, t25);
+				}
+			}
+
+			if ((!current || dirty[0] & /*prepareMessage*/ 32768) && t26_value !== (t26_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "")) set_data(t26, t26_value);
+
+			if (/*videoDownloadUrl*/ ctx[17]) {
+				if (if_block10) {
+					if_block10.p(ctx, dirty);
+				} else {
+					if_block10 = create_if_block_5(ctx);
+					if_block10.c();
+					if_block10.m(div5, null);
+				}
+			} else if (if_block10) {
+				if_block10.d(1);
+				if_block10 = null;
+			}
+
+			if (!current || dirty[0] & /*enabled, viewportLoading, probeLoading, terrainLoading, stormLoading, rasterLoading*/ 8389872 && button2_disabled_value !== (button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
 				button2.disabled = button2_disabled_value;
 			}
 		},
@@ -22354,8 +22222,9 @@ function create_else_block(ctx) {
 			if (if_block5) if_block5.d();
 			if (if_block6) if_block6.d();
 			if (if_block7) if_block7.d();
-			if_block8.d();
-			if (if_block9) if_block9.d();
+			if (if_block8) if_block8.d();
+			if_block9.d();
+			if (if_block10) if_block10.d();
 			mounted = false;
 			run_all(dispose);
 		}
@@ -22372,7 +22241,7 @@ function create_if_block_4(ctx) {
 		c() {
 			button = element("button");
 			button.textContent = "❄ Wintry forecast";
-			attr(button, "class", "show-panel svelte-1gu5mnn");
+			attr(button, "class", "show-panel svelte-1raysdx");
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Show Wintry forecast panel");
 		},
@@ -22380,7 +22249,7 @@ function create_if_block_4(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*click_handler*/ ctx[50]);
+				dispose = listen(button, "click", /*click_handler*/ ctx[46]);
 				mounted = true;
 			}
 		},
@@ -22399,14 +22268,14 @@ function create_if_block_4(ctx) {
 }
 
 // (21:4) {#if !precipDetailAvailable}
-function create_if_block_15(ctx) {
+function create_if_block_16(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
 			div.textContent = "Zoom in to level 8 for shading and icons";
-			attr(div, "class", "zoom-hint svelte-1gu5mnn");
+			attr(div, "class", "zoom-hint svelte-1raysdx");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -22420,15 +22289,15 @@ function create_if_block_15(ctx) {
 }
 
 // (23:4) {#if showShading && precipDetailAvailable && geographyError}
-function create_if_block_14(ctx) {
+function create_if_block_15(ctx) {
 	let div;
 	let t;
 
 	return {
 		c() {
 			div = element("div");
-			t = text(/*geographyError*/ ctx[21]);
-			attr(div, "class", "storm-legend svelte-1gu5mnn");
+			t = text(/*geographyError*/ ctx[19]);
+			attr(div, "class", "storm-legend svelte-1raysdx");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22436,7 +22305,7 @@ function create_if_block_14(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*geographyError*/ 2097152) set_data(t, /*geographyError*/ ctx[21]);
+			if (dirty[0] & /*geographyError*/ 524288) set_data(t, /*geographyError*/ ctx[19]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -22447,15 +22316,15 @@ function create_if_block_14(ctx) {
 }
 
 // (24:4) {#if (showShading || showIcons) && terrainDetailStatus}
-function create_if_block_13(ctx) {
+function create_if_block_14(ctx) {
 	let div;
 	let t;
 
 	return {
 		c() {
 			div = element("div");
-			t = text(/*terrainDetailStatus*/ ctx[15]);
-			attr(div, "class", "storm-legend svelte-1gu5mnn");
+			t = text(/*terrainDetailStatus*/ ctx[13]);
+			attr(div, "class", "storm-legend svelte-1raysdx");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22463,7 +22332,7 @@ function create_if_block_13(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*terrainDetailStatus*/ 32768) set_data(t, /*terrainDetailStatus*/ ctx[15]);
+			if (dirty[0] & /*terrainDetailStatus*/ 8192) set_data(t, /*terrainDetailStatus*/ ctx[13]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -22474,15 +22343,15 @@ function create_if_block_13(ctx) {
 }
 
 // (25:4) {#if showIcons && precipDetailAvailable}
-function create_if_block_12(ctx) {
+function create_if_block_13(ctx) {
 	let div;
 	let t;
 
 	return {
 		c() {
 			div = element("div");
-			t = text(/*stormStatus*/ ctx[14]);
-			attr(div, "class", "storm-legend svelte-1gu5mnn");
+			t = text(/*stormStatus*/ ctx[12]);
+			attr(div, "class", "storm-legend svelte-1raysdx");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22490,7 +22359,7 @@ function create_if_block_12(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*stormStatus*/ 16384) set_data(t, /*stormStatus*/ ctx[14]);
+			if (dirty[0] & /*stormStatus*/ 4096) set_data(t, /*stormStatus*/ ctx[12]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -22501,7 +22370,7 @@ function create_if_block_12(ctx) {
 }
 
 // (26:4) {#if clickedPoint}
-function create_if_block_11(ctx) {
+function create_if_block_12(ctx) {
 	let div1;
 	let strong;
 	let t0_value = (/*clickedPlaceName*/ ctx[26] || 'Selected point') + "";
@@ -22522,13 +22391,13 @@ function create_if_block_11(ctx) {
 			button0.textContent = "Forecast";
 			button1 = element("button");
 			button1.textContent = "Sounding";
-			attr(strong, "class", "svelte-1gu5mnn");
+			attr(strong, "class", "svelte-1raysdx");
 			attr(button0, "type", "button");
-			attr(button0, "class", "svelte-1gu5mnn");
+			attr(button0, "class", "svelte-1raysdx");
 			attr(button1, "type", "button");
-			attr(button1, "class", "svelte-1gu5mnn");
-			attr(div0, "class", "svelte-1gu5mnn");
-			attr(div1, "class", "point-tools svelte-1gu5mnn");
+			attr(button1, "class", "svelte-1raysdx");
+			attr(div0, "class", "svelte-1raysdx");
+			attr(div1, "class", "point-tools svelte-1raysdx");
 		},
 		m(target, anchor) {
 			insert(target, div1, anchor);
@@ -22540,8 +22409,8 @@ function create_if_block_11(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "click", /*click_handler_3*/ ctx[57]),
-					listen(button1, "click", /*click_handler_4*/ ctx[58])
+					listen(button0, "click", /*click_handler_3*/ ctx[53]),
+					listen(button1, "click", /*click_handler_4*/ ctx[54])
 				];
 
 				mounted = true;
@@ -22561,7 +22430,28 @@ function create_if_block_11(ctx) {
 	};
 }
 
-// (30:4) {#if enabled && !viewportLoading && mapDataMissing}
+// (30:4) {#if showShading && precipDetailAvailable}
+function create_if_block_11(ctx) {
+	let div;
+
+	return {
+		c() {
+			div = element("div");
+			div.innerHTML = `<i class="svelte-1raysdx"></i>Type unresolved · model guidance`;
+			attr(div, "class", "guidance-key svelte-1raysdx");
+		},
+		m(target, anchor) {
+			insert(target, div, anchor);
+		},
+		d(detaching) {
+			if (detaching) {
+				detach(div);
+			}
+		}
+	};
+}
+
+// (31:4) {#if enabled && !viewportLoading && mapDataMissing}
 function create_if_block_10(ctx) {
 	let div;
 
@@ -22569,7 +22459,7 @@ function create_if_block_10(ctx) {
 		c() {
 			div = element("div");
 			div.textContent = "Some forecast data is missing · blank areas may be unknown";
-			attr(div, "class", "storm-legend svelte-1gu5mnn");
+			attr(div, "class", "storm-legend svelte-1raysdx");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22583,7 +22473,7 @@ function create_if_block_10(ctx) {
 	};
 }
 
-// (31:4) {#if refreshError}
+// (32:4) {#if refreshError}
 function create_if_block_9(ctx) {
 	let div;
 	let t0;
@@ -22595,13 +22485,13 @@ function create_if_block_9(ctx) {
 	return {
 		c() {
 			div = element("div");
-			t0 = text(/*refreshError*/ ctx[29]);
+			t0 = text(/*refreshError*/ ctx[28]);
 			t1 = space();
 			button = element("button");
 			button.textContent = "Retry";
 			attr(button, "type", "button");
-			attr(button, "class", "svelte-1gu5mnn");
-			attr(div, "class", "refresh-error svelte-1gu5mnn");
+			attr(button, "class", "svelte-1raysdx");
+			attr(div, "class", "refresh-error svelte-1raysdx");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22611,12 +22501,12 @@ function create_if_block_9(ctx) {
 			append(div, button);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*refreshForecast*/ ctx[33]);
+				dispose = listen(button, "click", /*refreshForecast*/ ctx[32]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*refreshError*/ 536870912) set_data(t0, /*refreshError*/ ctx[29]);
+			if (dirty[0] & /*refreshError*/ 268435456) set_data(t0, /*refreshError*/ ctx[28]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -22629,12 +22519,12 @@ function create_if_block_9(ctx) {
 	};
 }
 
-// (33:4) {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
+// (34:4) {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
 function create_if_block_7(ctx) {
 	let div;
 
 	function select_block_type_1(ctx, dirty) {
-		if (/*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) return create_if_block_8;
+		if (/*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) return create_if_block_8;
 		return create_else_block_2;
 	}
 
@@ -22645,7 +22535,7 @@ function create_if_block_7(ctx) {
 		c() {
 			div = element("div");
 			if_block.c();
-			attr(div, "class", "status-pill svelte-1gu5mnn");
+			attr(div, "class", "status-pill svelte-1raysdx");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22675,7 +22565,7 @@ function create_if_block_7(ctx) {
 	};
 }
 
-// (38:8) {:else}
+// (39:8) {:else}
 function create_else_block_2(ctx) {
 	let span;
 	let t;
@@ -22684,7 +22574,7 @@ function create_else_block_2(ctx) {
 		c() {
 			span = element("span");
 			t = text("Reading point…");
-			attr(span, "class", "status-dot svelte-1gu5mnn");
+			attr(span, "class", "status-dot svelte-1raysdx");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -22700,7 +22590,7 @@ function create_else_block_2(ctx) {
 	};
 }
 
-// (35:8) {#if viewportLoading || terrainLoading || stormLoading || rasterLoading}
+// (36:8) {#if viewportLoading || terrainLoading || stormLoading || rasterLoading}
 function create_if_block_8(ctx) {
 	let div;
 	let span0;
@@ -22713,7 +22603,7 @@ function create_if_block_8(ctx) {
 	let t3;
 	let small;
 
-	let t4_value = (/*viewportLoading*/ ctx[11]
+	let t4_value = (/*viewportLoading*/ ctx[10]
 	? 'Forecast data'
 	: /*terrainLoading*/ ctx[4]
 		? 'Terrain detail'
@@ -22727,23 +22617,23 @@ function create_if_block_8(ctx) {
 		c() {
 			div = element("div");
 			span0 = element("span");
-			t0 = text(/*layerLoadPercent*/ ctx[32]);
+			t0 = text(/*layerLoadPercent*/ ctx[31]);
 			t1 = text("%");
 			t2 = space();
 			span1 = element("span");
 			t3 = text("Updating…");
 			small = element("small");
 			t4 = text(t4_value);
-			attr(span0, "class", "svelte-1gu5mnn");
-			attr(div, "class", "prepare-ring svelte-1gu5mnn");
+			attr(span0, "class", "svelte-1raysdx");
+			attr(div, "class", "prepare-ring svelte-1raysdx");
 			attr(div, "role", "progressbar");
 			attr(div, "aria-label", "Map layer loading progress");
 			attr(div, "aria-valuemin", "0");
 			attr(div, "aria-valuemax", "100");
-			attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[32]);
-			attr(div, "aria-valuetext", div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[32]}% of layer loading stages processed`);
-			attr(div, "style", div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[32]}%`);
-			attr(small, "class", "loading-stage svelte-1gu5mnn");
+			attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[31]);
+			attr(div, "aria-valuetext", div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[31]}% of layer loading stages processed`);
+			attr(div, "style", div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[31]}%`);
+			attr(small, "class", "loading-stage svelte-1raysdx");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -22757,21 +22647,21 @@ function create_if_block_8(ctx) {
 			append(small, t4);
 		},
 		p(ctx, dirty) {
-			if (dirty[1] & /*layerLoadPercent*/ 2) set_data(t0, /*layerLoadPercent*/ ctx[32]);
+			if (dirty[1] & /*layerLoadPercent*/ 1) set_data(t0, /*layerLoadPercent*/ ctx[31]);
 
-			if (dirty[1] & /*layerLoadPercent*/ 2) {
-				attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[32]);
+			if (dirty[1] & /*layerLoadPercent*/ 1) {
+				attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[31]);
 			}
 
-			if (dirty[1] & /*layerLoadPercent*/ 2 && div_aria_valuetext_value !== (div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[32]}% of layer loading stages processed`)) {
+			if (dirty[1] & /*layerLoadPercent*/ 1 && div_aria_valuetext_value !== (div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[31]}% of layer loading stages processed`)) {
 				attr(div, "aria-valuetext", div_aria_valuetext_value);
 			}
 
-			if (dirty[1] & /*layerLoadPercent*/ 2 && div_style_value !== (div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[32]}%`)) {
+			if (dirty[1] & /*layerLoadPercent*/ 1 && div_style_value !== (div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[31]}%`)) {
 				attr(div, "style", div_style_value);
 			}
 
-			if (dirty[0] & /*viewportLoading, terrainLoading, rasterLoading*/ 2128 && t4_value !== (t4_value = (/*viewportLoading*/ ctx[11]
+			if (dirty[0] & /*viewportLoading, terrainLoading, rasterLoading*/ 1104 && t4_value !== (t4_value = (/*viewportLoading*/ ctx[10]
 			? 'Forecast data'
 			: /*terrainLoading*/ ctx[4]
 				? 'Terrain detail'
@@ -22789,7 +22679,7 @@ function create_if_block_8(ctx) {
 	};
 }
 
-// (44:6) {:else}
+// (45:6) {:else}
 function create_else_block_1(ctx) {
 	let button;
 	let t;
@@ -22801,21 +22691,21 @@ function create_else_block_1(ctx) {
 		c() {
 			button = element("button");
 			t = text("Prepare & download MP4");
-			attr(button, "class", "refresh-button svelte-1gu5mnn");
+			attr(button, "class", "refresh-button svelte-1raysdx");
 			attr(button, "type", "button");
-			button.disabled = button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6];
+			button.disabled = button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6];
 		},
 		m(target, anchor) {
 			insert(target, button, anchor);
 			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*prepareMapForecast*/ ctx[37]);
+				dispose = listen(button, "click", /*prepareMapForecast*/ ctx[36]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*enabled, showShading, precipDetailAvailable, viewportLoading, terrainLoading, rasterLoading*/ 2266 && button_disabled_value !== (button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6])) {
+			if (dirty[0] & /*enabled, showShading, precipDetailAvailable, viewportLoading, terrainLoading, rasterLoading*/ 1242 && button_disabled_value !== (button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6])) {
 				button.disabled = button_disabled_value;
 			}
 		},
@@ -22830,11 +22720,11 @@ function create_else_block_1(ctx) {
 	};
 }
 
-// (43:6) {#if preparingMap}
+// (44:6) {#if preparingMap}
 function create_if_block_6(ctx) {
 	let button;
 
-	let t_value = (/*exportingMap*/ ctx[18]
+	let t_value = (/*exportingMap*/ ctx[16]
 	? 'Cancel MP4 export'
 	: 'Cancel preparation') + "";
 
@@ -22846,7 +22736,7 @@ function create_if_block_6(ctx) {
 		c() {
 			button = element("button");
 			t = text(t_value);
-			attr(button, "class", "refresh-button svelte-1gu5mnn");
+			attr(button, "class", "refresh-button svelte-1raysdx");
 			attr(button, "type", "button");
 		},
 		m(target, anchor) {
@@ -22854,12 +22744,12 @@ function create_if_block_6(ctx) {
 			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*cancelMapPreparation*/ ctx[36]);
+				dispose = listen(button, "click", /*cancelMapPreparation*/ ctx[35]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*exportingMap*/ 262144 && t_value !== (t_value = (/*exportingMap*/ ctx[18]
+			if (dirty[0] & /*exportingMap*/ 65536 && t_value !== (t_value = (/*exportingMap*/ ctx[16]
 			? 'Cancel MP4 export'
 			: 'Cancel preparation') + "")) set_data(t, t_value);
 		},
@@ -22874,7 +22764,7 @@ function create_if_block_6(ctx) {
 	};
 }
 
-// (46:6) {#if videoDownloadUrl}
+// (47:6) {#if videoDownloadUrl}
 function create_if_block_5(ctx) {
 	let a;
 	let t;
@@ -22883,20 +22773,20 @@ function create_if_block_5(ctx) {
 		c() {
 			a = element("a");
 			t = text("Download MP4 again");
-			attr(a, "href", /*videoDownloadUrl*/ ctx[19]);
-			attr(a, "download", /*videoDownloadName*/ ctx[20]);
+			attr(a, "href", /*videoDownloadUrl*/ ctx[17]);
+			attr(a, "download", /*videoDownloadName*/ ctx[18]);
 		},
 		m(target, anchor) {
 			insert(target, a, anchor);
 			append(a, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*videoDownloadUrl*/ 524288) {
-				attr(a, "href", /*videoDownloadUrl*/ ctx[19]);
+			if (dirty[0] & /*videoDownloadUrl*/ 131072) {
+				attr(a, "href", /*videoDownloadUrl*/ ctx[17]);
 			}
 
-			if (dirty[0] & /*videoDownloadName*/ 1048576) {
-				attr(a, "download", /*videoDownloadName*/ ctx[20]);
+			if (dirty[0] & /*videoDownloadName*/ 262144) {
+				attr(a, "download", /*videoDownloadName*/ ctx[18]);
 			}
 		},
 		d(detaching) {
@@ -22907,7 +22797,7 @@ function create_if_block_5(ctx) {
 	};
 }
 
-// (53:0) {#if settingsOpen}
+// (54:0) {#if settingsOpen}
 function create_if_block_2(ctx) {
 	let div6;
 	let div5;
@@ -22927,7 +22817,7 @@ function create_if_block_2(ctx) {
 	let t6;
 	let t7;
 	let div3;
-	let t8_value = (/*mapDataStatus*/ ctx[30] || 'Forecast data not loaded') + "";
+	let t8_value = (/*mapDataStatus*/ ctx[29] || 'Forecast data not loaded') + "";
 	let t8;
 	let current;
 	let mounted;
@@ -22935,16 +22825,16 @@ function create_if_block_2(ctx) {
 	precipitationlegend = new PrecipitationLegend({});
 
 	function v21panel_unitSystem_binding_1(value) {
-		/*v21panel_unitSystem_binding_1*/ ctx[62](value);
+		/*v21panel_unitSystem_binding_1*/ ctx[58](value);
 	}
 
 	let v21panel_props = {
-		activeRunTime: /*activeRunTime*/ ctx[28],
+		activeRunTime: /*activeRunTime*/ ctx[27],
 		settingsOnly: true
 	};
 
-	if (/*unitSystem*/ ctx[12] !== void 0) {
-		v21panel_props.unitSystem = /*unitSystem*/ ctx[12];
+	if (/*unitSystem*/ ctx[11] !== void 0) {
+		v21panel_props.unitSystem = /*unitSystem*/ ctx[11];
 	}
 
 	v21panel = new V21Panel({ props: v21panel_props });
@@ -22978,18 +22868,18 @@ function create_if_block_2(ctx) {
 			t8 = text(t8_value);
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close settings");
-			attr(button, "class", "svelte-1gu5mnn");
-			attr(div0, "class", "info-head svelte-1gu5mnn");
-			attr(div1, "class", "svelte-1gu5mnn");
-			attr(div2, "class", "svelte-1gu5mnn");
-			attr(div3, "class", "data-status svelte-1gu5mnn");
+			attr(button, "class", "svelte-1raysdx");
+			attr(div0, "class", "info-head svelte-1raysdx");
+			attr(div1, "class", "svelte-1raysdx");
+			attr(div2, "class", "svelte-1raysdx");
+			attr(div3, "class", "data-status svelte-1raysdx");
 			attr(div3, "aria-label", "Map data status");
-			attr(div4, "class", "info-body svelte-1gu5mnn");
-			attr(div5, "class", "info-window svelte-1gu5mnn");
+			attr(div4, "class", "info-body svelte-1raysdx");
+			attr(div5, "class", "info-window svelte-1raysdx");
 			attr(div5, "role", "dialog");
 			attr(div5, "aria-modal", "true");
 			attr(div5, "aria-label", "Wintry settings");
-			attr(div6, "class", "info-overlay svelte-1gu5mnn");
+			attr(div6, "class", "info-overlay svelte-1raysdx");
 			attr(div6, "role", "presentation");
 		},
 		m(target, anchor) {
@@ -23016,8 +22906,8 @@ function create_if_block_2(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button, "click", /*click_handler_6*/ ctx[61]),
-					listen(div6, "click", self$1(/*click_handler_7*/ ctx[63]))
+					listen(button, "click", /*click_handler_6*/ ctx[57]),
+					listen(div6, "click", self$1(/*click_handler_7*/ ctx[59]))
 				];
 
 				mounted = true;
@@ -23025,11 +22915,11 @@ function create_if_block_2(ctx) {
 		},
 		p(ctx, dirty) {
 			const v21panel_changes = {};
-			if (dirty[0] & /*activeRunTime*/ 268435456) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[28];
+			if (dirty[0] & /*activeRunTime*/ 134217728) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[27];
 
-			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 4096) {
+			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 2048) {
 				updating_unitSystem = true;
-				v21panel_changes.unitSystem = /*unitSystem*/ ctx[12];
+				v21panel_changes.unitSystem = /*unitSystem*/ ctx[11];
 				add_flush_callback(() => updating_unitSystem = false);
 			}
 
@@ -23046,7 +22936,7 @@ function create_if_block_2(ctx) {
 				if_block = null;
 			}
 
-			if ((!current || dirty[0] & /*mapDataStatus*/ 1073741824) && t8_value !== (t8_value = (/*mapDataStatus*/ ctx[30] || 'Forecast data not loaded') + "")) set_data(t8, t8_value);
+			if ((!current || dirty[0] & /*mapDataStatus*/ 536870912) && t8_value !== (t8_value = (/*mapDataStatus*/ ctx[29] || 'Forecast data not loaded') + "")) set_data(t8, t8_value);
 		},
 		i(local) {
 			if (current) return;
@@ -23073,15 +22963,15 @@ function create_if_block_2(ctx) {
 	};
 }
 
-// (60:8) {#if showContours}
+// (61:8) {#if showContours}
 function create_if_block_3(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
-			div.innerHTML = `<span class="svelte-1gu5mnn">╱╱╱</span> Dry terrain above estimated snowline`;
-			attr(div, "class", "hatch-legend svelte-1gu5mnn");
+			div.innerHTML = `<span class="svelte-1raysdx">╱╱╱</span> Dry terrain above estimated snowline`;
+			attr(div, "class", "hatch-legend svelte-1raysdx");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -23094,31 +22984,30 @@ function create_if_block_3(ctx) {
 	};
 }
 
-// (67:0) {#if chartOpen && clickedPoint}
+// (68:0) {#if chartOpen && clickedPoint}
 function create_if_block_1(ctx) {
 	let snowlinechart;
 	let updating_tab;
 	let current;
 
 	function snowlinechart_tab_binding(value) {
-		/*snowlinechart_tab_binding*/ ctx[64](value);
+		/*snowlinechart_tab_binding*/ ctx[60](value);
 	}
 
 	let snowlinechart_props = {
-		point: /*clickedPoint*/ ctx[13],
+		point: /*clickedPoint*/ ctx[24],
 		terrainM: /*clickedMapElevationM*/ ctx[25],
-		terrainSlopes: /*clickedTerrainSlopes*/ ctx[27],
 		placeName: /*clickedPlaceName*/ ctx[26] || 'Selected point',
-		units: /*unitSystem*/ ctx[12]
+		units: /*unitSystem*/ ctx[11]
 	};
 
-	if (/*forecastTab*/ ctx[10] !== void 0) {
-		snowlinechart_props.tab = /*forecastTab*/ ctx[10];
+	if (/*forecastTab*/ ctx[9] !== void 0) {
+		snowlinechart_props.tab = /*forecastTab*/ ctx[9];
 	}
 
 	snowlinechart = new SnowlineChart({ props: snowlinechart_props });
 	binding_callbacks.push(() => bind(snowlinechart, 'tab', snowlinechart_tab_binding));
-	snowlinechart.$on("close", /*close_handler*/ ctx[65]);
+	snowlinechart.$on("close", /*close_handler*/ ctx[61]);
 
 	return {
 		c() {
@@ -23130,15 +23019,14 @@ function create_if_block_1(ctx) {
 		},
 		p(ctx, dirty) {
 			const snowlinechart_changes = {};
-			if (dirty[0] & /*clickedPoint*/ 8192) snowlinechart_changes.point = /*clickedPoint*/ ctx[13];
+			if (dirty[0] & /*clickedPoint*/ 16777216) snowlinechart_changes.point = /*clickedPoint*/ ctx[24];
 			if (dirty[0] & /*clickedMapElevationM*/ 33554432) snowlinechart_changes.terrainM = /*clickedMapElevationM*/ ctx[25];
-			if (dirty[0] & /*clickedTerrainSlopes*/ 134217728) snowlinechart_changes.terrainSlopes = /*clickedTerrainSlopes*/ ctx[27];
 			if (dirty[0] & /*clickedPlaceName*/ 67108864) snowlinechart_changes.placeName = /*clickedPlaceName*/ ctx[26] || 'Selected point';
-			if (dirty[0] & /*unitSystem*/ 4096) snowlinechart_changes.units = /*unitSystem*/ ctx[12];
+			if (dirty[0] & /*unitSystem*/ 2048) snowlinechart_changes.units = /*unitSystem*/ ctx[11];
 
-			if (!updating_tab && dirty[0] & /*forecastTab*/ 1024) {
+			if (!updating_tab && dirty[0] & /*forecastTab*/ 512) {
 				updating_tab = true;
-				snowlinechart_changes.tab = /*forecastTab*/ ctx[10];
+				snowlinechart_changes.tab = /*forecastTab*/ ctx[9];
 				add_flush_callback(() => updating_tab = false);
 			}
 
@@ -23184,18 +23072,18 @@ function create_if_block(ctx) {
 			button.textContent = "×";
 			t3 = space();
 			div14 = element("div");
-			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Terrain flow:</b> the point graph compares above-terrain model winds with a fixed 4 km terrain slope. Upslope/down-slope is an experimental exposure diagnostic; it does not predict additional precipitation, resolve blocked flow, or alter ECMWF amounts. Missing wind/terrain data leaves this diagnostic unavailable.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> timing and estimated snowfall through +144 h.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. The separate experimental remaining-layer estimate tracks snow water and depth, with settling and wet-bulb-based melt even in dry weather. It excludes existing snow, ground heat, radiation and drifting; it is not a snow-depth observation or a full energy-balance model.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
+			div14.innerHTML = `<div class="svelte-1raysdx"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1raysdx"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1raysdx"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1raysdx"><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, freezing rain and unresolved type. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1raysdx"><b>Unresolved type:</b> a slate-coloured area means precipitation is forecast but atmospheric detail does not support a specific type. It is not dry weather. Type labels marked “possible” flag borderline diagnostics; no label is a calibrated probability.</div> <div class="svelte-1raysdx"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1raysdx"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1raysdx"><b>Thermal snowline:</b> the wet-bulb zero level is an atmospheric proxy, not an exact rain/snow boundary. Values are rounded to 100 m (500 ft); this is display precision, not a validated error range. A value extrapolated below the lowest profile level is withheld.</div> <div class="svelte-1raysdx"><b>Next wintry period:</b> estimated timing and snowfall through +144 h. An unresolved type cannot establish a dry or non-wintry outlook.</div> <div class="svelte-1raysdx"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. Snowfall amounts are withheld where wet-period type is unresolved and displayed with coarse rounding, not uncertainty bounds. Remaining ground snow and wind–terrain exposure are excluded from the user interface because those experimental estimates are uncalibrated.</div> <div class="svelte-1raysdx"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1raysdx"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1raysdx">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close information");
 			attr(button, "title", "Close");
-			attr(button, "class", "svelte-1gu5mnn");
-			attr(div0, "class", "info-head svelte-1gu5mnn");
-			attr(div14, "class", "info-body svelte-1gu5mnn");
-			attr(div15, "class", "info-window svelte-1gu5mnn");
+			attr(button, "class", "svelte-1raysdx");
+			attr(div0, "class", "info-head svelte-1raysdx");
+			attr(div14, "class", "info-body svelte-1raysdx");
+			attr(div15, "class", "info-window svelte-1raysdx");
 			attr(div15, "role", "dialog");
 			attr(div15, "aria-modal", "true");
 			attr(div15, "aria-label", "How Wintry forecast works");
-			attr(div16, "class", "info-overlay svelte-1gu5mnn");
+			attr(div16, "class", "info-overlay svelte-1raysdx");
 			attr(div16, "role", "presentation");
 		},
 		m(target, anchor) {
@@ -23210,8 +23098,8 @@ function create_if_block(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button, "click", /*click_handler_8*/ ctx[66]),
-					listen(div16, "click", self$1(/*click_handler_9*/ ctx[67]))
+					listen(button, "click", /*click_handler_8*/ ctx[62]),
+					listen(div16, "click", self$1(/*click_handler_9*/ ctx[63]))
 				];
 
 				mounted = true;
@@ -23247,9 +23135,9 @@ function create_fragment$1(ctx) {
 
 	current_block_type_index = select_block_type(ctx);
 	if_block0 = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
-	let if_block1 = /*settingsOpen*/ ctx[23] && create_if_block_2(ctx);
-	let if_block2 = /*chartOpen*/ ctx[9] && /*clickedPoint*/ ctx[13] && create_if_block_1(ctx);
-	let if_block3 = /*infoOpen*/ ctx[22] && create_if_block(ctx);
+	let if_block1 = /*settingsOpen*/ ctx[21] && create_if_block_2(ctx);
+	let if_block2 = /*chartOpen*/ ctx[22] && /*clickedPoint*/ ctx[24] && create_if_block_1(ctx);
+	let if_block3 = /*infoOpen*/ ctx[20] && create_if_block(ctx);
 
 	return {
 		c() {
@@ -23300,11 +23188,11 @@ function create_fragment$1(ctx) {
 				if_block0.m(t0.parentNode, t0);
 			}
 
-			if (/*settingsOpen*/ ctx[23]) {
+			if (/*settingsOpen*/ ctx[21]) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 
-					if (dirty[0] & /*settingsOpen*/ 8388608) {
+					if (dirty[0] & /*settingsOpen*/ 2097152) {
 						transition_in(if_block1, 1);
 					}
 				} else {
@@ -23323,11 +23211,11 @@ function create_fragment$1(ctx) {
 				check_outros();
 			}
 
-			if (/*chartOpen*/ ctx[9] && /*clickedPoint*/ ctx[13]) {
+			if (/*chartOpen*/ ctx[22] && /*clickedPoint*/ ctx[24]) {
 				if (if_block2) {
 					if_block2.p(ctx, dirty);
 
-					if (dirty[0] & /*chartOpen, clickedPoint*/ 8704) {
+					if (dirty[0] & /*chartOpen, clickedPoint*/ 20971520) {
 						transition_in(if_block2, 1);
 					}
 				} else {
@@ -23346,7 +23234,7 @@ function create_fragment$1(ctx) {
 				check_outros();
 			}
 
-			if (/*infoOpen*/ ctx[22]) {
+			if (/*infoOpen*/ ctx[20]) {
 				if (if_block3) {
 					if_block3.p(ctx, dirty);
 				} else {
@@ -23396,8 +23284,7 @@ const MAX_CONCURRENT = 12,
 	MAX_FORECAST_HOURS = 144,
 	PROFILE_CACHE_MAX = 1600,
 	MIN_VALID_FRACTION = 0.32,
-	POSITION_NEAR_SNOWLINE_METRES = 100,
-	TENDENCY_HOURS = 1;
+	POSITION_NEAR_SNOWLINE_METRES = 100;
 
 const FAVOURITES_STORAGE_KEY = 'snowline:favourites:v1',
 	FAVOURITES_CHANGED_EVENT = 'wintry:favourites-changed',
@@ -23652,9 +23539,6 @@ function instance$1($$self, $$props, $$invalidate) {
 		pointSource = null,
 		clickedNextEventTime = null;
 
-	let clickedTerrainSlopes = null;
-	let exposureGeneration = -1;
-
 	let moveTimer = null,
 		generation = 0,
 		clickGeneration = 0,
@@ -23739,12 +23623,12 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (run === null || isOlderRun(run, activeRunTime)) return;
 
 		if (activeRunTime === null) {
-			$$invalidate(28, activeRunTime = run);
+			$$invalidate(27, activeRunTime = run);
 			return;
 		}
 
 		if (run > activeRunTime + 60_000) {
-			$$invalidate(28, activeRunTime = run);
+			$$invalidate(27, activeRunTime = run);
 			profileCache.clear();
 			stormFrames.clear();
 			clearStorms();
@@ -23915,8 +23799,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		refreshQueued = false;
 		const my = ++generation;
-		$$invalidate(42, weatherLoadProgress = 0);
-		$$invalidate(11, viewportLoading = true);
+		$$invalidate(41, weatherLoadProgress = 0);
+		$$invalidate(10, viewportLoading = true);
 		const { points, rows, cols } = buildViewportPoints();
 		const progressive = Array.from({ length: rows }, () => Array(cols).fill(null));
 		let completed = 0, settled = 0, paintedAt = 0;
@@ -23952,7 +23836,7 @@ function instance$1($$self, $$props, $$invalidate) {
 					}
 				}
 
-				if (my === generation) $$invalidate(42, weatherLoadProgress = ++settled / points.length);
+				if (my === generation) $$invalidate(41, weatherLoadProgress = ++settled / points.length);
 				return { ...p, result };
 			});
 
@@ -23964,9 +23848,9 @@ function instance$1($$self, $$props, $$invalidate) {
 				cache = [];
 				clearContours();
 				clearShading();
-				$$invalidate(30, mapDataStatus = 'Forecast unavailable for this area');
-				$$invalidate(31, mapDataMissing = false);
-				$$invalidate(29, refreshError = 'Map forecast unavailable.');
+				$$invalidate(29, mapDataStatus = 'Forecast unavailable for this area');
+				$$invalidate(30, mapDataMissing = false);
+				$$invalidate(28, refreshError = 'Map forecast unavailable.');
 				return;
 			}
 
@@ -23976,11 +23860,11 @@ function instance$1($$self, $$props, $$invalidate) {
 			weatherRevision++;
 			frameCache.clear();
 			lastChecked = Date.now();
-			$$invalidate(29, refreshError = '');
+			$$invalidate(28, refreshError = '');
 			renderFromCache();
 			if (clickedPoint && clickedLatLon && !profileIsFresh(clickedPoint.fetchedAt, clickedPoint.runTime, activeRunTime)) void probeLocation(...clickedLatLon, pointSource ?? 'map-click', clickedPlaceName);
 		} finally {
-			if (my === generation) $$invalidate(11, viewportLoading = false);
+			if (my === generation) $$invalidate(10, viewportLoading = false);
 
 			if (refreshQueued && enabled && !destroyed) {
 				refreshQueued = false;
@@ -24013,11 +23897,11 @@ function instance$1($$self, $$props, $$invalidate) {
 		terrainJobKey = '';
 		refreshEpoch++;
 		generation++;
-		$$invalidate(11, viewportLoading = false);
+		$$invalidate(10, viewportLoading = false);
 		refreshQueued = false;
 		profileCache.clear();
 		pendingProfiles.clear();
-		$$invalidate(29, refreshError = '');
+		$$invalidate(28, refreshError = '');
 		if (clickedLatLon) void probeLocation(...clickedLatLon, pointSource ?? 'map-click', clickedPlaceName);
 		void refreshViewport();
 	}
@@ -24059,7 +23943,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		clearGeography();
 		$$invalidate(4, terrainLoading = false);
-		$$invalidate(15, terrainDetailStatus = '');
+		$$invalidate(13, terrainDetailStatus = '');
 		rasterEpoch++;
 
 		if (rasterTimer) {
@@ -24083,7 +23967,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	function clearGeography() {
 		geographyEpoch++;
-		$$invalidate(21, geographyError = '');
+		$$invalidate(19, geographyError = '');
 
 		if (geographyLayer) try {
 			map.removeLayer(geographyLayer);
@@ -24165,7 +24049,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				
 			}
 
-			$$invalidate(21, geographyError = frame.geographyError);
+			$$invalidate(19, geographyError = frame.geographyError);
 		}
 	}
 
@@ -24184,11 +24068,11 @@ function instance$1($$self, $$props, $$invalidate) {
 	function clearPointState(closeChart = true) {
 		placeAbort?.abort();
 		placeAbort = null;
-		$$invalidate(49, clickGeneration++, clickGeneration);
-		$$invalidate(24, probeLoading = false);
-		if (closeChart) $$invalidate(9, chartOpen = false);
-		$$invalidate(13, clickedPoint = null);
-		$$invalidate(47, clickedLatLon = null);
+		clickGeneration++;
+		$$invalidate(23, probeLoading = false);
+		if (closeChart) $$invalidate(22, chartOpen = false);
+		$$invalidate(24, clickedPoint = null);
+		clickedLatLon = null;
 		$$invalidate(25, clickedMapElevationM = null);
 		$$invalidate(26, clickedPlaceName = null);
 		pointSource = null;
@@ -24207,69 +24091,17 @@ function instance$1($$self, $$props, $$invalidate) {
 				? `Well ${side} snowline`
 				: `Slightly ${side} snowline`;
 
-		return `<strong>${label}</strong><small>${formatElevation(a, unitSystem)} ${side}</small>`;
+		return `<strong>${label}</strong><small>${formatSnowline(a, unitSystem)} ${side}</small>`;
 	}
 
 	function snowlineAt(point, index) {
-		const r = wetBulbZeroHeight(buildProfile(point.forecast, index));
-
-		return r.snowLevelM !== null && Number.isFinite(r.snowLevelM)
-		? r.snowLevelM
-		: null;
-	}
-
-	function tendencyText(point, index) {
-		const now = snowlineAt(point, index);
-		if (now === null) return '';
-		const target = point.times[index] + TENDENCY_HOURS * 3600_000;
-		if (target > point.times.at(-1) + 30 * 60_000) return '';
-		const fi = nearestIndex(point.times, target);
-		if (fi === index) return '';
-		const future = snowlineAt(point, fi);
-		if (future === null) return '';
-		const d = Math.round((future - now) / ((point.times[fi] - point.times[index]) / 3600_000) / 10) * 10;
-
-		return Math.abs(d) < 20
-		? '→ Steady'
-		: `${d > 0 ? '↑' : '↓'} ${formatElevation(Math.abs(d), unitSystem)}/h`;
+		return resolvedSnowlineM(buildProfile(point.forecast, index));
 	}
 
 	function phaseAt(point, index, terrainM) {
 		return isPrecipitating(precipMmAt(point.forecast, index))
 		? buildSnowForecast(point, terrainM).thermalPhases[index]
 		: null;
-	}
-
-	async function loadTerrainSlopes(lat, lon, my) {
-		$$invalidate(27, clickedTerrainSlopes = null);
-		if (Math.abs(lat) > 80) return;
-
-		const dy = 2000 / 111195,
-			dx = dy / Math.cos(lat * Math.PI / 180),
-			west = wrappedLongitude(lon) - dx,
-			east = wrappedLongitude(lon) + dx;
-
-		if (west < -180 || east > 180) return;
-
-		const bounds = {
-			south: lat - dy,
-			north: lat + dy,
-			west,
-			east
-		};
-
-		const current = () => my === clickGeneration && enabled && !destroyed;
-
-		try {
-			await terrainTiles.ensure(bounds, 12, current, () => {
-				
-			});
-
-			if (!current()) return;
-			$$invalidate(27, clickedTerrainSlopes = terrainSlopes(terrainTiles.sample(lat, west, 12), terrainTiles.sample(lat, east, 12), terrainTiles.sample(lat - dy, wrappedLongitude(lon), 12), terrainTiles.sample(lat + dy, wrappedLongitude(lon), 12)));
-		} catch {
-			if (current()) $$invalidate(27, clickedTerrainSlopes = null);
-		}
 	}
 
 	async function resolvePlaceName(lat, lon, signal) {
@@ -24391,7 +24223,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			place,
 			'Valid: ' + formatLocal(validTime),
 			conditionLabel(precip, phase),
-			'Snowline: ' + formatElevation(snowline, units),
+			'Estimated thermal snowline: ' + formatSnowline(snowline, units),
 			'Terrain: ' + formatElevation(terrain, units),
 			'Average precipitation: ' + formatPrecip(precip, units),
 			event
@@ -24400,7 +24232,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			event
 			? event.incomplete
 				? 'Snow amount uncertain'
-				: 'Estimated snowfall' + (event.activeNow ? ' remaining' : '') + ': ' + formatSnow(event.newSnowCm, units)
+				: 'Estimated snowfall' + (event.activeNow ? ' still to fall' : '') + ': ' + formatSnow(event.newSnowCm, units)
 			: '',
 			'ECMWF atmospheric profile · Windy terrain. Snow amounts are estimates.'
 		].filter(Boolean).join('\n');
@@ -24434,8 +24266,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		const amount = event.incomplete
 		? ' · amount uncertain'
-		: event.newSnowCm > 0.05
-			? ' · est. ' + formatSnow(event.newSnowCm, unitSystem) + (event.activeNow ? ' remaining' : '')
+		: event.newSnowCm > 0
+			? ' · est. ' + formatSnow(event.newSnowCm, unitSystem) + (event.activeNow ? ' still to fall' : '')
 			: '';
 
 		if (event.activeNow) return {
@@ -24451,7 +24283,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	function labelGrid(args) {
 		const terrain = metricTile('Terrain', formatElevation(args.terrain, unitSystem), 'metric-terrain');
-		const snowline = metricTile('Snowline', formatElevation(args.snowline, unitSystem), 'metric-snowline');
+		const snowline = metricTile('Est. snowline', formatSnowline(args.snowline, unitSystem), 'metric-snowline');
 
 		const relation = `<div class="snowline-compact-relation">${positionText(args.difference)}<span>${args.precip === null
 		? 'Precip unavailable'
@@ -24536,8 +24368,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			if (graph) {
 				if (clickedPoint) {
-					$$invalidate(10, forecastTab = 'graph');
-					$$invalidate(9, chartOpen = true);
+					$$invalidate(9, forecastTab = 'graph');
+					$$invalidate(22, chartOpen = true);
 				}
 
 				return;
@@ -24550,8 +24382,8 @@ function instance$1($$self, $$props, $$invalidate) {
 					
 				}
 
-				$$invalidate(10, forecastTab = 'graph');
-				$$invalidate(9, chartOpen = true);
+				$$invalidate(9, forecastTab = 'graph');
+				$$invalidate(22, chartOpen = true);
 				return;
 			}
 
@@ -24580,8 +24412,9 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		const [lat, lon] = clickedLatLon,
 			target = getStoreTimestamp(),
-			first = clickedPoint.times[0],
-			end = Math.min(clickedPoint.times.at(-1), first + MAX_FORECAST_HOURS * 3600_000);
+			first = clickedPoint.times[0];
+
+		const end = Math.min(clickedPoint.times.at(-1), first + MAX_FORECAST_HOURS * 3600_000);
 
 		if (target < first - 30 * 60_000 || target > end + 30 * 60_000) {
 			showClickLabel(lat, lon, 'Outside +144 h');
@@ -24595,98 +24428,79 @@ function instance$1($$self, $$props, $$invalidate) {
 			return;
 		}
 
-		const valid = clickedPoint.times[index],
-			profile = buildProfile(clickedPoint.forecast, index),
-			slr = wetBulbZeroHeight(profile),
-			snowline = slr.snowLevelM !== null && Number.isFinite(slr.snowLevelM)
-			? slr.snowLevelM
-			: null;
+		const profile = buildProfile(clickedPoint.forecast, index),
+			snowline = resolvedSnowlineM(profile);
 
-		if (snowline === null) {
-			const precip = precipMmAtTime(clickedPoint.forecast, clickedPoint.times, target),
-				phase = clickedMapElevationM !== null && isPrecipitating(precip)
-				? phaseAt(clickedPoint, index, clickedMapElevationM)
-				: null;
-
-			const reason = slr.status === 'below-lowest-level'
-			? 'WBZ is below the lowest resolved level or absent in a cold column'
-			: 'No atmospheric crossing resolved';
-
-			const detail = `<div class="snowline-valid">${shortValid(valid)}</div><div class="snowline-label-grid">${metricTile('Terrain', formatElevation(clickedMapElevationM, unitSystem), 'metric-terrain')}${metricTile('Avg precip', formatPrecip(precip, unitSystem), '')}</div><div class="snowline-event-line">${reason}. ${phase
-			? precipitationLabel(phase)
-			: precip === 0 ? 'Dry' : 'Precipitation type unavailable'}</div>`;
-
-			showClickLabel(
-				lat,
-				lon,
-				phase
-				? `${phase.icon} ${precipitationLabel(phase).toUpperCase()}`
-				: precip === 0 ? 'DRY' : 'WBZ unresolved',
-				detail,
-				'#fff',
-				'neutral',
-				phase?.key ?? null
-			);
-
-			return;
-		}
-
-		const rounded = Math.round(snowline / 10) * 10,
-			tendency = tendencyText(clickedPoint, index),
-			precip = precipMmAtTime(clickedPoint.forecast, clickedPoint.times, target),
+		const precip = precipMmAtTime(clickedPoint.forecast, clickedPoint.times, target),
 			hasPrecip = isPrecipitating(precip);
 
-		if (clickedMapElevationM !== null && Number.isFinite(clickedMapElevationM)) {
-			const terrain = Math.round(clickedMapElevationM / 10) * 10,
-				difference = clickedMapElevationM - snowline,
-				status = statusForDifference(difference),
-				phase = hasPrecip
-				? terrainPrecipitationType(profile, clickedMapElevationM)
-				: null,
-				summary = compactEventSummary(clickedPoint, clickedMapElevationM, target);
+		const phase = clickedMapElevationM !== null && hasPrecip
+		? phaseAt(clickedPoint, index, clickedMapElevationM)
+		: null;
 
-			clickedNextEventTime = summary.jumpTime;
+		const summary = clickedMapElevationM !== null
+		? compactEventSummary(clickedPoint, clickedMapElevationM, target)
+		: null;
 
-			const grid = labelGrid({
-				valid: shortValid(valid),
-				terrain,
-				snowline: rounded,
-				difference,
+		clickedNextEventTime = summary?.jumpTime ?? null;
+		let detail;
+
+		if (snowline !== null && clickedMapElevationM !== null) {
+			detail = labelGrid({
+				valid: shortValid(clickedPoint.times[index]),
+				terrain: clickedMapElevationM,
+				snowline,
+				difference: clickedMapElevationM - snowline,
 				precip,
 				hasPrecip,
 				eventLine: summary.text,
 				canJump: summary.jumpTime !== null
-			}) + (slr.extrapolated
-			? '<div class="forecast-quality">Snowline estimated below the resolved profile</div>'
-			: '') + (phase?.confidence === 'low'
-			? '<div class="forecast-quality">Limited atmospheric detail; type may differ</div>'
-			: '');
+			});
+		} else {
+			const reason = wetBulbZeroHeight(profile).status === 'below-lowest-level'
+			? 'Thermal snowline below resolved profile; no height assigned'
+			: 'Thermal snowline unresolved';
 
-			if (phase) {
-				showClickLabel(lat, lon, `${phase.icon} ${precipitationLabel(phase).toUpperCase()}`, grid, colorForLevel(snowline), status, phase?.key ?? null);
-				return;
-			}
+			const event = summary
+			? summary.jumpTime !== null
+				? `<button class="snowline-event-line snowline-event-jump" type="button" aria-label="Jump to next wintry period">${summary.text}<span>›</span></button>`
+				: `<div class="snowline-event-line">${summary.text}</div>`
+			: '';
 
-			showClickLabel(lat, lon, conditionLabel(precip, phase).toUpperCase(), grid, colorForLevel(snowline), status, phase?.key ?? null);
-			return;
+			detail = `<div class="snowline-valid">${shortValid(clickedPoint.times[index])}</div><div class="snowline-label-grid">${metricTile('Terrain', formatElevation(clickedMapElevationM, unitSystem), 'metric-terrain')}${metricTile('Avg precip', formatPrecip(precip, unitSystem), '')}</div><div class="forecast-quality">${reason}</div>${event}`;
 		}
 
-		showClickLabel(lat, lon, formatElevation(rounded, unitSystem), `<div class="snowline-label-grid"><span><small>Valid</small><strong>${shortValid(valid)}</strong></span><span><small>Trend</small><strong>${tendency || '—'}</strong></span></div>`, colorForLevel(snowline), 'neutral');
+		if (phase?.key === 'uncertain') detail += '<div class="forecast-quality">Insufficient atmospheric detail for a specific type</div>';
+
+		const main = phase
+		? `${phase.icon} ${precipitationLabel(phase).toUpperCase()}`
+		: conditionLabel(precip, phase).toUpperCase();
+
+		showClickLabel(
+			lat,
+			lon,
+			main,
+			detail,
+			snowline !== null ? colorForLevel(snowline) : '#fff',
+			snowline !== null && clickedMapElevationM !== null
+			? statusForDifference(clickedMapElevationM - snowline)
+			: 'neutral',
+			phase?.key ?? null
+		);
 	}
 
 	async function probeLocation(lat, lon, source, placeName = null) {
 		if (!enabled || destroyed || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
 		placeAbort?.abort();
 		placeAbort = null;
-		const keep = chartOpen, my = $$invalidate(49, ++clickGeneration);
-		$$invalidate(13, clickedPoint = null);
+		const keep = chartOpen, my = ++clickGeneration;
+		$$invalidate(24, clickedPoint = null);
 		$$invalidate(25, clickedMapElevationM = null);
 		clickedNextEventTime = null;
-		$$invalidate(27, clickedTerrainSlopes = null);
-		$$invalidate(47, clickedLatLon = [lat, lon]);
+		clickedLatLon = [lat, lon];
 		$$invalidate(26, clickedPlaceName = placeName);
 		pointSource = source;
-		$$invalidate(24, probeLoading = true);
+		$$invalidate(23, probeLoading = true);
 		showClickLabel(lat, lon, 'Loading forecast…', '<div class="snowline-loading">Checking snow, timing and amounts</div>');
 		if (!placeName) void updatePointPlaceName(lat, lon, my);
 
@@ -24706,7 +24520,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			const aligned = alignSelectedPrecipFields(fields, point.times, point.runTime);
 
-			$$invalidate(13, clickedPoint = Object.keys(aligned).length
+			$$invalidate(24, clickedPoint = Object.keys(aligned).length
 			? {
 					...point,
 					forecast: { ...point.forecast, ...aligned }
@@ -24714,12 +24528,12 @@ function instance$1($$self, $$props, $$invalidate) {
 			: point);
 
 			$$invalidate(25, clickedMapElevationM = elev);
-			$$invalidate(13, clickedPoint.terrainM = elev, clickedPoint);
+			$$invalidate(24, clickedPoint.terrainM = elev, clickedPoint);
 			lastChecked = Date.now();
-			if (keep) $$invalidate(9, chartOpen = true);
+			if (keep) $$invalidate(22, chartOpen = true);
 			updatePersistentClickLabel();
 		} finally {
-			if (my === clickGeneration) $$invalidate(24, probeLoading = false);
+			if (my === clickGeneration) $$invalidate(23, probeLoading = false);
 		}
 	}
 
@@ -24738,7 +24552,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 		const name = [primary, secondary].map(v => String(v ?? '').trim()).filter(Boolean).join(', ');
 		pointSource = 'search';
-		const selection = $$invalidate(49, ++clickGeneration);
+		const selection = ++clickGeneration;
 		map.panTo([lat, lon], { animate: true });
 
 		setTimeout(
@@ -24813,7 +24627,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				interactive: false,
 				icon: L.divIcon({
 					className: 'snowline-label' + (c.isMajor ? ' snowline-label-major' : ' '),
-					html: '<span style="--snowline-color:' + c.color + '">' + formatElevation(c.level, unitSystem) + '</span>',
+					html: '<span style="--snowline-color:' + c.color + '">' + formatSnowline(c.level, unitSystem) + '</span>',
 					iconSize: [96, 22],
 					iconAnchor: [48, 11]
 				})
@@ -24871,16 +24685,16 @@ function instance$1($$self, $$props, $$invalidate) {
 		prepareGeneration++;
 		videoAbort?.abort();
 		videoAbort = null;
-		$$invalidate(18, exportingMap = false);
-		$$invalidate(16, preparingMap = false);
-		$$invalidate(17, prepareMessage = `Stopped · ${preparedKeys.size} times prepared`);
+		$$invalidate(16, exportingMap = false);
+		$$invalidate(14, preparingMap = false);
+		$$invalidate(15, prepareMessage = `Stopped · ${preparedKeys.size} times prepared`);
 	}
 
 	function resetMapPreparation() {
 		cancelMapPreparation();
 		preparedKeys.clear();
 		preparedReadKey = '';
-		$$invalidate(17, prepareMessage = '');
+		$$invalidate(15, prepareMessage = '');
 	}
 
 	function restorePreparedFrame(record) {
@@ -24944,9 +24758,9 @@ function instance$1($$self, $$props, $$invalidate) {
 		const options = JSON.stringify([showContours, showIcons, unitSystem]);
 		const current = () => my === prepareGeneration && enabled && !destroyed && scene === phaseFrameKey(reference) && options === JSON.stringify([showContours, showIcons, unitSystem]);
 		const started = Date.now();
-		$$invalidate(16, preparingMap = true);
+		$$invalidate(14, preparingMap = true);
 		preparedKeys.clear();
-		$$invalidate(17, prepareMessage = `0 / ${times.length} times…`);
+		$$invalidate(15, prepareMessage = `0 / ${times.length} times…`);
 
 		if (prefetchTimer) {
 			clearTimeout(prefetchTimer);
@@ -24963,7 +24777,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			if (videoDownloadUrl) {
 				URL.revokeObjectURL(videoDownloadUrl);
-				$$invalidate(19, videoDownloadUrl = '');
+				$$invalidate(17, videoDownloadUrl = '');
 			}
 
 			await preparedMapCache.clear();
@@ -24988,16 +24802,16 @@ function instance$1($$self, $$props, $$invalidate) {
 				preparedKeys.add(key);
 				i++;
 				const minutes = Math.ceil((Date.now() - started) / 60000 / i * (times.length - i));
-				$$invalidate(17, prepareMessage = `${i} / ${times.length} times${i > 1 && minutes > 0 ? ` · ~${minutes} min left` : '…'}`);
+				$$invalidate(15, prepareMessage = `${i} / ${times.length} times${i > 1 && minutes > 0 ? ` · ~${minutes} min left` : '…'}`);
 				await new Promise(resolve => setTimeout(resolve, 0));
 			}
 
 			if (current()) {
-				if (exportAvailable) await downloadMapForecastVideo(videoTimes, current); else $$invalidate(17, prepareMessage = `Map ready · ${preparedKeys.size} times · MP4 unavailable in this browser`);
-			} else if (my === prepareGeneration) $$invalidate(17, prepareMessage = 'Preparation stopped · forecast changed; refresh to try again');
+				if (exportAvailable) await downloadMapForecastVideo(videoTimes, current); else $$invalidate(15, prepareMessage = `Map ready · ${preparedKeys.size} times · MP4 unavailable in this browser`);
+			} else if (my === prepareGeneration) $$invalidate(15, prepareMessage = 'Preparation stopped · forecast changed; refresh to try again');
 		} catch(error) {
 			if (current()) {
-				$$invalidate(17, prepareMessage = error instanceof Error
+				$$invalidate(15, prepareMessage = error instanceof Error
 				? `${error.message} · ${preparedKeys.size} times prepared`
 				: 'Preparation unavailable · normal timeline still works');
 
@@ -25005,8 +24819,8 @@ function instance$1($$self, $$props, $$invalidate) {
 			}
 		} finally {
 			if (my === prepareGeneration) {
-				$$invalidate(16, preparingMap = false);
-				$$invalidate(18, exportingMap = false);
+				$$invalidate(14, preparingMap = false);
+				$$invalidate(16, exportingMap = false);
 				scheduleNextFrame();
 			}
 		}
@@ -25015,7 +24829,7 @@ function instance$1($$self, $$props, $$invalidate) {
 	async function downloadMapForecastVideo(times, current) {
 		const abort = new AbortController();
 		videoAbort = abort;
-		$$invalidate(18, exportingMap = true);
+		$$invalidate(16, exportingMap = true);
 
 		const requireCurrent = () => {
 			if (!current()) abort.abort();
@@ -25047,7 +24861,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		};
 
 		try {
-			$$invalidate(17, prepareMessage = 'MP4 · loading map background…');
+			$$invalidate(15, prepareMessage = 'MP4 · loading map background…');
 			requireCurrent();
 
 			const z = rasterZoom(),
@@ -25134,24 +24948,24 @@ function instance$1($$self, $$props, $$invalidate) {
 				},
 				abort.signal,
 				(done, total) => {
-					if (current()) $$invalidate(17, prepareMessage = `Encoding MP4 · ${done} / ${total} times`);
+					if (current()) $$invalidate(15, prepareMessage = `Encoding MP4 · ${done} / ${total} times`);
 				}
 			);
 
 			requireCurrent();
-			$$invalidate(19, videoDownloadUrl = URL.createObjectURL(blob));
-			$$invalidate(20, videoDownloadName = `wintry-forecast-${new Date(times[0]).toISOString().replace(/[:.]/g, '-')}.mp4`);
+			$$invalidate(17, videoDownloadUrl = URL.createObjectURL(blob));
+			$$invalidate(18, videoDownloadName = `wintry-forecast-${new Date(times[0]).toISOString().replace(/[:.]/g, '-')}.mp4`);
 			const link = document.createElement('a');
 			link.href = videoDownloadUrl;
 			link.download = videoDownloadName;
 			document.body.appendChild(link);
 			link.click();
 			link.remove();
-			$$invalidate(17, prepareMessage = `MP4 ready · ${times.length} times · download available below`);
+			$$invalidate(15, prepareMessage = `MP4 ready · ${times.length} times · download available below`);
 		} finally {
 			if (videoAbort === abort) {
 				videoAbort = null;
-				$$invalidate(18, exportingMap = false);
+				$$invalidate(16, exportingMap = false);
 			}
 
 			canvas.width = canvas.height = base.width = base.height = 0;
@@ -25231,7 +25045,8 @@ function instance$1($$self, $$props, $$invalidate) {
 			['Ice pellets', 'ice-pellets'],
 			['Snow', 'snow'],
 			['Wet snow', 'wet-snow'],
-			['Rain/snow mix', 'mix']
+			['Rain/snow mix', 'mix'],
+			['Type unresolved', 'uncertain']
 		];
 
 		const columns = width < 600 ? 2 : 3,
@@ -25276,6 +25091,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		});
 
 		return JSON.stringify([
+			config.version,
 			weatherRevision,
 			terrainRevision,
 			activeRunTime,
@@ -25326,9 +25142,9 @@ function instance$1($$self, $$props, $$invalidate) {
 			
 		}
 
-		$$invalidate(21, geographyError = frame.geographyError);
+		$$invalidate(19, geographyError = frame.geographyError);
 
-		$$invalidate(15, terrainDetailStatus = frame.fallback && !terrainLoading
+		$$invalidate(13, terrainDetailStatus = frame.fallback && !terrainLoading
 		? 'Terrain detail unavailable here · coarse estimate'
 		: '');
 
@@ -25386,12 +25202,12 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (terrainKey !== terrainJobKey) {
 			terrainJobKey = terrainKey;
 			const epoch = ++terrainGeneration;
-			$$invalidate(43, terrainLoadProgress = 0);
+			$$invalidate(42, terrainLoadProgress = 0);
 			$$invalidate(4, terrainLoading = true);
-			$$invalidate(15, terrainDetailStatus = '');
+			$$invalidate(13, terrainDetailStatus = '');
 
 			void terrainTiles.ensure(b, z, () => epoch === terrainGeneration && enabled && !destroyed, (done, total) => {
-				$$invalidate(43, terrainLoadProgress = total ? done / total : 1);
+				$$invalidate(42, terrainLoadProgress = total ? done / total : 1);
 				terrainRevision++;
 				frameCache.clear();
 				queueRasterPaint();
@@ -25405,7 +25221,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		const key = phaseFrameKey(target);
 
 		if (key !== pendingPhaseKey) {
-			$$invalidate(44, rasterLoadProgress = 0);
+			$$invalidate(43, rasterLoadProgress = 0);
 			rasterEpoch++;
 			pendingPhaseKey = key;
 
@@ -25490,7 +25306,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			geographyMasks = [];
 
 		const preparationEpoch = prepareGeneration;
-		if (!background) $$invalidate(44, rasterLoadProgress = 0);
+		if (!background) $$invalidate(43, rasterLoadProgress = 0);
 		const obsolete = () => epoch !== rasterEpoch || destroyed || !enabled || preparation && preparationEpoch !== prepareGeneration || background && !preparation && mainKey !== phaseFrameKey(getStoreTimestamp());
 
 		const record = {
@@ -25554,7 +25370,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				wetBulbFromDewpoint
 			);
 
-			const phase = terrainPrecipitationType(profile, terrain);
+			const phase = supportedPrecipitationType(profile, terrain);
 			if (!phase) return null;
 
 			return {
@@ -25593,7 +25409,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 					for (let y = 0; y < RASTER_SAMPLES; y++) {
 						if (y > 0 && y % 12 === 0) {
-							if (!background) $$invalidate(44, rasterLoadProgress = .9 * (paintedTiles + y / RASTER_SAMPLES) / tiles.length);
+							if (!background) $$invalidate(43, rasterLoadProgress = .9 * (paintedTiles + y / RASTER_SAMPLES) / tiles.length);
 							await new Promise(resolve => setTimeout(resolve, 0));
 
 							if (obsolete()) {
@@ -25644,7 +25460,7 @@ function instance$1($$self, $$props, $$invalidate) {
 					}
 
 					paintedTiles++;
-					if (!background) $$invalidate(44, rasterLoadProgress = .9 * paintedTiles / tiles.length);
+					if (!background) $$invalidate(43, rasterLoadProgress = .9 * paintedTiles / tiles.length);
 					await new Promise(resolve => setTimeout(resolve, 0));
 				}
 			}
@@ -25683,7 +25499,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				return;
 			}
 
-			if (!background) $$invalidate(44, rasterLoadProgress = 1);
+			if (!background) $$invalidate(43, rasterLoadProgress = 1);
 			record.fallback = fallback;
 			record.bytes = geographyMasks.length * TILE_SIZE * TILE_SIZE * 8 + iconLayer.getLayers().length * 4096;
 
@@ -25729,7 +25545,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			if (epoch === rasterEpoch && !background) {
 				$$invalidate(6, rasterLoading = false);
-				$$invalidate(15, terrainDetailStatus = 'Shading unavailable · retry refresh');
+				$$invalidate(13, terrainDetailStatus = 'Shading unavailable · retry refresh');
 			}
 		}
 	}
@@ -25765,7 +25581,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			clearStorms();
 			stormKey = key;
 			stormLayer = saved.layer.addTo(map);
-			$$invalidate(14, stormStatus = saved.status);
+			$$invalidate(12, stormStatus = saved.status);
 			stormFrames.delete(key);
 			stormFrames.set(key, saved);
 			return;
@@ -25774,9 +25590,9 @@ function instance$1($$self, $$props, $$invalidate) {
 		clearStorms();
 		stormKey = key;
 		const epoch = stormEpoch, abort = stormAbort = new AbortController();
-		$$invalidate(45, stormLoadProgress = 0);
+		$$invalidate(44, stormLoadProgress = 0);
 		$$invalidate(5, stormLoading = true);
-		$$invalidate(14, stormStatus = '⚡ Forecast lightning');
+		$$invalidate(12, stormStatus = '⚡ Forecast lightning');
 		const tiles = new Map();
 
 		const deadline = setTimeout(
@@ -25785,7 +25601,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 				if (epoch === stormEpoch) {
 					stormKey = '';
-					$$invalidate(14, stormStatus = '⚡ ECMWF lightning unavailable');
+					$$invalidate(12, stormStatus = '⚡ ECMWF lightning unavailable');
 					$$invalidate(5, stormLoading = false);
 				}
 			},
@@ -25853,7 +25669,7 @@ function instance$1($$self, $$props, $$invalidate) {
 						})
 					}).addTo(next);
 				} finally {
-					if (epoch === stormEpoch && !abort.signal.aborted) $$invalidate(45, stormLoadProgress = ++processed / points.length);
+					if (epoch === stormEpoch && !abort.signal.aborted) $$invalidate(44, stormLoadProgress = ++processed / points.length);
 				}
 			});
 
@@ -25861,7 +25677,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			next.addTo(map);
 			stormLayer = next;
 
-			$$invalidate(14, stormStatus = known
+			$$invalidate(12, stormStatus = known
 			? `⚡ ECMWF forecast lightning · ${count ? 'activity shown' : 'none at sampled points'}`
 			: '⚡ ECMWF lightning unavailable');
 
@@ -25879,7 +25695,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		} catch(error) {
 			if (epoch !== stormEpoch || abort.signal.aborted) return;
 			stormKey = '';
-			$$invalidate(14, stormStatus = '⚡ ECMWF lightning unavailable');
+			$$invalidate(12, stormStatus = '⚡ ECMWF lightning unavailable');
 			console.warn('Wintry ECMWF lightning unavailable', error);
 		} finally {
 			if (epoch === stormEpoch) $$invalidate(5, stormLoading = false);
@@ -25900,8 +25716,8 @@ function instance$1($$self, $$props, $$invalidate) {
 		void renderStorms();
 
 		if (!enabled || !cache.length) {
-			$$invalidate(30, mapDataStatus = '');
-			$$invalidate(31, mapDataMissing = false);
+			$$invalidate(29, mapDataStatus = '');
+			$$invalidate(30, mapDataMissing = false);
 			clearContours();
 			clearShading();
 			return;
@@ -25914,8 +25730,8 @@ function instance$1($$self, $$props, $$invalidate) {
 			fresh = samples.filter(p => !!p && profileIsFresh(p.fetchedAt, p.runTime, activeRunTime) && forecastIntervalIndex(p.times, target) >= 0);
 
 		const known = fresh.filter(p => mapPrecipAt(p, target) !== null).length;
-		$$invalidate(30, mapDataStatus = `Profiles ${fresh.length}/${samples.length} · precip ${known}/${samples.length}`);
-		$$invalidate(31, mapDataMissing = fresh.length < samples.length || (showShading || showIcons) && precipDetailAvailable && known < samples.length);
+		$$invalidate(29, mapDataStatus = `Profiles ${fresh.length}/${samples.length} · precip ${known}/${samples.length}`);
+		$$invalidate(30, mapDataMissing = fresh.length < samples.length || (showShading || showIcons) && precipDetailAvailable && known < samples.length);
 
 		if (!firstPoint) {
 			clearContours();
@@ -26043,13 +25859,13 @@ function instance$1($$self, $$props, $$invalidate) {
 			if (typeof p.showShading === 'boolean') $$invalidate(1, showShading = p.showShading);
 			if (typeof p.showIcons === 'boolean') $$invalidate(2, showIcons = p.showIcons);
 			if (typeof p.panelHidden === 'boolean') $$invalidate(8, panelHidden = p.panelHidden);
-			if (p.forecastTab === 'graph' || p.forecastTab === 'sounding') $$invalidate(10, forecastTab = p.forecastTab);
+			if (p.forecastTab === 'graph' || p.forecastTab === 'sounding') $$invalidate(9, forecastTab = p.forecastTab);
 		} catch {
 			
 		}
 
-		$$invalidate(12, unitSystem = loadUnitSystem());
-		$$invalidate(46, prefsReady = true);
+		$$invalidate(11, unitSystem = loadUnitSystem());
+		$$invalidate(45, prefsReady = true);
 	}
 
 	function persistPreferences() {
@@ -26086,7 +25902,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (key === lastNavigationKey) return;
 		const wasPrepared = preparingMap || preparedKeys.size > 0;
 		resetMapPreparation();
-		if (wasPrepared) $$invalidate(17, prepareMessage = 'Map changed · prepare this area');
+		if (wasPrepared) $$invalidate(15, prepareMessage = 'Map changed · prepare this area');
 		lastNavigationKey = key;
 		$$invalidate(3, precipDetailAvailable = Number(map.getZoom()) >= PRECIP_DETAIL_MIN_ZOOM);
 		if (!precipDetailAvailable) clearShading();
@@ -26123,7 +25939,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		generation++;
 		refreshEpoch++;
 		pendingProfiles.clear();
-		$$invalidate(11, viewportLoading = false);
+		$$invalidate(10, viewportLoading = false);
 		refreshQueued = false;
 
 		if (moveTimer) {
@@ -26174,7 +25990,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		document.removeEventListener('visibilitychange', checkAutomaticRefresh);
 		window.removeEventListener('online', checkAutomaticRefresh);
 		generation++;
-		$$invalidate(49, clickGeneration++, clickGeneration);
+		clickGeneration++;
 		refreshQueued = false;
 		if (moveTimer) clearTimeout(moveTimer);
 		map.off('moveend', handleMapNavigation);
@@ -26198,7 +26014,7 @@ function instance$1($$self, $$props, $$invalidate) {
 	});
 
 	const click_handler = () => $$invalidate(8, panelHidden = false);
-	const click_handler_1 = () => $$invalidate(23, settingsOpen = true);
+	const click_handler_1 = () => $$invalidate(21, settingsOpen = true);
 	const click_handler_2 = () => $$invalidate(8, panelHidden = true);
 
 	function input0_change_handler() {
@@ -26222,42 +26038,42 @@ function instance$1($$self, $$props, $$invalidate) {
 	}
 
 	const click_handler_3 = () => {
-		$$invalidate(10, forecastTab = 'graph');
-		$$invalidate(9, chartOpen = true);
+		$$invalidate(9, forecastTab = 'graph');
+		$$invalidate(22, chartOpen = true);
 	};
 
 	const click_handler_4 = () => {
-		$$invalidate(10, forecastTab = 'sounding');
-		$$invalidate(9, chartOpen = true);
+		$$invalidate(9, forecastTab = 'sounding');
+		$$invalidate(22, chartOpen = true);
 	};
 
 	function v21panel_unitSystem_binding(value) {
 		unitSystem = value;
-		$$invalidate(12, unitSystem);
+		$$invalidate(11, unitSystem);
 	}
 
-	const click_handler_5 = () => $$invalidate(22, infoOpen = true);
-	const click_handler_6 = () => $$invalidate(23, settingsOpen = false);
+	const click_handler_5 = () => $$invalidate(20, infoOpen = true);
+	const click_handler_6 = () => $$invalidate(21, settingsOpen = false);
 
 	function v21panel_unitSystem_binding_1(value) {
 		unitSystem = value;
-		$$invalidate(12, unitSystem);
+		$$invalidate(11, unitSystem);
 	}
 
-	const click_handler_7 = () => $$invalidate(23, settingsOpen = false);
+	const click_handler_7 = () => $$invalidate(21, settingsOpen = false);
 
 	function snowlinechart_tab_binding(value) {
 		forecastTab = value;
-		$$invalidate(10, forecastTab);
+		$$invalidate(9, forecastTab);
 	}
 
-	const close_handler = () => $$invalidate(9, chartOpen = false);
-	const click_handler_8 = () => $$invalidate(22, infoOpen = false);
-	const click_handler_9 = () => $$invalidate(22, infoOpen = false);
+	const close_handler = () => $$invalidate(22, chartOpen = false);
+	const click_handler_8 = () => $$invalidate(20, infoOpen = false);
+	const click_handler_9 = () => $$invalidate(20, infoOpen = false);
 
 	$$self.$$.update = () => {
-		if ($$self.$$.dirty[0] & /*viewportLoading, precipDetailAvailable, showShading, showIcons, terrainLoading, rasterLoading, stormLoading*/ 2174 | $$self.$$.dirty[1] & /*weatherLoadProgress, terrainLoadProgress, rasterLoadProgress, stormLoadProgress*/ 30720) {
-			$$invalidate(32, layerLoadPercent = Math.max(0, Math.min(99, Math.floor(100 * (.35 * (viewportLoading ? weatherLoadProgress : 1) + (precipDetailAvailable && (showShading || showIcons)
+		if ($$self.$$.dirty[0] & /*viewportLoading, precipDetailAvailable, showShading, showIcons, terrainLoading, rasterLoading, stormLoading*/ 1150 | $$self.$$.dirty[1] & /*weatherLoadProgress, terrainLoadProgress, rasterLoadProgress, stormLoadProgress*/ 15360) {
+			$$invalidate(31, layerLoadPercent = Math.max(0, Math.min(99, Math.floor(100 * (.35 * (viewportLoading ? weatherLoadProgress : 1) + (precipDetailAvailable && (showShading || showIcons)
 			? .15 * (terrainLoading ? terrainLoadProgress : 1) + .4 * (rasterLoading ? rasterLoadProgress : 1)
 			: 0) + (precipDetailAvailable && showIcons
 			? .1 * (stormLoading ? stormLoadProgress : 1)
@@ -26266,20 +26082,13 @@ function instance$1($$self, $$props, $$invalidate) {
 			: 0) + (precipDetailAvailable && showIcons ? .1 : 0))))));
 		}
 
-		if ($$self.$$.dirty[0] & /*chartOpen, clickedPoint*/ 8704 | $$self.$$.dirty[1] & /*clickedLatLon, exposureGeneration, clickGeneration*/ 458752) {
-			if (chartOpen && clickedPoint && clickedLatLon && exposureGeneration !== clickGeneration) {
-				$$invalidate(48, exposureGeneration = clickGeneration);
-				void loadTerrainSlopes(clickedLatLon[0], clickedLatLon[1], clickGeneration);
-			}
-		}
-
-		if ($$self.$$.dirty[0] & /*enabled, panelHidden, forecastTab, showContours, showShading, showIcons*/ 1415 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
+		if ($$self.$$.dirty[0] & /*enabled, panelHidden, forecastTab, showContours, showShading, showIcons*/ 903 | $$self.$$.dirty[1] & /*prefsReady*/ 16384) {
 			if (prefsReady) {
 				persistPreferences();
 			}
 		}
 
-		if ($$self.$$.dirty[0] & /*unitSystem*/ 4096 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
+		if ($$self.$$.dirty[0] & /*unitSystem*/ 2048 | $$self.$$.dirty[1] & /*prefsReady*/ 16384) {
 			if (prefsReady) {
 				refreshUnitDependentUi();
 			}
@@ -26296,11 +26105,9 @@ function instance$1($$self, $$props, $$invalidate) {
 		rasterLoading,
 		enabled,
 		panelHidden,
-		chartOpen,
 		forecastTab,
 		viewportLoading,
 		unitSystem,
-		clickedPoint,
 		stormStatus,
 		terrainDetailStatus,
 		preparingMap,
@@ -26311,10 +26118,11 @@ function instance$1($$self, $$props, $$invalidate) {
 		geographyError,
 		infoOpen,
 		settingsOpen,
+		chartOpen,
 		probeLoading,
+		clickedPoint,
 		clickedMapElevationM,
 		clickedPlaceName,
-		clickedTerrainSlopes,
 		activeRunTime,
 		refreshError,
 		mapDataStatus,
@@ -26334,9 +26142,6 @@ function instance$1($$self, $$props, $$invalidate) {
 		rasterLoadProgress,
 		stormLoadProgress,
 		prefsReady,
-		clickedLatLon,
-		exposureGeneration,
-		clickGeneration,
 		click_handler,
 		click_handler_1,
 		click_handler_2,
@@ -26361,15 +26166,15 @@ function instance$1($$self, $$props, $$invalidate) {
 class Plugin extends SvelteComponent {
 	constructor(options) {
 		super();
-		init(this, options, instance$1, create_fragment$1, safe_not_equal, { isEnabled: 40, selectMapPoint: 41 }, add_css, [-1, -1, -1, -1, -1, -1, -1]);
+		init(this, options, instance$1, create_fragment$1, safe_not_equal, { isEnabled: 39, selectMapPoint: 40 }, add_css, [-1, -1, -1, -1, -1, -1]);
 	}
 
 	get isEnabled() {
-		return this.$$.ctx[40];
+		return this.$$.ctx[39];
 	}
 
 	get selectMapPoint() {
-		return this.$$.ctx[41];
+		return this.$$.ctx[40];
 	}
 }
 

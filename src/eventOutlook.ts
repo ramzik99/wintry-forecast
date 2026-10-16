@@ -73,7 +73,7 @@ export function nextWintryEvent(
   const event = [qualifying[0]];
   for (let i = 1; i < qualifying.length; i++) {
     const gapH = (qualifying[i].time - event[event.length - 1].time) / 3600_000;
-    if (gapH > MAX_EVENT_GAP_HOURS) break;
+    if (gapH > MAX_EVENT_GAP_HOURS || qualifying[i].index !== event[event.length - 1].index + 1) break;
     event.push(qualifying[i]);
   }
 
@@ -105,7 +105,8 @@ export function nextWintryEvent(
   // Do not present an event cut off by missing data as a complete storm total.
   const following = last.index + 1;
   const boundaryKnown = endTime >= horizonEnd || (following < times.length && times[following] === endTime &&
-    series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null) &&
+    series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) ||
+      (series.thermalPhases[following] !== null && series.thermalPhases[following]?.key !== 'uncertain')) &&
     supportedIntervalEnd(times,following,series.sourcePeriods) > endTime);
 
   return {

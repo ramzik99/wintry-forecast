@@ -1,6 +1,6 @@
 import { buildProfile } from './snowLevel';
 import { precipMmAt, isPrecipitating } from './precip';
-import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType } from './precipType';
+import { precipitationLabel, supportedPrecipitationType, type TerrainPrecipType } from './precipType';
 import { forecastIntervalHours } from './forecastTime';
 import { supportedIntervalEnd } from './forecastIntervals';
 
@@ -29,8 +29,12 @@ export function noEventMessage(point: ForecastPoint, terrainM: number | null, fr
     const start = point.times[i], intervalEnd = Math.min(end, supportedIntervalEnd(point.times, i, point.forecast.__precipPeriodsH));
     if (intervalEnd <= fromTime) continue;
     const precip = precipMmAt(point.forecast, i);
+    const phase = isPrecipitating(precip) ? supportedPrecipitationType(buildProfile(point.forecast, i), terrainM) : null;
+    if (start <= coveredUntil && isPrecipitating(precip) && phase?.key === 'uncertain') {
+      return 'Wintry outlook uncertain · precipitation type unresolved';
+    }
     if (start > coveredUntil || intervalEnd <= start || precip === null ||
-      (isPrecipitating(precip) && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM))) {
+      (isPrecipitating(precip) && !phase)) {
       return partialOutlook();
     }
     coveredUntil = intervalEnd;

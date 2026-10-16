@@ -6,7 +6,8 @@ export type TerrainPrecipTypeKey =
   | 'mix'
   | 'rain'
   | 'ice-pellets'
-  | 'freezing-rain';
+  | 'freezing-rain'
+  | 'uncertain';
 
 export type TerrainPrecipConfidence = 'high' | 'medium' | 'low';
 
@@ -21,9 +22,23 @@ export interface TerrainPrecipType {
   refreezingDegreeMetres: number;
 }
 
-/** Qualify a model estimate without discarding its best-supported phase. */
+/** Internal detail flags are not calibrated probabilities of forecast accuracy. */
 export function precipitationLabel(phase: Pick<TerrainPrecipType, 'label' | 'confidence'>, confidence = phase.confidence): string {
-  return confidence === 'low' ? `${phase.label} possible` : phase.label;
+  if (phase.label === 'Precipitation · type unresolved') return phase.label;
+  return confidence === 'low' || confidence === 'medium' ? `${phase.label} possible` : phase.label;
+}
+
+/** Public guidance withholds a specific phase when the profile-detail flag is low.
+ * This abstention rule is a product guardrail, not evidence of calibrated skill.
+ * Keep the raw classifier available for research and method regression checks.
+ */
+export function supportedPrecipitationType(profile: ProfilePoint[], terrainM: number): TerrainPrecipType | null {
+  if (!Number.isFinite(terrainM)) return null;
+  const phase = terrainPrecipitationType(profile, terrainM);
+  if (phase && phase.confidence !== 'low') return phase;
+  return { surfaceWetBulbC: NaN, meltingDegreeMetres: NaN, refreezingDegreeMetres: NaN,
+    confidence: 'low', ...phase, key: 'uncertain', label: 'Precipitation · type unresolved', icon: '?',
+    detail: 'Insufficient vertical detail or site below the resolved profile; no specific type assigned' };
 }
 
 const WARM_NODE_C = 0.2;
@@ -59,7 +74,7 @@ function terrainProfile(profile: ProfilePoint[], terrainM: number): { points: Pr
   let extrapolated = false;
   let start = 0;
 
-  if (terrainM <= p[0].heightM) {
+  if (terrainM < p[0].heightM) {
     surface = { ...p[0], heightM: terrainM };
     extrapolated = true;
   } else {
@@ -110,6 +125,7 @@ function classifyConfidence(points: ProfilePoint[], extrapolated: boolean, warmD
 
   const near = (value: number, threshold: number, margin: number) => Math.abs(value - threshold) <= margin;
   if (
+    [-0.7, 0, 0.3, 0.6, 1.2].some(threshold => near(points[0].wetBulbC, threshold, 0.2)) ||
     near(warmDM, MIN_MELTING_DM, 90) ||
     near(warmDM, PARTIAL_MELTING_DM, 180) ||
     near(warmDM, FULL_MELTING_DM, 260) ||

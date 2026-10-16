@@ -2,7 +2,7 @@
 /** A cumulative estimate is supported only up to the first unknown interval. */
 export function forecastCoverage(precip: (number|null)[], phases: unknown[], times: number[]) {
   const known = precip.map((value,i)=>value!==null&&Number.isFinite(value)&&value>=0&&Number.isFinite(times[i])&&
-    (value===0||phases[i]!=null));
+    (value===0||(phases[i]!=null&&(phases[i] as {key?:string}).key!=='uncertain')));
   let prefix=0;
   while(prefix<known.length&&known[prefix]&&(prefix===0||times[prefix]>times[prefix-1]&&times[prefix]-times[prefix-1]<=3*3600_000))prefix++;
   const complete=known.length>0&&prefix===known.length;

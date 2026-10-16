@@ -1,8 +1,9 @@
 # Wintry forecast for Windy
 
-**Release 1000.1.0** — terrain-aware winter-weather guidance from sampled ECMWF
-profiles and local terrain. The release combines the existing map and MP4 features
-with consistent precipitation/snowfall accounting and bounded storage waits.
+**Release candidate 1000.1.1** — terrain-aware winter-weather guidance from sampled
+ECMWF profiles and local terrain. Specific types and snow amounts are withheld
+when atmospheric detail is insufficient. Independent forecast-skill validation
+is still required; this is not a calibrated high-confidence forecast.
 
 ## Use
 
@@ -12,7 +13,8 @@ precipitation. **Forecast** opens the timeline; **Sounding** keeps the atmospher
 profile available without crowding the map controls.
 
 - **Contours:** estimated snowline and dry-terrain hatching.
-- **Shading:** one fixed Windy colour per diagnosed precipitation type.
+- **Shading:** one fixed Windy colour per estimated type; slate means precipitation
+  with unresolved type. Missing precipitation stays blank.
 - **Icons:** precipitation symbols and ECMWF forecast lightning.
 - Shading and icons become available from zoom level 8; contours are independent.
 - Search, saved locations, metric/imperial units and image export are retained.
@@ -43,27 +45,34 @@ usable. Windy's background and forecast lightning manage their loads separately.
   intensity. Next-24-hour liquid totals require complete supported coverage.
 - **Snowfall total** is estimated gross fresh snowfall. It does not decrease when
   later melt occurs and does not represent total snow already on the ground.
-- **Remaining layer** is a separate experimental estimate of forecast-created snow
-  after settling/melt. Missing thermal data can make this estimate unavailable.
-- **Terrain flow** is experimental upslope/down-slope exposure from above-terrain
-  winds and broad terrain slopes. It does not increase or reduce ECMWF rainfall.
+- **Snowfall amounts** remain heuristic, are rounded to whole centimetres/inches
+  (positive sub-unit amounts use `<1`) and become unavailable across unresolved
+  wet intervals. Rounding is display precision, not a calibrated error range.
+- **Remaining ground snow and wind–terrain exposure** are removed from the user
+  interface. Their experimental research functions remain in source.
+- **Thermal snowline** is a wet-bulb-zero proxy, rounded to 100 m / 500 ft. A
+  zero crossing across more than 1400 m or an extrapolation below the profile is
+  withheld. Contours preserve missing-data gaps; this proxy is not an exact
+  precipitation-type boundary.
 - Fine terrain detail does not create a finer atmospheric forecast. The point
   precipitation feed can differ in coverage from Windy's native weather layer.
-- Phase rules, snow ratios and remaining-layer coefficients need independent
-  calibration. Input-detail labels are not calibrated probabilities.
+- Phase rules and snow ratios need independent calibration. Low-detail diagnoses
+  become unresolved; borderline diagnoses use “possible”. Internal detail flags
+  are not calibrated probabilities. Wider gaps may reduce coverage in this version.
 
 See [method, equations and scientific limits](METHODS.md),
-[release notes](RELEASE_1000_1.md) and [release history](docs/RELEASE_HISTORY.md).
+[release notes](RELEASE_1000_1_1.md) and [release history](docs/RELEASE_HISTORY.md).
 
 ## Development and publication
 
 Node.js 24; `npm install`, `npm test`, `npm run build`. Built files are in `dist`.
 The package and plugin configuration must contain the same three-part version.
 GitHub runs tests/build checks; publication uses the existing manual
-`publish-plugin` workflow. Version 1000.1.0 is the full version of “1000.1”.
+`publish-plugin` workflow. The published predecessor is 1000.1.0; 1000.1.1 remains
+a candidate until the production merge and manual publication are completed.
 
 [Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Previously published 1000.0.13](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.13/plugin.min.js)
+[Published 1000.1.0](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.0/plugin.min.js)
 
 ## Sources and licences
 

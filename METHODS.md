@@ -1,4 +1,4 @@
-# Method and interpretation — 1000.1.0
+# Method and interpretation — 1000.1.1 candidate
 
 ## What the product estimates
 
@@ -32,7 +32,34 @@ published Bourgouin energy algorithm. Its high/medium/low labels are input-detai
 and threshold flags, **not calibrated probabilities**. Melting/refreezing layer
 methods are motivated by [Bourgouin (2000)](https://journals.ametsoc.org/view/journals/wefo/15/5/1520-0434_2000_015_0583_amtdpt_2_0_co_2.xml).
 
+## Public guidance guardrails
+
+The raw research classifier remains available. The public path abstains from a
+specific type when the existing vertical-detail flag is low: the site requires
+downward extrapolation or analysis-level spacing exceeds 1400 m. A profile too
+short to classify also becomes unresolved when site terrain is known. Exactly
+matching the lowest sampled height is not extrapolation. Medium-detail/borderline
+types use “possible”; surface Tw within 0.2°C of a surface decision threshold also
+sets this flag. These are provisional engineering rules, not validated probabilities.
+
+Known wet/unresolved samples receive a distinct slate map colour and question-mark
+icon. They cannot imply dry weather, a no-wintry-weather outlook, or zero snowfall.
+Liquid precipitation totals remain available if their own temporal coverage is
+complete. Snow totals become unavailable if any wet interval in the requested
+window has unresolved type. Events are not joined across unresolved intervals.
+
+The displayed thermal snowline is the resolved atmospheric wet-bulb-zero proxy.
+Public views/contours omit all-cold-column extrapolations and zero crossings wider
+than 1400 m. The raw research diagnostic remains unchanged. Contours do not fill
+missing samples. Snowline numbers use 100 m / 500 ft rounding; snowfall uses whole
+cm / in, with `<1` for smaller positive amounts. These are display steps, not error
+bounds. No claim of improved forecast skill follows from these changes. More
+withheld guidance is the deliberate trade-off for avoiding unsupported specificity.
+
 ## Snowfall versus the remaining new layer
+
+Only gross snowfall estimates are exposed in the public UI. The remaining-layer
+budget below is retained as research code; its uncalibrated output is not displayed.
 
 Gross estimated snowfall is `P3 * dt / 3 * f_s * SLR / 10` cm, where `f_s` is the
 snow fraction of liquid input (0–1), and `SLR` is fresh snow depth divided by liquid
@@ -57,6 +84,9 @@ energy/mass-balance models include substantially more processes:
 [NOAA NOHRSC model description](https://www.nohrsc.noaa.gov/technology/).
 
 ## Terrain-flow diagnostic
+
+This experiment is retained in source only. The public UI no longer computes or
+displays terrain-flow exposure, and no auxiliary exposure DEM requests are made.
 
 At an inspected point, a lazy DEM request samples four points 2 km away in the
 cardinal directions. Central differences give dimensionless broad terrain slopes

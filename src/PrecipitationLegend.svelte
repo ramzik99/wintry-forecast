@@ -9,6 +9,7 @@
     {code:'snow',label:'Snow'}, {code:'wet-snow',label:'Wet snow'},
     {code:'mix',label:'Mix'}, {code:'rain',label:'Rain'},
     {code:'ice-pellets',label:'Ice pellets'}, {code:'freezing-rain',label:'Freezing rain'},
+    {code:'uncertain',label:'Type unresolved'},
   ] as const;
 </script>
 <style>
