@@ -28,7 +28,7 @@ Progress and cancellation cover preparation and encoding. After export, a downlo
 link remains available if the browser blocked the automatic download. The encoded
 video has a maximum dimension of 1280 pixels and is created without uploading frames.
 MP4 encoding/muxing uses the bundled [Mediabunny](https://mediabunny.dev/) dependency
-(MPL-2.0). The installed Windy release changes only after publishing this version.
+(MPL-2.0). Version 1000.0.13 is published and available through the link below.
 
 Point cards and the graph now explicitly show average precipitation in mm/h or
 in/h. The graph also reports next-24-hour liquid accumulation with its start/end
@@ -57,7 +57,7 @@ retains one fixed Windy colour per type; contours, shading and icons stay indepe
 
 Compact 260 px desktop / 250 px phone-width panel, with location settings collapsed after selection. Forecast and Sounding remain directly accessible. The panel sits on the left above the timeline, away from right-side map controls, and can minimize to a small button. Use Windy's existing timeline to change forecast time; the duplicate slider and day shortcuts have been removed from both views.
 
-[Previous published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.9/plugin.min.js) · [Release notes and verification](V1000.md)
+[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.13/plugin.min.js) · [Release notes and verification](V1000.md)
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
 
