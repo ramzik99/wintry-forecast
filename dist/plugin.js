@@ -1,6 +1,6 @@
 const __pluginConfig =  {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.0.14",
+  "version": "1000.1.0",
   "icon": "❄️",
   "title": "Wintry forecast",
   "description": "Concise terrain-aware winter forecast: type, terrain, snowline, precipitation, estimated new snow and timing first; a clean forecast timeline and optional hover/touch sounding.",
@@ -10,8 +10,8 @@ const __pluginConfig =  {
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1792149729439,
-  "builtReadable": "2026-10-16T11:22:09.439Z"
+  "built": 1792153325239,
+  "builtReadable": "2026-10-16T12:22:05.239Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -2116,7 +2116,7 @@ class PlaceSearch extends SvelteComponent {
 
 const config = {
     name: 'windy-plugin-snowline-map-100m',
-    version: '1000.0.14'};
+    version: '1000.1.0'};
 
 const UNITS_STORAGE_KEY = 'wintry:units:v1';
 function loadUnitSystem() {
@@ -5729,7 +5729,7 @@ function create_if_block_1$1(ctx) {
 	let if_block12 = current_block_type_3(ctx);
 	let if_block13 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
 	let if_block14 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
-	let if_block15 = /*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
+	let if_block15 = /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
 
 	return {
 		c() {
@@ -6420,7 +6420,7 @@ function create_if_block_1$1(ctx) {
 				if_block14 = null;
 			}
 
-			if (/*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote) {
+			if (/*chart*/ ctx[12].coverageNote) {
 				if (if_block15) {
 					if_block15.p(ctx, dirty);
 				} else {
@@ -7720,7 +7720,7 @@ function create_if_block_3$1(ctx) {
 	};
 }
 
-// (130:4) {#if event && chart.coverageNote}
+// (130:4) {#if chart.coverageNote}
 function create_if_block_2$1(ctx) {
 	let div;
 	let t_value = /*chart*/ ctx[12].coverageNote + "";
@@ -9812,20 +9812,65 @@ function automaticRefreshDue(state, now = Date.now()) {
     open() {
         return this.database ??= new Promise((resolve, reject)=>{
             const request = indexedDB.open('wintry-prepared-map-v1', 1);
+            let settled = false;
+            const fail = (error)=>{
+                if (!settled) {
+                    settled = true;
+                    clearTimeout(timer);
+                    reject(error);
+                }
+            };
+            const timer = setTimeout(()=>fail(new Error('Local map storage timed out')), 10000);
             request.onupgradeneeded = ()=>request.result.createObjectStore('frames', {
                     keyPath: 'key'
                 });
-            request.onsuccess = ()=>resolve(request.result);
-            request.onerror = ()=>reject(request.error ?? new Error('Local map storage unavailable'));
-            request.onblocked = ()=>reject(new Error('Local map storage is busy'));
+            request.onsuccess = ()=>{
+                if (settled) {
+                    request.result.close();
+                    return;
+                }
+                settled = true;
+                clearTimeout(timer);
+                resolve(request.result);
+            };
+            request.onerror = ()=>fail(request.error ?? new Error('Local map storage unavailable'));
+            request.onblocked = ()=>fail(new Error('Local map storage is busy'));
         });
     }
     async transaction(mode, action) {
         const db = await this.open();
         return new Promise((resolve, reject)=>{
-            const tx = db.transaction('frames', mode), request = action(tx.objectStore('frames'));
-            tx.oncomplete = ()=>resolve(request.result);
-            tx.onerror = tx.onabort = ()=>reject(tx.error ?? new Error('Local map storage failed'));
+            const tx = db.transaction('frames', mode);
+            let settled = false;
+            const fail = (error)=>{
+                if (!settled) {
+                    settled = true;
+                    clearTimeout(timer);
+                    reject(error);
+                }
+            };
+            const timer = setTimeout(()=>{
+                fail(new Error('Local map storage timed out'));
+                try {
+                    tx.abort();
+                } catch  {}
+            }, 10000);
+            tx.onerror = tx.onabort = ()=>fail(tx.error ?? new Error('Local map storage failed'));
+            try {
+                const request = action(tx.objectStore('frames'));
+                tx.oncomplete = ()=>{
+                    if (!settled) {
+                        settled = true;
+                        clearTimeout(timer);
+                        resolve(request.result);
+                    }
+                };
+            } catch (error) {
+                fail(error instanceof Error ? error : new Error('Local map storage failed'));
+                try {
+                    tx.abort();
+                } catch  {}
+            }
         });
     }
     async clear() {
@@ -21619,7 +21664,7 @@ class Output extends EventEmitter {
     }
 }
 
-/** Include hourly contour times and source-interval ends so missing gaps go blank. */ function forecastMovieTimes(axes) {
+/** Include hourly contour times and source-interval ends so missing gaps go blank. */ function forecastMovieTimes(axes, supportEnds = []) {
     const valid = axes.filter((a)=>a.length && a.every((t, i)=>Number.isFinite(t) && (i === 0 || t > a[i - 1])));
     if (!valid.length) return [];
     const hour = 3600_000, first = Math.min(...valid.map((a)=>a[0])), last = Math.min(first + 144 * hour, Math.max(...valid.map((a)=>a.at(-1))));
@@ -21632,6 +21677,11 @@ class Output extends EventEmitter {
         const span = i + 1 < axis.length ? axis[i + 1] - t : i > 0 ? t - axis[i - 1] : 3 * hour, end = t + Math.min(3 * hour, span);
         if (end >= first && end <= last) targets.add(end);
     });
+    // Short source coverage can end between hourly frames; show that boundary
+    // rather than holding a wet raster into an unsupported period.
+    for (const ends of supportEnds)for (const time of ends){
+        if (Number.isFinite(time) && time >= first && time <= last) targets.add(time);
+    }
     return [
         ...targets
     ].sort((a, b)=>a - b);
@@ -21660,6 +21710,14 @@ async function checkMp4Support(width, height) {
         bitrate: 4_000_000
     })) {
         throw new Error('MP4 export is unavailable in this browser. Try an updated Chrome, Edge or Safari browser.');
+    }
+}
+/** An unavailable video encoder must not disable preparing the forecast map. */ async function canExportMapForecast(width, height) {
+    try {
+        await checkMp4Support(width, height);
+        return true;
+    } catch  {
+        return false;
     }
 }
 /** One decoded canvas at a time; source rendering speed never changes video timing. */ async function encodeMapForecast(canvas, times, draw, signal, progress) {
@@ -23126,7 +23184,7 @@ function create_if_block(ctx) {
 			button.textContent = "×";
 			t3 = space();
 			div14 = element("div");
-			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Terrain flow:</b> the point graph compares above-terrain model winds with a fixed 4 km terrain slope. Upslope/down-slope is an experimental exposure diagnostic; it does not predict additional precipitation, resolve blocked flow, or alter ECMWF amounts. Missing wind/terrain data leaves this diagnostic unavailable.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. The separate experimental remaining-layer estimate tracks snow water and depth, with settling and wet-bulb-based melt even in dry weather. It excludes existing snow, ground heat, radiation and drifting; it is not a snow-depth observation or a full energy-balance model.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated new snow on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
+			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Terrain flow:</b> the point graph compares above-terrain model winds with a fixed 4 km terrain slope. Upslope/down-slope is an experimental exposure diagnostic; it does not predict additional precipitation, resolve blocked flow, or alter ECMWF amounts. Missing wind/terrain data leaves this diagnostic unavailable.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> timing and estimated snowfall through +144 h.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. The separate experimental remaining-layer estimate tracks snow water and depth, with settling and wet-bulb-based melt even in dry weather. It excludes existing snow, ground heat, radiation and drifting; it is not a snow-depth observation or a full energy-balance model.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close information");
 			attr(button, "title", "Close");
@@ -24869,7 +24927,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (preparingMap || !enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading || !cache.length) return;
 		const points = cache.flat().filter(p => !!p && profileIsFresh(p.fetchedAt, p.runTime, activeRunTime));
 		if (!points.length) return;
-		const videoTimes = forecastMovieTimes(points.map(p => p.times));
+		const videoTimes = forecastMovieTimes(points.map(p => p.times), points.map(p => p.times.map((_, i) => supportedIntervalEnd(p.times, i, p.forecast.__precipPeriodsH))));
 
 		const seen = new Set(),
 			times = videoTimes.filter(t => {
@@ -24900,7 +24958,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		try {
 			if (!times.length) throw new Error('No available forecast times for MP4');
 			const size = videoSize(map.getSize().x, map.getSize().y + 196);
-			await checkMp4Support(size.width, size.height);
+			const exportAvailable = await canExportMapForecast(size.width, size.height);
 			if (!current()) return;
 
 			if (videoDownloadUrl) {
@@ -24934,7 +24992,9 @@ function instance$1($$self, $$props, $$invalidate) {
 				await new Promise(resolve => setTimeout(resolve, 0));
 			}
 
-			if (current()) await downloadMapForecastVideo(videoTimes, current); else if (my === prepareGeneration) $$invalidate(17, prepareMessage = 'Preparation stopped · forecast changed; refresh to try again');
+			if (current()) {
+				if (exportAvailable) await downloadMapForecastVideo(videoTimes, current); else $$invalidate(17, prepareMessage = `Map ready · ${preparedKeys.size} times · MP4 unavailable in this browser`);
+			} else if (my === prepareGeneration) $$invalidate(17, prepareMessage = 'Preparation stopped · forecast changed; refresh to try again');
 		} catch(error) {
 			if (current()) {
 				$$invalidate(17, prepareMessage = error instanceof Error

@@ -86,7 +86,7 @@
       <div class="info-body">
         <div><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div>
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
-        <div><b>Prepare & download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div>
+        <div><b>Prepare & download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div>
         <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Terrain flow:</b> the point graph compares above-terrain model winds with a fixed 4 km terrain slope. Upslope/down-slope is an experimental exposure diagnostic; it does not predict additional precipitation, resolve blocked flow, or alter ECMWF amounts. Missing wind/terrain data leaves this diagnostic unavailable.</div>
         <div><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div>
@@ -95,9 +95,9 @@
         </details>
         <div><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div>
         <div><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div>
-        <div><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div>
+        <div><b>Next wintry period:</b> timing and estimated snowfall through +144 h.</div>
         <div><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. The separate experimental remaining-layer estimate tracks snow water and depth, with settling and wet-bulb-based melt even in dry weather. It excludes existing snow, ground heat, radiation and drifting; it is not a snow-depth observation or a full energy-balance model.</div>
-        <div><b>Forecast:</b> snowline, precipitation, precipitation type and estimated new snow on one timeline.</div>
+        <div><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div>
         <div><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div>
         <div class="info-caveat">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>
       </div>
@@ -145,7 +145,7 @@
   import { register, release } from '@windy/singleclick';
   import config from './pluginConfig';
   import { PreparedMapCache } from './preparedMapCache';
-  import { checkMp4Support, encodeMapForecast, forecastMovieTimes, videoImage, videoSize } from './mapForecastVideo';
+  import { canExportMapForecast, encodeMapForecast, forecastMovieTimes, videoImage, videoSize } from './mapForecastVideo';
   import { boundedRequest } from './boundedRequest';
   import { geocode } from './geocoding';
   import { formatElevation, formatPrecip, formatSnow, loadUnitSystem, type UnitSystem } from './displayUnits';
@@ -566,7 +566,7 @@
     if(preparingMap||!enabled||!showShading||!precipDetailAvailable||viewportLoading||terrainLoading||rasterLoading||!cache.length)return;
     const points=cache.flat().filter((p):p is CachedPoint=>!!p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime));
     if(!points.length)return;
-    const videoTimes=forecastMovieTimes(points.map(p=>p.times));
+    const videoTimes=forecastMovieTimes(points.map(p=>p.times),points.map(p=>p.times.map((_,i)=>supportedIntervalEnd(p.times,i,p.forecast.__precipPeriodsH))));
     const seen=new Set<string>(),times=videoTimes.filter(t=>{const key=phaseFrameKey(t);if(seen.has(key))return false;seen.add(key);return true;});
     const reference=getStoreTimestamp(),scene=phaseFrameKey(reference),my=++prepareGeneration;
     const options=JSON.stringify([showContours,showIcons,unitSystem]);
@@ -576,7 +576,7 @@
     try{
       if(!times.length)throw new Error('No available forecast times for MP4');
       const size=videoSize(map.getSize().x,map.getSize().y+196);
-      await checkMp4Support(size.width,size.height);if(!current())return;
+      const exportAvailable=await canExportMapForecast(size.width,size.height);if(!current())return;
       if(videoDownloadUrl){URL.revokeObjectURL(videoDownloadUrl);videoDownloadUrl='';}
       await preparedMapCache.clear();
       for(let i=0;i<times.length&&current();){
@@ -590,7 +590,10 @@
         prepareMessage=`${i} / ${times.length} times${i>1&&minutes>0?` · ~${minutes} min left`:'…'}`;
         await new Promise(resolve=>setTimeout(resolve,0));
       }
-      if(current())await downloadMapForecastVideo(videoTimes,current);
+      if(current()){
+        if(exportAvailable)await downloadMapForecastVideo(videoTimes,current);
+        else prepareMessage=`Map ready · ${preparedKeys.size} times · MP4 unavailable in this browser`;
+      }
       else if(my===prepareGeneration)prepareMessage='Preparation stopped · forecast changed; refresh to try again';
     }catch(error){if(current()){prepareMessage=error instanceof Error?`${error.message} · ${preparedKeys.size} times prepared`:'Preparation unavailable · normal timeline still works';preparedMapCache.close();}}
     finally{if(my===prepareGeneration){preparingMap=false;exportingMap=false;scheduleNextFrame();}}

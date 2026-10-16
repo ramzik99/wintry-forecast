@@ -1,11 +1,11 @@
-# Method and interpretation — 1000.0.14 development candidate
+# Method and interpretation — 1000.1.0
 
 ## What the product estimates
 
 The plugin post-processes sampled ECMWF thermodynamic profiles at local terrain
 height. Fine terrain pixels add terrain detail; they do not create new atmospheric
 observations or increase the native resolution of ECMWF. Rainfall amounts remain
-the sampled ECMWF amounts. This candidate does not claim improved forecast skill.
+the sampled ECMWF amounts. Independent forecast-skill validation remains required.
 
 ## Time and missing data
 
