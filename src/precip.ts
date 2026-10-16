@@ -23,8 +23,12 @@ const METRE_WATER_KEYS = new Set([
   'past1hprecip-surface',
 ]);
 
-/** Minimum normalized 3-hour-equivalent amount used for ptype diagnosis. */
+/** Minimum plotting scale; positive traces still have a precipitation type. */
 export const PRECIP_THRESHOLD_MM_3H = 0.1;
+
+export function isPrecipitating(value: number | null): value is number {
+  return value !== null && Number.isFinite(value) && value > 0;
+}
 
 /** @deprecated Use PRECIP_THRESHOLD_MM_3H; retained for source compatibility. */
 export const PRECIP_THRESHOLD_MM_H = PRECIP_THRESHOLD_MM_3H;
@@ -93,12 +97,12 @@ function toThreeHourlyMillimetres(key: string, raw: number): number {
 
 /** Precipitation amount in millimetres per 3-hour-equivalent period. */
 export function precipMmAt(data: Record<string, unknown>, index: number): number | null {
-  if ('__precipMm3h' in data) return valueAt(data.__precipMm3h,index);
+  if ('__precipMm3h' in data) { const value=valueAt(data.__precipMm3h,index); return value!==null&&value>=0?value:null; }
   const found = findPrecipField(data);
   if (!found) return null;
   const raw = valueAt(found.field, index);
-  if (raw === null || !Number.isFinite(raw)) return null;
-  return Math.max(0, toThreeHourlyMillimetres(found.key, raw));
+  if (raw === null || !Number.isFinite(raw) || raw < 0) return null;
+  return toThreeHourlyMillimetres(found.key, raw);
 }
 
 export function precipFieldName(data: Record<string, unknown>): string | null {

@@ -1,13 +1,14 @@
 import { buildProfile } from './snowLevel';
-import { precipMmAt, PRECIP_THRESHOLD_MM_3H } from './precip';
+import { precipMmAt, isPrecipitating } from './precip';
 import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType } from './precipType';
 import { forecastIntervalHours } from './forecastTime';
+import { supportedIntervalEnd } from './forecastIntervals';
 
 export type ForecastPoint = { times: number[]; forecast: Record<string, unknown> };
 
 export function conditionLabel(precip: number | null, phase: TerrainPrecipType | null): string {
-  if (precip === null || !Number.isFinite(precip)) return 'Precipitation unavailable';
-  if (precip < PRECIP_THRESHOLD_MM_3H) return 'Dry';
+  if (precip === null || !Number.isFinite(precip) || precip < 0) return 'Precipitation unavailable';
+  if (precip === 0) return 'Dry';
   return phase ? precipitationLabel(phase) : 'Precipitation · type uncertain';
 }
 
@@ -25,11 +26,11 @@ export function noEventMessage(point: ForecastPoint, terrainM: number | null, fr
       : 'Outlook unavailable · forecast data missing';
   };
   for (let i = 0; i < point.times.length && point.times[i] < end; i++) {
-    const start = point.times[i], intervalEnd = Math.min(end, start + forecastIntervalHours(point.times, i) * 3600_000);
+    const start = point.times[i], intervalEnd = Math.min(end, supportedIntervalEnd(point.times, i, point.forecast.__precipPeriodsH));
     if (intervalEnd <= fromTime) continue;
     const precip = precipMmAt(point.forecast, i);
-    if (start > coveredUntil || precip === null ||
-      (precip >= PRECIP_THRESHOLD_MM_3H && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM))) {
+    if (start > coveredUntil || intervalEnd <= start || precip === null ||
+      (isPrecipitating(precip) && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM))) {
       return partialOutlook();
     }
     coveredUntil = intervalEnd;

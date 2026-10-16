@@ -179,7 +179,7 @@ test('contours bridge a missing viewport sample instead of breaking around it',(
 
 const { alignPrecipIntervals } = await import(moduleUrl('precipIntervals'));
 const { formatPrecip } = await import(moduleUrl('displayUnits'));
-const { estimateNewSnowStep } = await import(moduleUrl('snowAccum'));
+const { snowfallInput } = await import(moduleUrl('snowAccum'));
 const precipUrl=moduleUrl('precip',[["'./snowLevel'",JSON.stringify(coreUrl)]]);
 const {precipMmAt}=await import(precipUrl);
 const {nextWintryEvent}=await import(moduleUrl('eventOutlook',[["'./snowLevel'",JSON.stringify(coreUrl)],["'./precip'",JSON.stringify(precipUrl)],["'./precipType'",JSON.stringify(moduleUrl('precipType'))],["'./snowAccum'",JSON.stringify(moduleUrl('snowAccum'))]]));
@@ -193,7 +193,7 @@ test('three-hour source totals align by interval start, with no missing-value in
 });
 test('three-hour snowfall uses the full liquid amount',()=>{
  const phase={key:'snow',surfaceWetBulbC:-5};
- assert.equal(estimateNewSnowStep(6,phase,0,3).cumulativeCm,9);
+ assert.equal(snowfallInput(6,phase,3).depthCm,9);
 });
 test('a single three-hour snow interval contributes a full interval to event totals',()=>{
  const h=3600000;

@@ -84,7 +84,7 @@
   import { buildProfile, wetBulbZeroHeight, type ProfilePoint } from './snowLevel';
   import { precipitationLabel, terrainPrecipitationType } from './precipType';
   import { terrainDiagnostics } from './terrainDiagnostics';
-  import { precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
+  import { precipMmAt, isPrecipitating } from './precip';
   import { conditionLabel } from './forecastStatus';
   import { forecastIntervalIndex } from './forecastTime';
   import { formatElevation, formatTemperature, type UnitSystem } from './displayUnits';
@@ -289,7 +289,7 @@
     const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM) ? wbz.snowLevelM : null;
     const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH ? y(snowlineM) : null;
     const precip = precipMmAt(p.forecast, idx);
-    const hasPrecip = precip !== null && precip >= PRECIP_THRESHOLD_MM_H;
+    const hasPrecip = isPrecipitating(precip);
     const diagnostics = terrain !== null && Number.isFinite(terrain) ? terrainDiagnostics(profile, terrain) : null;
     const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? terrainPrecipitationType(profile, terrain) : null;
     return {

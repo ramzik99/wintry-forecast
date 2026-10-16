@@ -4,7 +4,15 @@ A convenience-first Windy external plugin for terrain-aware winter-weather guida
 
 The interface is designed to answer five questions quickly: **what will fall, where is the snowline, how does terrain compare, how much precipitation/new snow is expected, and when?** Technical detail stays available in the Forecast and Sounding views.
 
-## Current release
+## Development candidate
+
+**1000.0.13 — not published.** Shared interval accounting, separate snowfall and
+experimental remaining-layer estimates, below-model-ground masking when known,
+and a point-only terrain-flow diagnostic. Rainfall amounts remain ECMWF values;
+forecast skill has not been independently validated.
+[Changes](V1000_0_13.md) · [Method, equations and limitations](METHODS.md).
+
+## Previous release notes
 
 **1000.0.9**
 
