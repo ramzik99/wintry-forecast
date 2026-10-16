@@ -1,4 +1,6 @@
 import { valueAt } from './snowLevel';
+import { forecastIntervalIndex } from './forecastTime';
+import { supportedIntervalEnd } from './forecastIntervals';
 
 /**
  * Windy's precipitation feed used by this plugin is normalized onto a 3-hour
@@ -103,6 +105,12 @@ export function precipMmAt(data: Record<string, unknown>, index: number): number
   const raw = valueAt(found.field, index);
   if (raw === null || !Number.isFinite(raw) || raw < 0) return null;
   return toThreeHourlyMillimetres(found.key, raw);
+}
+
+/** Point/map displays obey the same source support as accumulation totals. */
+export function precipMmAtTime(data: Record<string, unknown>, times: number[], target: number): number | null {
+  const index=forecastIntervalIndex(times,target);
+  return index>=0&&target<supportedIntervalEnd(times,index,data.__precipPeriodsH) ? precipMmAt(data,index) : null;
 }
 
 export function precipFieldName(data: Record<string, unknown>): string | null {

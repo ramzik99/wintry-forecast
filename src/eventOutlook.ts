@@ -102,6 +102,11 @@ export function nextWintryEvent(
   }
 
   const snow = snowForecastWindow(series, Math.max(fromTime, startTime), endTime);
+  // Do not present an event cut off by missing data as a complete storm total.
+  const following = last.index + 1;
+  const boundaryKnown = endTime >= horizonEnd || (following < times.length && times[following] === endTime &&
+    series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null) &&
+    supportedIntervalEnd(times,following,series.sourcePeriods) > endTime);
 
   return {
     startTime,
@@ -113,6 +118,6 @@ export function nextWintryEvent(
     dominantPhase: dominant,
     confidence: aggregateConfidence(event.map(step => ({ precip: step.liquidMm, phase: step.phase }))),
     activeNow: fromTime >= startTime && fromTime < endTime,
-    incomplete: !snow.complete,
+    incomplete: !snow.complete || !boundaryKnown,
   };
 }

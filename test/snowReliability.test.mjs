@@ -15,7 +15,7 @@ const {buildSnowForecast,snowForecastWindow,snowfallAtTime}=await import(url('sn
 const {terrainSlopes,terrainFlow}=await import(url('terrainFlow'));
 const {alignPrecipIntervals}=await import(url('precipIntervals'));
 const {precipitationAccumulation}=await import(url('precipAccumulation'));
-const {precipMmAt,isPrecipitating}=await import(url('precip'));
+const {precipMmAt,precipMmAtTime,isPrecipitating}=await import(url('precip'));
 const {buildProfile,wetBulbFromDewpoint}=await import(url('snowLevel'));
 const {conditionLabel,noEventMessage}=await import(url('forecastStatus'));
 const {nextWintryEvent}=await import(url('eventOutlook'));
@@ -100,11 +100,19 @@ test('a missing dry thermal profile leaves gross snowfall known but retained sno
   for(const bad of [null,NaN,-1])assert.equal(snowfallInput(bad,phase(),3),null);
 });
 
+test('a storm ending at a missing interval is qualified rather than called a complete event total',()=>{
+  const p=fixture();p.forecast.__precipMm3h[2]=null;
+  const event=nextWintryEvent(p,1000,0);
+  assert.equal(event.endTime,6*h);assert.equal(event.incomplete,true);
+});
+
 test('source interval support ends at the source boundary even when target starts inside it',()=>{
   const aligned=alignPrecipIntervals([0,3*h,6*h],[6,0,0],[2*h,5*h]);
   assert.deepEqual(aligned.__precipPeriodsH,[1,1]);
   const totals=precipitationAccumulation([2*h,5*h],aligned.__precipMm3h,2*h,5*h,aligned.__precipPeriodsH);
   assert.equal(totals.complete,false);
+  assert.equal(precipMmAtTime(aligned,[2*h,5*h],2.5*h),6);
+  assert.equal(precipMmAtTime(aligned,[2*h,5*h],3*h),null);
   for(const source of [[0,0,3*h],[3*h,0,6*h],[0,NaN,6*h]])assert.ok(alignPrecipIntervals(source,[1,2,3],[0,h]).__precipMm3h.every(v=>v===null));
   assert.equal(alignPrecipIntervals([0,3*h],[-1,0],[0]).__precipMm3h[0],null);
 });

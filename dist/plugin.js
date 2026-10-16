@@ -1,6 +1,6 @@
 const __pluginConfig =  {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.0.11",
+  "version": "1000.0.14",
   "icon": "❄️",
   "title": "Wintry forecast",
   "description": "Concise terrain-aware winter forecast: type, terrain, snowline, precipitation, estimated new snow and timing first; a clean forecast timeline and optional hover/touch sounding.",
@@ -10,8 +10,8 @@ const __pluginConfig =  {
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1791898908072,
-  "builtReadable": "2026-10-13T13:41:48.072Z"
+  "built": 1792149729439,
+  "builtReadable": "2026-10-16T11:22:09.439Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -228,7 +228,7 @@ function stop_propagation(fn) {
 
 /**
  * @returns {(event: any) => void} */
-function self(fn) {
+function self$1(fn) {
 	return function (event) {
 		// @ts-ignore
 		if (event.target === this) fn.call(this, event);
@@ -1133,7 +1133,7 @@ function hasForecastLightning(value) {
     };
 }
 
-const cache$1 = new Map();
+const cache$2 = new Map();
 function photonPlaces(data) {
     if (!Array.isArray(data?.features)) throw new Error('Invalid place response');
     const places = new Map();
@@ -1170,7 +1170,7 @@ async function autocompletePlaces(query, signal) {
     if (text.length < 3) return [];
     signal.throwIfAborted();
     const key = text.toLowerCase();
-    if (cache$1.has(key)) return cache$1.get(key);
+    if (cache$2.has(key)) return cache$2.get(key);
     const request = new AbortController();
     const cancel = ()=>request.abort();
     signal.addEventListener('abort', cancel, {
@@ -1191,8 +1191,8 @@ async function autocompletePlaces(query, signal) {
         if (!response.ok) throw new Error(`Place search failed (${response.status})`);
         const places = photonPlaces(await response.json());
         signal.throwIfAborted();
-        cache$1.set(key, places);
-        if (cache$1.size > 100) cache$1.delete(cache$1.keys().next().value);
+        cache$2.set(key, places);
+        if (cache$2.size > 100) cache$2.delete(cache$2.keys().next().value);
         return places;
     } catch (error) {
         if (signal.aborted) throw error;
@@ -2116,7 +2116,7 @@ class PlaceSearch extends SvelteComponent {
 
 const config = {
     name: 'windy-plugin-snowline-map-100m',
-    version: '1000.0.11'};
+    version: '1000.0.14'};
 
 const UNITS_STORAGE_KEY = 'wintry:units:v1';
 function loadUnitSystem() {
@@ -2485,6 +2485,11 @@ const MAX_COLD_COLUMN_GRADIENT_C_PER_M = -1e-3;
  *
  * using bisection between Td and T.
  */ function wetBulbFromDewpoint(tempC, dewpointC, pressureHpa) {
+    if (![
+        tempC,
+        dewpointC,
+        pressureHpa
+    ].every(Number.isFinite) || pressureHpa <= 0 || tempC <= -243.5 || dewpointC <= -243.5) return NaN;
     const td = Math.min(tempC, dewpointC);
     const e = saturationVapourPressure$1(td);
     const f = (tw)=>{
@@ -2590,26 +2595,31 @@ const MAX_COLD_COLUMN_GRADIENT_C_PER_M = -1e-3;
 }
 function buildProfile(data, timeIndex) {
     const profile = [];
+    // Explicit source-model terrain, never the DEM/site elevation. Pressure-level
+    // fields beneath model ground can contain extrapolated values, not real air.
+    const modelTerrainM = valueAt(data.__modelTerrainM, 0);
     for (const level of PRESSURE_LEVELS){
         const t = valueAt(data[`temp-${level}`], timeIndex);
         const td = valueAt(data[`dewpoint-${level}`], timeIndex);
         const gh = valueAt(data[`gh-${level}`], timeIndex);
-        if (t === null || td === null || gh === null) continue;
+        if (t === null || td === null || gh === null || modelTerrainM !== null && gh < modelTerrainM) continue;
         const tempC = t > 150 ? t - 273.15 : t;
-        const dewpointC = td > 150 ? td - 273.15 : td;
+        const dewpointC = Math.min(tempC, td > 150 ? td - 273.15 : td);
         const pressureHpa = Number(level.replace('h', ''));
         /*
      * Windy's meteogram `gh-*` values are geopotential HEIGHT.
      * Live values are on the normal metre scale (e.g. ~4 km at 600 hPa),
      * so do NOT divide by g.
      */ const heightM = gh;
+        const wetBulbC = wetBulbFromDewpoint(tempC, dewpointC, pressureHpa);
+        if (!Number.isFinite(wetBulbC)) continue;
         profile.push({
             level,
             pressureHpa,
             heightM,
             tempC,
             dewpointC,
-            wetBulbC: wetBulbFromDewpoint(tempC, dewpointC, pressureHpa)
+            wetBulbC
         });
     }
     return profile.sort((a, b)=>a.heightM - b.heightM);
@@ -2636,6 +2646,50 @@ function buildProfile(data, timeIndex) {
     return null;
 }
 
+const HOUR_MS$1 = 3600_000;
+/** Profile timestamps represent interval starts, never the nearest future slot. */ function forecastIntervalHours(times, index) {
+    if (index < 0 || index >= times.length) return 0;
+    const difference = index + 1 < times.length ? times[index + 1] - times[index] : index > 0 ? times[index] - times[index - 1] : 3 * HOUR_MS$1;
+    return Number.isFinite(difference) && difference > 0 ? Math.min(3, difference / HOUR_MS$1) : 0;
+}
+function forecastIntervalIndex(times, target) {
+    if (!Number.isFinite(target)) return -1;
+    for(let i = times.length - 1; i >= 0; i--){
+        if (times[i] <= target) {
+            return target < times[i] + forecastIntervalHours(times, i) * HOUR_MS$1 ? i : -1;
+        }
+    }
+    return -1;
+}
+
+const HOUR_MS = 3600_000;
+/** End of actual support, not the next available value across a gap. */ function supportedIntervalEnd(times, index, sourcePeriods) {
+    const represented = forecastIntervalHours(times, index);
+    const source = Array.isArray(sourcePeriods) ? sourcePeriods[index] : represented;
+    if (typeof source !== 'number' || !Number.isFinite(source) || source <= 0 || source > 3) return times[index];
+    return Math.min(times[0] + 144 * HOUR_MS, times[index] + Math.min(represented, source) * HOUR_MS);
+}
+/** Continuous non-overlapping support for an exact window; never shorten a day. */ function forecastSlices(times, start, end, sourcePeriods) {
+    if (!times.length || !Number.isFinite(start) || !Number.isFinite(end) || end <= start || times.some((t, i)=>!Number.isFinite(t) || i > 0 && t <= times[i - 1])) return null;
+    const slices = [];
+    let covered = start;
+    for(let i = 0; i < times.length && times[i] < end; i++){
+        const until = supportedIntervalEnd(times, i, sourcePeriods);
+        if (until <= start) continue;
+        if (times[i] > covered) return null;
+        const from = Math.max(start, covered, times[i]), to = Math.min(end, until);
+        if (to > from) slices.push({
+            index: i,
+            from,
+            to,
+            hours: (to - from) / HOUR_MS
+        });
+        covered = Math.max(covered, to);
+        if (covered >= end) return slices;
+    }
+    return null;
+}
+
 /**
  * Windy's precipitation feed used by this plugin is normalized onto a 3-hour
  * accumulation-equivalent basis internally. Prefer the explicit past-3-hour field and
@@ -2656,7 +2710,10 @@ const METRE_WATER_KEYS = new Set([
     'past3hprecip-surface',
     'past1hprecip-surface'
 ]);
-/** Minimum normalized 3-hour-equivalent amount used for ptype diagnosis. */ const PRECIP_THRESHOLD_MM_3H = 0.1;
+/** Minimum plotting scale; positive traces still have a precipitation type. */ const PRECIP_THRESHOLD_MM_3H = 0.1;
+function isPrecipitating(value) {
+    return value !== null && Number.isFinite(value) && value > 0;
+}
 /** @deprecated Use PRECIP_THRESHOLD_MM_3H; retained for source compatibility. */ const PRECIP_THRESHOLD_MM_H = PRECIP_THRESHOLD_MM_3H;
 const precipFieldCache = new WeakMap();
 function normalizedKey(key) {
@@ -2714,12 +2771,19 @@ function toThreeHourlyMillimetres(key, raw) {
     return normalized === 'past1hprecip-surface' ? millimetres * 3 : millimetres;
 }
 /** Precipitation amount in millimetres per 3-hour-equivalent period. */ function precipMmAt(data, index) {
-    if ('__precipMm3h' in data) return valueAt(data.__precipMm3h, index);
+    if ('__precipMm3h' in data) {
+        const value = valueAt(data.__precipMm3h, index);
+        return value !== null && value >= 0 ? value : null;
+    }
     const found = findPrecipField(data);
     if (!found) return null;
     const raw = valueAt(found.field, index);
-    if (raw === null || !Number.isFinite(raw)) return null;
-    return Math.max(0, toThreeHourlyMillimetres(found.key, raw));
+    if (raw === null || !Number.isFinite(raw) || raw < 0) return null;
+    return toThreeHourlyMillimetres(found.key, raw);
+}
+/** Point/map displays obey the same source support as accumulation totals. */ function precipMmAtTime(data, times, target) {
+    const index = forecastIntervalIndex(times, target);
+    return index >= 0 && target < supportedIntervalEnd(times, index, data.__precipPeriodsH) ? precipMmAt(data, index) : null;
 }
 
 /** Qualify a model estimate without discarding its best-supported phase. */ function precipitationLabel(phase, confidence = phase.confidence) {
@@ -2852,22 +2916,6 @@ function result(key, label, icon, detail, confidence, surfaceWetBulbC, meltingDe
     return result('rain', 'Rain', '🌧', `${approximate}Melted before reaching terrain`, confidence, surfaceTw, warmDM, coldDM);
 }
 
-const HOUR_MS = 3600_000;
-/** Profile timestamps represent interval starts, never the nearest future slot. */ function forecastIntervalHours(times, index) {
-    if (index < 0 || index >= times.length) return 0;
-    const difference = index + 1 < times.length ? times[index + 1] - times[index] : index > 0 ? times[index] - times[index - 1] : 3 * HOUR_MS;
-    return Number.isFinite(difference) && difference > 0 ? Math.min(3, difference / HOUR_MS) : 0;
-}
-function forecastIntervalIndex(times, target) {
-    if (!Number.isFinite(target)) return -1;
-    for(let i = times.length - 1; i >= 0; i--){
-        if (times[i] <= target) {
-            return target < times[i] + forecastIntervalHours(times, i) * HOUR_MS ? i : -1;
-        }
-    }
-    return -1;
-}
-
 function snowlineAt(point, index, terrainM) {
     try {
         const result = wetBulbZeroHeight(buildProfile(point.forecast, index));
@@ -2966,19 +3014,7 @@ function terrainCrossingState(point, terrainM, targetTime) {
     };
 }
 
-/**
- * Estimate forecast-created NEW snow depth.
- *
- * This is intentionally not total lying snow depth. It starts from zero and
- * converts forecast liquid precipitation into a terrain-aware fresh-snow
- * estimate, then applies simple settling and melt to that forecast-created
- * layer. The result should be treated as guidance, not model snow depth.
- *
- * Precipitation is supplied as a 3-hour-equivalent liquid amount (mm/3h).
- * Callers pass the represented forecast interval in hours; the conversion
- * scales the liquid amount by dt/3 so hourly and 3-hourly sampling integrate
- * consistently.
- */ function clamp(value, min, max) {
+function clamp$1(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
 /**
@@ -3019,62 +3055,166 @@ function terrainCrossingState(point, terrainM, targetTime) {
         // shallow/weak warm layer retains more snow than a nearly fully melting
         // profile.
         const warmDM = Math.max(0, phase.meltingDegreeMetres);
-        const fraction = 0.65 - 0.50 * clamp((warmDM - 150) / (1100 - 150), 0, 1);
+        const fraction = 0.65 - 0.50 * clamp$1((warmDM - 150) / (1100 - 150), 0, 1);
         const surfaceAdjustment = tw > 0.8 ? 0.85 : 1;
-        return clamp(fraction * surfaceAdjustment, 0.10, 0.65);
+        return clamp$1(fraction * surfaceAdjustment, 0.10, 0.65);
     }
     // Ice pellets, freezing rain and rain do not contribute to NEW SNOW depth.
     return 0;
 }
-function estimateNewSnowStep(precipMm3h, phase, previousCm, hours = 1) {
-    const dt = Number.isFinite(hours) ? Math.max(0, Math.min(6, hours)) : 0;
-    if (dt === 0) return {
-        hourlyCm: 0,
-        cumulativeCm: Math.max(0, previousCm)
+/** Gross snowfall, independent of subsequent settling/melt. Ratios are heuristics. */ function snowfallInput(precipMm3h, phase, hours) {
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 3 || precipMm3h === null || !Number.isFinite(precipMm3h) || precipMm3h < 0) return null;
+    if (precipMm3h === 0) return {
+        sweMm: 0,
+        depthCm: 0
     };
-    let snowpack = Math.max(0, previousCm);
-    if (!phase) {
-        snowpack *= Math.pow(0.997, dt);
-        return {
-            hourlyCm: 0,
-            cumulativeCm: snowpack
-        };
-    }
-    const tw = phase.surfaceWetBulbC;
-    // Fresh snow compacts fastest near the melting point and more slowly in a
-    // colder boundary layer. This is deliberately modest because the plugin has
-    // no full snowpack-energy model.
-    const settlePerHour = tw >= -0.5 ? 0.010 : tw >= -3 ? 0.006 : 0.003;
-    snowpack *= Math.pow(1 - settlePerHour, dt);
-    // Simple temperature-dependent melt of forecast-created snow. This is not a
-    // substitute for a surface-energy-balance snow model, so keep it bounded.
-    if (tw > 0) {
-        const meltCmH = Math.min(1.8, 0.18 + 0.22 * tw);
-        snowpack = Math.max(0, snowpack - meltCmH * dt);
-    }
-    if (precipMm3h === null || !Number.isFinite(precipMm3h) || precipMm3h <= 0) {
-        return {
-            hourlyCm: 0,
-            cumulativeCm: snowpack
-        };
-    }
-    const slr = snowToLiquidRatio(phase);
-    const fraction = snowFraction(phase);
-    if (slr <= 0 || fraction <= 0) {
-        return {
-            hourlyCm: 0,
-            cumulativeCm: snowpack
-        };
-    }
-    // precipMm3h is a 3-hour-equivalent amount. Convert it to the represented
-    // forecast interval before applying the snow ratio and snow fraction.
-    const liquidMm = Math.max(0, precipMm3h) * (dt / 3);
-    const addedCm = liquidMm * slr * fraction / 10;
-    snowpack += addedCm;
+    if (!phase || !Number.isFinite(phase.surfaceWetBulbC)) return null;
+    const fraction = snowFraction(phase), ratio = snowToLiquidRatio(phase);
+    if (![
+        fraction,
+        ratio
+    ].every(Number.isFinite)) return null;
+    const sweMm = precipMm3h * hours / 3 * fraction;
     return {
-        hourlyCm: addedCm / dt,
-        cumulativeCm: snowpack
+        sweMm,
+        depthCm: sweMm * ratio / 10
     };
+}
+/**
+ * Lightweight sensitivity estimate, not a surface-energy-balance snow model.
+ * Settling changes volume only; melt removes equal water from SWE and outflow.
+ * Local wet-bulb temperature is a melt proxy even in dry weather. Radiation,
+ * ground heat, drifting, liquid retention and existing snow are not represented.
+ * Fixed quarter-hour substeps keep hourly/three-hourly inputs consistent.
+ */ function snowBudgetStep(precipMm3h, phase, previous, hours) {
+    const input = snowfallInput(precipMm3h, phase, hours);
+    const validState = [
+        previous.sweMm,
+        previous.depthCm
+    ].every((v)=>Number.isFinite(v) && v >= 0) && previous.sweMm === 0 === (previous.depthCm === 0);
+    const invalid = {
+        layer: {
+            ...previous
+        },
+        snowfallCm: 0,
+        snowfallSweMm: 0,
+        meltMm: 0,
+        complete: false
+    };
+    if (!input || !validState) return invalid;
+    // A missing thermal profile cannot support evolution of a non-empty layer.
+    if ((!phase || !Number.isFinite(phase.surfaceWetBulbC)) && previous.sweMm > 0) return invalid;
+    let sweMm = previous.sweMm, depthCm = previous.depthCm, meltMm = 0;
+    const tw = phase?.surfaceWetBulbC ?? 0;
+    const settle = tw >= -0.5 ? 0.010 : tw >= -3 ? 0.006 : 0.003;
+    // Provisional degree-hour coefficient in mm SWE / (degree C hour).
+    const meltRate = Math.min(2, 0.25 * Math.max(0, tw));
+    const n = Math.ceil(hours / 0.25), dt = hours / n;
+    for(let i = 0; i < n; i++){
+        sweMm += input.sweMm / n;
+        depthCm += input.depthCm / n;
+        const melt = Math.min(sweMm, meltRate * dt);
+        if (sweMm > 0) depthCm *= (sweMm - melt) / sweMm;
+        sweMm -= melt;
+        meltMm += melt;
+        depthCm *= Math.exp(-settle * dt);
+        // Bound compaction at 450 kg/m³; it must never destroy water mass.
+        depthCm = sweMm > 0 ? Math.max(depthCm, sweMm * 100 / 450) : 0;
+    }
+    return {
+        layer: {
+            sweMm,
+            depthCm
+        },
+        snowfallCm: input.depthCm,
+        snowfallSweMm: input.sweMm,
+        meltMm,
+        complete: true
+    };
+}
+
+// Derived only once per forecast object / terrain; time-slider changes need no new profiles.
+const cache$1 = new WeakMap();
+function buildSnowForecast(point, terrainM) {
+    const key = terrainM !== null && Number.isFinite(terrainM) ? terrainM : NaN;
+    let terrains = cache$1.get(point.forecast);
+    const existing = terrains?.get(key);
+    if (existing && existing.times === point.times) return existing;
+    const amounts = point.times.map((_, i)=>precipMmAt(point.forecast, i));
+    const thermalPhases = point.times.map((_, i)=>Number.isFinite(key) ? terrainPrecipitationType(buildProfile(point.forecast, i), key) : null);
+    const sourcePeriods = point.forecast.__precipPeriodsH;
+    const ends = point.times.map((_, i)=>supportedIntervalEnd(point.times, i, sourcePeriods));
+    const cumulativeSnowfallCm = [];
+    let prefix = 0, running = 0;
+    for(let i = 0; i < point.times.length; i++){
+        const hours = (ends[i] - point.times[i]) / HOUR_MS;
+        const input = snowfallInput(amounts[i], thermalPhases[i], hours);
+        if (i !== prefix || !input || !Number.isFinite(point.times[i]) || i > 0 && (point.times[i] <= point.times[i - 1] || point.times[i] > ends[i - 1])) break;
+        running += input.depthCm;
+        cumulativeSnowfallCm.push(running);
+        prefix++;
+    }
+    const result = {
+        times: point.times,
+        amounts,
+        thermalPhases,
+        sourcePeriods,
+        cumulativeSnowfallCm,
+        prefix,
+        ends
+    };
+    if (!terrains) {
+        terrains = new Map();
+        cache$1.set(point.forecast, terrains);
+    }
+    terrains.set(key, result);
+    while(terrains.size > 4)terrains.delete(terrains.keys().next().value);
+    return result;
+}
+/** Shared by graph, event and exports. Snowfall and remaining layer are distinct. */ function snowForecastWindow(series, start, end) {
+    const missing = {
+        snowfallCm: null,
+        snowfallSweMm: null,
+        remainingLayerCm: null,
+        remainingSweMm: null,
+        meltMm: null,
+        complete: false
+    };
+    const slices = forecastSlices(series.times, start, end, series.sourcePeriods);
+    if (!slices) return missing;
+    let snowfallCm = 0, snowfallSweMm = 0, meltMm = 0;
+    let layer = {
+        sweMm: 0,
+        depthCm: 0
+    }, retentionKnown = true;
+    for (const slice of slices){
+        const p = series.amounts[slice.index], phase = series.thermalPhases[slice.index];
+        const input = snowfallInput(p, phase, slice.hours);
+        if (!input) return missing;
+        snowfallCm += input.depthCm;
+        snowfallSweMm += input.sweMm;
+        if (retentionKnown) {
+            const step = snowBudgetStep(p, phase, layer, slice.hours);
+            retentionKnown = step.complete;
+            if (retentionKnown) {
+                layer = step.layer;
+                meltMm += step.meltMm;
+            }
+        }
+    }
+    return {
+        snowfallCm,
+        snowfallSweMm,
+        remainingLayerCm: retentionKnown ? layer.depthCm : null,
+        remainingSweMm: retentionKnown ? layer.sweMm : null,
+        meltMm: retentionKnown ? meltMm : null,
+        complete: true
+    };
+}
+/** Cumulative gross snowfall at the inspected time, without future interval leakage. */ function snowfallAtTime(series, time) {
+    if (!series.times.length || !Number.isFinite(time) || time < series.times[0]) return null;
+    if (time === series.times[0]) return series.prefix ? 0 : null;
+    return snowForecastWindow(series, series.times[0], time).snowfallCm;
 }
 
 const MAX_EVENT_GAP_HOURS = 3;
@@ -3090,17 +3230,12 @@ const CONFIDENCE_SCORE = {
     medium: 2,
     high: 3
 };
-function diagnosedPhase(point, index, terrainM) {
-    const precip = precipMmAt(point.forecast, index);
-    if (precip === null || precip < PRECIP_THRESHOLD_MM_H) return null;
-    return terrainPrecipitationType(buildProfile(point.forecast, index), terrainM);
-}
 function aggregateConfidence(event) {
     let weight = 0;
     let score = 0;
     let lowWeight = 0;
     for (const step of event){
-        const w = Math.max(step.precip, PRECIP_THRESHOLD_MM_H);
+        const w = step.precip;
         weight += w;
         score += CONFIDENCE_SCORE[step.phase.confidence] * w;
         if (step.phase.confidence === 'low') lowWeight += w;
@@ -3114,20 +3249,23 @@ function aggregateConfidence(event) {
 /** Summarise the next terrain-relevant wintry precipitation event. */ function nextWintryEvent(point, terrainM, fromTime, horizonHours = 144) {
     if (!point?.times?.length || terrainM === null || !Number.isFinite(terrainM)) return null;
     const times = point.times;
+    const series = buildSnowForecast(point, terrainM);
     const horizonEnd = Math.min(times[0] + 144 * 3600_000, times.at(-1) + forecastIntervalHours(times, times.length - 1) * 3600_000, fromTime + horizonHours * 3600_000);
     const qualifying = [];
     for(let i = 0; i < times.length && times[i] < horizonEnd; i++){
-        const intervalEnd = times[i] + forecastIntervalHours(times, i) * 3600_000;
+        const intervalEnd = supportedIntervalEnd(times, i, series.sourcePeriods);
         if (intervalEnd <= fromTime) continue;
-        const precip = precipMmAt(point.forecast, i);
-        if (precip === null || precip < PRECIP_THRESHOLD_MM_H) continue;
-        const phase = diagnosedPhase(point, i, terrainM);
+        const precip = series.amounts[i];
+        if (!isPrecipitating(precip)) continue;
+        const phase = series.thermalPhases[i];
         if (!phase || !WINTRY_KEYS.has(phase.key)) continue;
-        qualifying.push({
+        const hours = Math.max(0, Math.min(horizonEnd, intervalEnd) - Math.max(fromTime, times[i])) / 3600_000;
+        if (hours > 0) qualifying.push({
             index: i,
             time: times[i],
             precip,
-            phase
+            phase,
+            liquidMm: precip * hours / 3
         });
     }
     if (!qualifying.length) return null;
@@ -3141,7 +3279,7 @@ function aggregateConfidence(event) {
     }
     const startTime = event[0].time;
     const last = event[event.length - 1];
-    const endTime = Math.min(horizonEnd, last.time + forecastIntervalHours(times, last.index) * 3600_000);
+    const endTime = Math.min(horizonEnd, supportedIntervalEnd(times, last.index, series.sourcePeriods));
     let peak = event[0];
     let minSnowlineM = null;
     const phaseWeights = new Map();
@@ -3151,7 +3289,7 @@ function aggregateConfidence(event) {
         if (snowline !== null && Number.isFinite(snowline)) minSnowlineM = minSnowlineM === null ? snowline : Math.min(minSnowlineM, snowline);
         const current = phaseWeights.get(step.phase.key);
         phaseWeights.set(step.phase.key, {
-            weight: (current?.weight ?? 0) + Math.max(step.precip, PRECIP_THRESHOLD_MM_H),
+            weight: (current?.weight ?? 0) + step.liquidMm,
             phase: current?.phase ?? step.phase
         });
     }
@@ -3163,37 +3301,30 @@ function aggregateConfidence(event) {
             dominant = value.phase;
         }
     }
-    let snowpack = 0;
-    let incomplete = false;
-    const startIndex = event[0].index;
-    const endIndex = event[event.length - 1].index;
-    for(let i = startIndex; i <= endIndex; i++){
-        const phase = diagnosedPhase(point, i, terrainM);
-        const precip = precipMmAt(point.forecast, i);
-        const intervalStart = Math.max(fromTime, times[i]);
-        const intervalEnd = Math.min(endTime, times[i] + forecastIntervalHours(times, i) * 3600_000);
-        const dt = (intervalEnd - intervalStart) / 3600_000;
-        if (dt <= 0) continue;
-        if (precip === null || precip >= PRECIP_THRESHOLD_MM_H && !phase) incomplete = true;
-        snowpack = estimateNewSnowStep(precip, phase, snowpack, dt).cumulativeCm;
-    }
+    const snow = snowForecastWindow(series, Math.max(fromTime, startTime), endTime);
+    // Do not present an event cut off by missing data as a complete storm total.
+    const following = last.index + 1;
+    const boundaryKnown = endTime >= horizonEnd || following < times.length && times[following] === endTime && series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null) && supportedIntervalEnd(times, following, series.sourcePeriods) > endTime;
     return {
         startTime,
         endTime,
         peakTime: peak.time,
         peakPrecipMm3h: peak.precip,
         minSnowlineM: minSnowlineM === null ? null : Math.round(minSnowlineM / 10) * 10,
-        newSnowCm: snowpack,
+        newSnowCm: snow.snowfallCm ?? 0,
         dominantPhase: dominant,
-        confidence: aggregateConfidence(event),
+        confidence: aggregateConfidence(event.map((step)=>({
+                precip: step.liquidMm,
+                phase: step.phase
+            }))),
         activeNow: fromTime >= startTime && fromTime < endTime,
-        incomplete
+        incomplete: !snow.complete || !boundaryKnown
     };
 }
 
 function conditionLabel(precip, phase) {
-    if (precip === null || !Number.isFinite(precip)) return 'Precipitation unavailable';
-    if (precip < PRECIP_THRESHOLD_MM_3H) return 'Dry';
+    if (precip === null || !Number.isFinite(precip) || precip < 0) return 'Precipitation unavailable';
+    if (precip === 0) return 'Dry';
     return phase ? precipitationLabel(phase) : 'Precipitation · type uncertain';
 }
 /** Absence of an event is only meaningful over intervals we could classify. */ function noEventMessage(point, terrainM, fromTime) {
@@ -3206,10 +3337,10 @@ function conditionLabel(precip, phase) {
         return coveredUntil > fromTime ? `No wintry precipitation for ${hours > 0 ? hours : '<1'} h` : 'Outlook unavailable · forecast data missing';
     };
     for(let i = 0; i < point.times.length && point.times[i] < end; i++){
-        const start = point.times[i], intervalEnd = Math.min(end, start + forecastIntervalHours(point.times, i) * 3600_000);
+        const start = point.times[i], intervalEnd = Math.min(end, supportedIntervalEnd(point.times, i, point.forecast.__precipPeriodsH));
         if (intervalEnd <= fromTime) continue;
         const precip = precipMmAt(point.forecast, i);
-        if (start > coveredUntil || precip === null || precip >= PRECIP_THRESHOLD_MM_3H && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM)) {
+        if (start > coveredUntil || intervalEnd <= start || precip === null || isPrecipitating(precip) && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM)) {
             return partialOutlook();
         }
         coveredUntil = intervalEnd;
@@ -3217,38 +3348,48 @@ function conditionLabel(precip, phase) {
     return coveredUntil >= end ? 'No wintry precipitation in the available forecast' : partialOutlook();
 }
 
-const HOUR = 3600_000;
-/** Reject malformed axes instead of shifting weather values onto other times. */ function buildForecastTimes(data, refTime) {
-    const length = Number(data.hours?.length);
-    if (!Number.isInteger(length) || length <= 0) return [];
-    const times = [];
-    for(let i = 0; i < length; i++){
-        const raw = valueAt(data.hours, i);
-        if (raw === null) return [];
-        const time = raw > 1e12 ? raw : raw > 1e9 ? raw * 1000 : refTime === null ? NaN : refTime + raw * HOUR;
-        if (!Number.isFinite(time) || i > 0 && time <= times[i - 1]) return [];
-        times.push(time);
-    }
-    return times.filter((time)=>time <= times[0] + 144 * HOUR);
+/** Broad central difference, deliberately independent of the map's pixel zoom. */ function terrainSlopes(west, east, south, north, halfSpanM = 2000) {
+    if (![
+        west,
+        east,
+        south,
+        north
+    ].every((v)=>v !== null && Number.isFinite(v)) || !Number.isFinite(halfSpanM) || halfSpanM < 1000) return null;
+    return {
+        east: (east - west) / (2 * halfSpanM),
+        north: (north - south) / (2 * halfSpanM),
+        halfSpanM
+    };
 }
-function intervalEnd(times, index) {
-    return Math.min(times[0] + 144 * HOUR, times[index] + forecastIntervalHours(times, index) * HOUR);
-}
-/** A total for a requested window requires continuous, known intervals. */ function coversWindow(times, known, start, end) {
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return false;
-    let covered = start;
-    for(let i = 0; i < times.length && times[i] < end; i++){
-        const until = intervalEnd(times, i);
-        if (until <= start) continue;
-        if (times[i] > covered || !known[i]) return false;
-        covered = Math.max(covered, until);
-        if (covered >= end) return true;
+/** Kinematic exposure diagnostic only. This is not model vertical velocity or QPF. */ function terrainFlow(forecast, index, terrainM, slopes) {
+    if (terrainM === null || !Number.isFinite(terrainM) || !slopes || ![
+        slopes.east,
+        slopes.north,
+        slopes.halfSpanM
+    ].every(Number.isFinite) || slopes.halfSpanM < 1000) return null;
+    // Never take a fixed pressure level that may be below the actual mountain.
+    const candidates = buildProfile(forecast, index).filter((p)=>p.heightM >= terrainM + 200 && p.heightM <= terrainM + 2000).sort((a, b)=>Math.abs(a.heightM - terrainM - 1000) - Math.abs(b.heightM - terrainM - 1000));
+    for (const p of candidates){
+        const u = valueAt(forecast[`wind_u-${p.level}`], index), v = valueAt(forecast[`wind_v-${p.level}`], index);
+        if (u === null || v === null || !Number.isFinite(p.tempC) || !Number.isFinite(p.dewpointC)) continue;
+        const es = (t)=>Math.exp(17.67 * t / (t + 243.5));
+        const relativeHumidity = Math.max(0, Math.min(100, 100 * es(Math.min(p.tempC, p.dewpointC)) / es(p.tempC)));
+        const upliftProxyMs = u * slopes.east + v * slopes.north;
+        if (!Number.isFinite(relativeHumidity) || !Number.isFinite(upliftProxyMs)) return null;
+        return {
+            upliftProxyMs,
+            relativeHumidity,
+            windSpeedMs: Math.hypot(u, v),
+            heightAboveTerrainM: p.heightM - terrainM,
+            level: p.level,
+            direction: Math.abs(upliftProxyMs) < 0.05 ? 'Weak/cross-slope' : upliftProxyMs > 0 ? 'Upslope' : 'Downslope'
+        };
     }
-    return false;
+    return null;
 }
 
 /** A cumulative estimate is supported only up to the first unknown interval. */ function forecastCoverage(precip, phases, times) {
-    const known = precip.map((value, i)=>value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(times[i]) && (value < PRECIP_THRESHOLD_MM_3H || phases[i] != null));
+    const known = precip.map((value, i)=>value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(times[i]) && (value === 0 || phases[i] != null));
     let prefix = 0;
     while(prefix < known.length && known[prefix] && (prefix === 0 || times[prefix] > times[prefix - 1] && times[prefix] - times[prefix - 1] <= 3 * 3600_000))prefix++;
     const complete = known.length > 0 && prefix === known.length;
@@ -3270,28 +3411,18 @@ function intervalEnd(times, index) {
         mm: null,
         complete: false
     };
-    if (!times.length || !Number.isFinite(start) || !Number.isFinite(end) || end <= start || times.some((t, i)=>!Number.isFinite(t) || i > 0 && t <= times[i - 1])) return unavailable;
-    const periods = Array.isArray(sourcePeriods) ? sourcePeriods : null;
-    let covered = start, total = 0;
-    for(let i = 0; i < times.length && times[i] < end; i++){
-        const represented = forecastIntervalHours(times, i), source = periods ? periods[i] : represented;
-        if (typeof source !== 'number' || !Number.isFinite(source) || source <= 0 || source > 3) {
-            if (times[i] >= start) return unavailable;
-            continue;
-        }
-        const until = Math.min(times[0] + 144 * 3600_000, times[i] + Math.min(represented, source) * 3600_000);
-        if (until <= start) continue;
-        const value = amounts[i];
-        if (times[i] > covered || value === null || value === undefined || !Number.isFinite(value) || value < 0) return unavailable;
-        const from = Math.max(start, covered, times[i]), to = Math.min(end, until);
-        if (to > from) total += value * (to - from) / (3 * 3600_000);
-        covered = Math.max(covered, to);
-        if (covered >= end) return {
-            mm: total,
-            complete: true
-        };
+    const slices = forecastSlices(times, start, end, sourcePeriods);
+    if (!slices) return unavailable;
+    let total = 0;
+    for (const slice of slices){
+        const value = amounts[slice.index];
+        if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return unavailable;
+        total += value * slice.hours / 3;
     }
-    return unavailable;
+    return {
+        mm: total,
+        complete: true
+    };
 }
 
 function saturationVapourPressure(tempC) {
@@ -3377,19 +3508,19 @@ function add_css$2(target) {
 
 function get_each_context$1(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[48] = list[i];
+	child_ctx[49] = list[i];
 	return child_ctx;
 }
 
 function get_each_context_1$1(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[51] = list[i];
+	child_ctx[52] = list[i];
 	return child_ctx;
 }
 
 function get_each_context_2$1(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[51] = list[i];
+	child_ctx[52] = list[i];
 	return child_ctx;
 }
 
@@ -3971,8 +4102,8 @@ function create_each_block_2$1(ctx) {
 	let text_1;
 
 	let t0_value = (/*units*/ ctx[2] === 'imperial'
-	? Math.round(/*g*/ ctx[51].value * 9 / 5 + 32)
-	: /*g*/ ctx[51].value) + "";
+	? Math.round(/*g*/ ctx[52].value * 9 / 5 + 32)
+	: /*g*/ ctx[52].value) + "";
 
 	let t0;
 	let t1;
@@ -3984,13 +4115,13 @@ function create_each_block_2$1(ctx) {
 			text_1 = svg_element("text");
 			t0 = text(t0_value);
 			t1 = text("°");
-			attr(line, "x1", line_x__value = /*g*/ ctx[51].x);
-			attr(line, "x2", line_x__value_1 = /*g*/ ctx[51].x);
+			attr(line, "x1", line_x__value = /*g*/ ctx[52].x);
+			attr(line, "x2", line_x__value_1 = /*g*/ ctx[52].x);
 			attr(line, "y1", "22");
 			attr(line, "y2", "342");
 			attr(line, "class", "temp-grid svelte-1jsw3cb");
-			toggle_class(line, "zero", /*g*/ ctx[51].value === 0);
-			attr(text_1, "x", text_1_x_value = /*g*/ ctx[51].x);
+			toggle_class(line, "zero", /*g*/ ctx[52].value === 0);
+			attr(text_1, "x", text_1_x_value = /*g*/ ctx[52].x);
 			attr(text_1, "y", "360");
 			attr(text_1, "text-anchor", "middle");
 			attr(text_1, "class", "axis svelte-1jsw3cb");
@@ -4002,23 +4133,23 @@ function create_each_block_2$1(ctx) {
 			append(text_1, t1);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*sounding*/ 8 && line_x__value !== (line_x__value = /*g*/ ctx[51].x)) {
+			if (dirty[0] & /*sounding*/ 8 && line_x__value !== (line_x__value = /*g*/ ctx[52].x)) {
 				attr(line, "x1", line_x__value);
 			}
 
-			if (dirty[0] & /*sounding*/ 8 && line_x__value_1 !== (line_x__value_1 = /*g*/ ctx[51].x)) {
+			if (dirty[0] & /*sounding*/ 8 && line_x__value_1 !== (line_x__value_1 = /*g*/ ctx[52].x)) {
 				attr(line, "x2", line_x__value_1);
 			}
 
 			if (dirty[0] & /*sounding*/ 8) {
-				toggle_class(line, "zero", /*g*/ ctx[51].value === 0);
+				toggle_class(line, "zero", /*g*/ ctx[52].value === 0);
 			}
 
 			if (dirty[0] & /*units, sounding*/ 12 && t0_value !== (t0_value = (/*units*/ ctx[2] === 'imperial'
-			? Math.round(/*g*/ ctx[51].value * 9 / 5 + 32)
-			: /*g*/ ctx[51].value) + "")) set_data(t0, t0_value);
+			? Math.round(/*g*/ ctx[52].value * 9 / 5 + 32)
+			: /*g*/ ctx[52].value) + "")) set_data(t0, t0_value);
 
-			if (dirty[0] & /*sounding*/ 8 && text_1_x_value !== (text_1_x_value = /*g*/ ctx[51].x)) {
+			if (dirty[0] & /*sounding*/ 8 && text_1_x_value !== (text_1_x_value = /*g*/ ctx[52].x)) {
 				attr(text_1, "x", text_1_x_value);
 			}
 		},
@@ -4037,7 +4168,7 @@ function create_each_block_1$1(ctx) {
 	let line_y__value;
 	let line_y__value_1;
 	let text_1;
-	let t_value = /*g*/ ctx[51].label + "";
+	let t_value = /*g*/ ctx[52].label + "";
 	let t;
 	let text_1_y_value;
 
@@ -4048,11 +4179,11 @@ function create_each_block_1$1(ctx) {
 			t = text(t_value);
 			attr(line, "x1", "48");
 			attr(line, "x2", "310");
-			attr(line, "y1", line_y__value = /*g*/ ctx[51].y);
-			attr(line, "y2", line_y__value_1 = /*g*/ ctx[51].y);
+			attr(line, "y1", line_y__value = /*g*/ ctx[52].y);
+			attr(line, "y2", line_y__value_1 = /*g*/ ctx[52].y);
 			attr(line, "class", "pressure-grid svelte-1jsw3cb");
 			attr(text_1, "x", "42");
-			attr(text_1, "y", text_1_y_value = /*g*/ ctx[51].y + 3);
+			attr(text_1, "y", text_1_y_value = /*g*/ ctx[52].y + 3);
 			attr(text_1, "text-anchor", "end");
 			attr(text_1, "class", "axis svelte-1jsw3cb");
 		},
@@ -4062,17 +4193,17 @@ function create_each_block_1$1(ctx) {
 			append(text_1, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*sounding*/ 8 && line_y__value !== (line_y__value = /*g*/ ctx[51].y)) {
+			if (dirty[0] & /*sounding*/ 8 && line_y__value !== (line_y__value = /*g*/ ctx[52].y)) {
 				attr(line, "y1", line_y__value);
 			}
 
-			if (dirty[0] & /*sounding*/ 8 && line_y__value_1 !== (line_y__value_1 = /*g*/ ctx[51].y)) {
+			if (dirty[0] & /*sounding*/ 8 && line_y__value_1 !== (line_y__value_1 = /*g*/ ctx[52].y)) {
 				attr(line, "y2", line_y__value_1);
 			}
 
-			if (dirty[0] & /*sounding*/ 8 && t_value !== (t_value = /*g*/ ctx[51].label + "")) set_data(t, t_value);
+			if (dirty[0] & /*sounding*/ 8 && t_value !== (t_value = /*g*/ ctx[52].label + "")) set_data(t, t_value);
 
-			if (dirty[0] & /*sounding*/ 8 && text_1_y_value !== (text_1_y_value = /*g*/ ctx[51].y + 3)) {
+			if (dirty[0] & /*sounding*/ 8 && text_1_y_value !== (text_1_y_value = /*g*/ ctx[52].y + 3)) {
 				attr(text_1, "y", text_1_y_value);
 			}
 		},
@@ -4240,12 +4371,12 @@ function create_each_block$1(ctx) {
 		c() {
 			circle0 = svg_element("circle");
 			circle1 = svg_element("circle");
-			attr(circle0, "cx", circle0_cx_value = /*n*/ ctx[48].tx);
-			attr(circle0, "cy", circle0_cy_value = /*n*/ ctx[48].y);
+			attr(circle0, "cx", circle0_cx_value = /*n*/ ctx[49].tx);
+			attr(circle0, "cy", circle0_cy_value = /*n*/ ctx[49].y);
 			attr(circle0, "r", "2.1");
 			attr(circle0, "class", "temp-dot svelte-1jsw3cb");
-			attr(circle1, "cx", circle1_cx_value = /*n*/ ctx[48].dx);
-			attr(circle1, "cy", circle1_cy_value = /*n*/ ctx[48].y);
+			attr(circle1, "cx", circle1_cx_value = /*n*/ ctx[49].dx);
+			attr(circle1, "cy", circle1_cy_value = /*n*/ ctx[49].y);
 			attr(circle1, "r", "2");
 			attr(circle1, "class", "dew-dot svelte-1jsw3cb");
 		},
@@ -4254,19 +4385,19 @@ function create_each_block$1(ctx) {
 			insert(target, circle1, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*sounding*/ 8 && circle0_cx_value !== (circle0_cx_value = /*n*/ ctx[48].tx)) {
+			if (dirty[0] & /*sounding*/ 8 && circle0_cx_value !== (circle0_cx_value = /*n*/ ctx[49].tx)) {
 				attr(circle0, "cx", circle0_cx_value);
 			}
 
-			if (dirty[0] & /*sounding*/ 8 && circle0_cy_value !== (circle0_cy_value = /*n*/ ctx[48].y)) {
+			if (dirty[0] & /*sounding*/ 8 && circle0_cy_value !== (circle0_cy_value = /*n*/ ctx[49].y)) {
 				attr(circle0, "cy", circle0_cy_value);
 			}
 
-			if (dirty[0] & /*sounding*/ 8 && circle1_cx_value !== (circle1_cx_value = /*n*/ ctx[48].dx)) {
+			if (dirty[0] & /*sounding*/ 8 && circle1_cx_value !== (circle1_cx_value = /*n*/ ctx[49].dx)) {
 				attr(circle1, "cx", circle1_cx_value);
 			}
 
-			if (dirty[0] & /*sounding*/ 8 && circle1_cy_value !== (circle1_cy_value = /*n*/ ctx[48].y)) {
+			if (dirty[0] & /*sounding*/ 8 && circle1_cy_value !== (circle1_cy_value = /*n*/ ctx[49].y)) {
 				attr(circle1, "cy", circle1_cy_value);
 			}
 		},
@@ -4711,6 +4842,10 @@ function instance$3($$self, $$props, $$invalidate) {
 		window.removeEventListener('pointermove', dragMove);
 	}
 
+	function keepSoundingVisible() {
+		if (!embedded) $$invalidate(7, position = clampPosition(position.x, position.y));
+	}
+
 	function zoomAround(value, clientX, clientY) {
 		if (!viewport) {
 			$$invalidate(8, zoom = clampZoom(value));
@@ -5011,8 +5146,8 @@ function instance$3($$self, $$props, $$invalidate) {
 		? y(snowlineM)
 		: null;
 
-		const precip = precipMmAt(p.forecast, idx);
-		const hasPrecip = precip !== null && precip >= PRECIP_THRESHOLD_MM_H;
+		const precip = precipMmAtTime(p.forecast, p.times, target);
+		const hasPrecip = isPrecipitating(precip);
 
 		const diagnostics = terrain !== null && Number.isFinite(terrain)
 		? terrainDiagnostics(profile, terrain)
@@ -5052,6 +5187,8 @@ function instance$3($$self, $$props, $$invalidate) {
 	}
 
 	onMount(() => {
+		window.addEventListener('resize', keepSoundingVisible);
+
 		if (!embedded) {
 			const width = Math.min(390, window.innerWidth - 12);
 
@@ -5075,6 +5212,7 @@ function instance$3($$self, $$props, $$invalidate) {
 	});
 
 	onDestroy(() => {
+		window.removeEventListener('resize', keepSoundingVisible);
 		plotPointers.clear();
 		window.removeEventListener('pointermove', dragMove);
 		window.removeEventListener('pointerup', stopDrag);
@@ -5202,24 +5340,24 @@ function add_css$1(target) {
 
 function get_each_context(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[45] = list[i];
+	child_ctx[47] = list[i];
 	return child_ctx;
 }
 
 function get_each_context_1(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[48] = list[i];
+	child_ctx[50] = list[i];
 	return child_ctx;
 }
 
 function get_each_context_2(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[51] = list[i];
+	child_ctx[53] = list[i];
 	return child_ctx;
 }
 
 // (9:6) {#if tab === 'graph' && showNow}
-function create_if_block_23(ctx) {
+function create_if_block_24(ctx) {
 	let button;
 	let mounted;
 	let dispose;
@@ -5237,7 +5375,7 @@ function create_if_block_23(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*resetToNow*/ ctx[19]);
+				dispose = listen(button, "click", /*resetToNow*/ ctx[20]);
 				mounted = true;
 			}
 		},
@@ -5254,7 +5392,7 @@ function create_if_block_23(ctx) {
 }
 
 // (10:6) {#if tab === 'graph' && chart}
-function create_if_block_22(ctx) {
+function create_if_block_23(ctx) {
 	let button;
 	let t_value = (/*pngBusy*/ ctx[7] ? 'Saving…' : 'Save image') + "";
 	let t;
@@ -5274,7 +5412,7 @@ function create_if_block_22(ctx) {
 			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*downloadPng*/ ctx[21]);
+				dispose = listen(button, "click", /*downloadPng*/ ctx[22]);
 				mounted = true;
 			}
 		},
@@ -5296,7 +5434,7 @@ function create_if_block_22(ctx) {
 	};
 }
 
-// (131:2) {:else}
+// (134:2) {:else}
 function create_else_block_5(ctx) {
 	let soundingchart;
 	let current;
@@ -5388,7 +5526,7 @@ function create_if_block$1(ctx) {
 	};
 }
 
-// (128:2) {:else}
+// (131:2) {:else}
 function create_else_block_4(ctx) {
 	let div;
 
@@ -5509,26 +5647,37 @@ function create_if_block_1$1(ctx) {
 	let t30;
 	let t31;
 	let t32;
+	let span4;
+	let t33;
+	let t34_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "";
+	let t34;
+	let t35;
+	let t36_value = formatSnow(/*chart*/ ctx[12].remainingSnow24h, /*units*/ ctx[4]) + "";
+	let t36;
+	let t37;
+	let small2;
+	let t39;
+	let t40;
 	let div5;
 	let b4;
 
-	let t33_value = ((/*event*/ ctx[13]?.activeNow)
+	let t41_value = ((/*event*/ ctx[13]?.activeNow)
 	? 'Current wintry period'
 	: 'Next wintry period') + "";
 
-	let t33;
-	let t34;
-	let t35;
-	let t36;
-	let t37;
-	let if_block14_anchor;
+	let t41;
+	let t42;
+	let t43;
+	let t44;
+	let t45;
+	let if_block15_anchor;
 	let mounted;
 	let dispose;
-	let if_block0 = /*chart*/ ctx[12].terrainY !== null && create_if_block_21(ctx);
-	let if_block1 = show_if && create_if_block_20();
+	let if_block0 = /*chart*/ ctx[12].terrainY !== null && create_if_block_22(ctx);
+	let if_block1 = show_if && create_if_block_21();
 
 	function select_block_type_2(ctx, dirty) {
-		if (/*chart*/ ctx[12].hasPrecip) return create_if_block_19;
+		if (/*chart*/ ctx[12].hasPrecip) return create_if_block_20;
 		return create_else_block_3;
 	}
 
@@ -5542,15 +5691,15 @@ function create_if_block_1$1(ctx) {
 	}
 
 	function select_block_type_3(ctx, dirty) {
-		if (/*chart*/ ctx[12].newSnowMax > 0.05) return create_if_block_18;
+		if (/*chart*/ ctx[12].newSnowMax > 0.05) return create_if_block_19;
 		return create_else_block_2$1;
 	}
 
 	let current_block_type_1 = select_block_type_3(ctx);
 	let if_block3 = current_block_type_1(ctx);
-	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_17(ctx);
-	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_16(ctx);
-	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_15(ctx);
+	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_18(ctx);
+	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_17(ctx);
+	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_16(ctx);
 	let each_value = ensure_array_like([24, 48, 72, 96, 120, 144]);
 	let each_blocks = [];
 
@@ -5558,17 +5707,18 @@ function create_if_block_1$1(ctx) {
 		each_blocks[i] = create_each_block(get_each_context(ctx, each_value, i));
 	}
 
-	let if_block7 = /*tooltip*/ ctx[11] && create_if_block_12$1(ctx);
+	let if_block7 = /*tooltip*/ ctx[11] && create_if_block_13$1(ctx);
 
 	function select_block_type_4(ctx, dirty) {
-		if (/*chart*/ ctx[12].currentPhase) return create_if_block_11$1;
+		if (/*chart*/ ctx[12].currentPhase) return create_if_block_12$1;
 		return create_else_block_1$1;
 	}
 
 	let current_block_type_2 = select_block_type_4(ctx);
 	let if_block8 = current_block_type_2(ctx);
-	let if_block9 = /*chart*/ ctx[12].currentPosition && create_if_block_10$1(ctx);
-	let if_block10 = /*chart*/ ctx[12].precip24h === null && create_if_block_9$1();
+	let if_block9 = /*chart*/ ctx[12].currentPosition && create_if_block_11$1(ctx);
+	let if_block10 = /*chart*/ ctx[12].precip24h === null && create_if_block_10$1();
+	let if_block11 = /*flow*/ ctx[14] && create_if_block_9$1(ctx);
 
 	function select_block_type_5(ctx, dirty) {
 		if (/*event*/ ctx[13]) return create_if_block_5$1;
@@ -5576,10 +5726,10 @@ function create_if_block_1$1(ctx) {
 	}
 
 	let current_block_type_3 = select_block_type_5(ctx);
-	let if_block11 = current_block_type_3(ctx);
-	let if_block12 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
-	let if_block13 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
-	let if_block14 = /*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
+	let if_block12 = current_block_type_3(ctx);
+	let if_block13 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
+	let if_block14 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
+	let if_block15 = /*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
 
 	return {
 		c() {
@@ -5636,7 +5786,7 @@ function create_if_block_1$1(ctx) {
 			text11 = svg_element("text");
 			t13 = text("Freezing rain");
 			text12 = svg_element("text");
-			t14 = text("NEW SNOW ");
+			t14 = text("SNOWFALL TOTAL ");
 			tspan2 = svg_element("tspan");
 			t15 = text(t15_value);
 			rect9 = svg_element("rect");
@@ -5688,18 +5838,29 @@ function create_if_block_1$1(ctx) {
 			t30 = text(t30_value);
 			t31 = text(" · liquid equivalent");
 			t32 = space();
+			span4 = element("span");
+			t33 = text("Snowfall: ");
+			t34 = text(t34_value);
+			t35 = text(" · remaining layer*: ");
+			t36 = text(t36_value);
+			t37 = space();
+			small2 = element("small");
+			small2.textContent = "*Experimental settling/melt estimate; excludes existing snow and ground heat.";
+			t39 = space();
+			if (if_block11) if_block11.c();
+			t40 = space();
 			div5 = element("div");
 			b4 = element("b");
-			t33 = text(t33_value);
-			t34 = space();
-			if_block11.c();
-			t35 = space();
-			if (if_block12) if_block12.c();
-			t36 = space();
+			t41 = text(t41_value);
+			t42 = space();
+			if_block12.c();
+			t43 = space();
 			if (if_block13) if_block13.c();
-			t37 = space();
+			t44 = space();
 			if (if_block14) if_block14.c();
-			if_block14_anchor = empty();
+			t45 = space();
+			if (if_block15) if_block15.c();
+			if_block15_anchor = empty();
 			attr(tspan0, "class", "svelte-1q22nou");
 			attr(text0, "x", "42");
 			attr(text0, "y", "11");
@@ -5847,6 +6008,7 @@ function create_if_block_1$1(ctx) {
 			attr(b3, "class", "svelte-1q22nou");
 			attr(span2, "class", "svelte-1q22nou");
 			attr(span3, "class", "svelte-1q22nou");
+			attr(span4, "class", "svelte-1q22nou");
 			attr(div4, "class", "outlook24 svelte-1q22nou");
 			attr(div4, "aria-label", "Next 24 hours precipitation");
 			attr(b4, "class", "svelte-1q22nou");
@@ -5927,7 +6089,7 @@ function create_if_block_1$1(ctx) {
 				}
 			}
 
-			/*svg_binding*/ ctx[26](svg);
+			/*svg_binding*/ ctx[28](svg);
 			append(div0, t16);
 			if (if_block7) if_block7.m(div0, null);
 			insert(target, t17, anchor);
@@ -5959,25 +6121,35 @@ function create_if_block_1$1(ctx) {
 			append(div4, span3);
 			append(span3, t30);
 			append(span3, t31);
-			insert(target, t32, anchor);
+			append(div4, t32);
+			append(div4, span4);
+			append(span4, t33);
+			append(span4, t34);
+			append(span4, t35);
+			append(span4, t36);
+			append(div4, t37);
+			append(div4, small2);
+			append(div4, t39);
+			if (if_block11) if_block11.m(div4, null);
+			insert(target, t40, anchor);
 			insert(target, div5, anchor);
 			append(div5, b4);
-			append(b4, t33);
-			append(div5, t34);
-			if_block11.m(div5, null);
-			insert(target, t35, anchor);
-			if (if_block12) if_block12.m(target, anchor);
-			insert(target, t36, anchor);
+			append(b4, t41);
+			append(div5, t42);
+			if_block12.m(div5, null);
+			insert(target, t43, anchor);
 			if (if_block13) if_block13.m(target, anchor);
-			insert(target, t37, anchor);
+			insert(target, t44, anchor);
 			if (if_block14) if_block14.m(target, anchor);
-			insert(target, if_block14_anchor, anchor);
+			insert(target, t45, anchor);
+			if (if_block15) if_block15.m(target, anchor);
+			insert(target, if_block15_anchor, anchor);
 
 			if (!mounted) {
 				dispose = [
-					listen(svg, "pointermove", /*handlePointer*/ ctx[20]),
-					listen(svg, "pointerdown", /*handlePointer*/ ctx[20]),
-					listen(svg, "pointerleave", /*pointerleave_handler*/ ctx[27])
+					listen(svg, "pointermove", /*handlePointer*/ ctx[21]),
+					listen(svg, "pointerdown", /*handlePointer*/ ctx[21]),
+					listen(svg, "pointerleave", /*pointerleave_handler*/ ctx[29])
 				];
 
 				mounted = true;
@@ -5990,7 +6162,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_21(ctx);
+					if_block0 = create_if_block_22(ctx);
 					if_block0.c();
 					if_block0.m(svg, line0);
 				}
@@ -6011,7 +6183,7 @@ function create_if_block_1$1(ctx) {
 
 			if (show_if) {
 				if (if_block1) ; else {
-					if_block1 = create_if_block_20();
+					if_block1 = create_if_block_21();
 					if_block1.c();
 					if_block1.m(svg, text4);
 				}
@@ -6075,7 +6247,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block4) {
 					if_block4.p(ctx, dirty);
 				} else {
-					if_block4 = create_if_block_17(ctx);
+					if_block4 = create_if_block_18(ctx);
 					if_block4.c();
 					if_block4.m(svg, if_block4_anchor);
 				}
@@ -6088,7 +6260,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block5) {
 					if_block5.p(ctx, dirty);
 				} else {
-					if_block5 = create_if_block_16(ctx);
+					if_block5 = create_if_block_17(ctx);
 					if_block5.c();
 					if_block5.m(svg, if_block5_anchor);
 				}
@@ -6101,7 +6273,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block6) {
 					if_block6.p(ctx, dirty);
 				} else {
-					if_block6 = create_if_block_15(ctx);
+					if_block6 = create_if_block_16(ctx);
 					if_block6.c();
 					if_block6.m(svg, if_block6_anchor);
 				}
@@ -6114,7 +6286,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block7) {
 					if_block7.p(ctx, dirty);
 				} else {
-					if_block7 = create_if_block_12$1(ctx);
+					if_block7 = create_if_block_13$1(ctx);
 					if_block7.c();
 					if_block7.m(div0, null);
 				}
@@ -6139,7 +6311,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block9) {
 					if_block9.p(ctx, dirty);
 				} else {
-					if_block9 = create_if_block_10$1(ctx);
+					if_block9 = create_if_block_11$1(ctx);
 					if_block9.c();
 					if_block9.m(div1, null);
 				}
@@ -6182,7 +6354,7 @@ function create_if_block_1$1(ctx) {
 
 			if (/*chart*/ ctx[12].precip24h === null) {
 				if (if_block10) ; else {
-					if_block10 = create_if_block_9$1();
+					if_block10 = create_if_block_10$1();
 					if_block10.c();
 					if_block10.m(span2, null);
 				}
@@ -6192,58 +6364,73 @@ function create_if_block_1$1(ctx) {
 			}
 
 			if (dirty[0] & /*chart*/ 4096 && t30_value !== (t30_value = /*chart*/ ctx[12].precip24Range + "")) set_data(t30, t30_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t34_value !== (t34_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "")) set_data(t34, t34_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t36_value !== (t36_value = formatSnow(/*chart*/ ctx[12].remainingSnow24h, /*units*/ ctx[4]) + "")) set_data(t36, t36_value);
 
-			if (dirty[0] & /*event*/ 8192 && t33_value !== (t33_value = ((/*event*/ ctx[13]?.activeNow)
-			? 'Current wintry period'
-			: 'Next wintry period') + "")) set_data(t33, t33_value);
-
-			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block11) {
-				if_block11.p(ctx, dirty);
-			} else {
-				if_block11.d(1);
-				if_block11 = current_block_type_3(ctx);
-
+			if (/*flow*/ ctx[14]) {
 				if (if_block11) {
+					if_block11.p(ctx, dirty);
+				} else {
+					if_block11 = create_if_block_9$1(ctx);
 					if_block11.c();
-					if_block11.m(div5, null);
+					if_block11.m(div4, null);
+				}
+			} else if (if_block11) {
+				if_block11.d(1);
+				if_block11 = null;
+			}
+
+			if (dirty[0] & /*event*/ 8192 && t41_value !== (t41_value = ((/*event*/ ctx[13]?.activeNow)
+			? 'Current wintry period'
+			: 'Next wintry period') + "")) set_data(t41, t41_value);
+
+			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block12) {
+				if_block12.p(ctx, dirty);
+			} else {
+				if_block12.d(1);
+				if_block12 = current_block_type_3(ctx);
+
+				if (if_block12) {
+					if_block12.c();
+					if_block12.m(div5, null);
 				}
 			}
 
 			if (/*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5]) {
-				if (if_block12) {
-					if_block12.p(ctx, dirty);
+				if (if_block13) {
+					if_block13.p(ctx, dirty);
 				} else {
-					if_block12 = create_if_block_4$1(ctx);
-					if_block12.c();
-					if_block12.m(t36.parentNode, t36);
-				}
-			} else if (if_block12) {
-				if_block12.d(1);
-				if_block12 = null;
-			}
-
-			if (/*chart*/ ctx[12].currentPhase?.confidence === 'low') {
-				if (if_block13) ; else {
-					if_block13 = create_if_block_3$1();
+					if_block13 = create_if_block_4$1(ctx);
 					if_block13.c();
-					if_block13.m(t37.parentNode, t37);
+					if_block13.m(t44.parentNode, t44);
 				}
 			} else if (if_block13) {
 				if_block13.d(1);
 				if_block13 = null;
 			}
 
-			if (/*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote) {
-				if (if_block14) {
-					if_block14.p(ctx, dirty);
-				} else {
-					if_block14 = create_if_block_2$1(ctx);
+			if (/*chart*/ ctx[12].currentPhase?.confidence === 'low') {
+				if (if_block14) ; else {
+					if_block14 = create_if_block_3$1();
 					if_block14.c();
-					if_block14.m(if_block14_anchor.parentNode, if_block14_anchor);
+					if_block14.m(t45.parentNode, t45);
 				}
 			} else if (if_block14) {
 				if_block14.d(1);
 				if_block14 = null;
+			}
+
+			if (/*event*/ ctx[13] && /*chart*/ ctx[12].coverageNote) {
+				if (if_block15) {
+					if_block15.p(ctx, dirty);
+				} else {
+					if_block15 = create_if_block_2$1(ctx);
+					if_block15.c();
+					if_block15.m(if_block15_anchor.parentNode, if_block15_anchor);
+				}
+			} else if (if_block15) {
+				if_block15.d(1);
+				if_block15 = null;
 			}
 		},
 		d(detaching) {
@@ -6253,12 +6440,12 @@ function create_if_block_1$1(ctx) {
 				detach(div3);
 				detach(t25);
 				detach(div4);
-				detach(t32);
+				detach(t40);
 				detach(div5);
-				detach(t35);
-				detach(t36);
-				detach(t37);
-				detach(if_block14_anchor);
+				detach(t43);
+				detach(t44);
+				detach(t45);
+				detach(if_block15_anchor);
 			}
 
 			if (if_block0) if_block0.d();
@@ -6270,15 +6457,16 @@ function create_if_block_1$1(ctx) {
 			if (if_block5) if_block5.d();
 			if (if_block6) if_block6.d();
 			destroy_each(each_blocks, detaching);
-			/*svg_binding*/ ctx[26](null);
+			/*svg_binding*/ ctx[28](null);
 			if (if_block7) if_block7.d();
 			if_block8.d();
 			if (if_block9) if_block9.d();
 			if (if_block10) if_block10.d();
-			if_block11.d();
-			if (if_block12) if_block12.d(detaching);
+			if (if_block11) if_block11.d();
+			if_block12.d();
 			if (if_block13) if_block13.d(detaching);
 			if (if_block14) if_block14.d(detaching);
+			if (if_block15) if_block15.d(detaching);
 			mounted = false;
 			run_all(dispose);
 		}
@@ -6286,7 +6474,7 @@ function create_if_block_1$1(ctx) {
 }
 
 // (23:8) {#if chart.terrainY !== null}
-function create_if_block_21(ctx) {
+function create_if_block_22(ctx) {
 	let rect;
 	let rect_y_value;
 	let rect_height_value;
@@ -6356,7 +6544,7 @@ function create_if_block_21(ctx) {
 }
 
 // (35:8) {#if !chart.points.trim()}
-function create_if_block_20(ctx) {
+function create_if_block_21(ctx) {
 	let text_1;
 	let t;
 
@@ -6422,7 +6610,7 @@ function create_else_block_3(ctx) {
 }
 
 // (39:8) {#if chart.hasPrecip}
-function create_if_block_19(ctx) {
+function create_if_block_20(ctx) {
 	let text0;
 	let t0_value = /*chart*/ ctx[12].precipMaxLabel + "";
 	let t0;
@@ -6520,36 +6708,36 @@ function create_each_block_2(ctx) {
 	return {
 		c() {
 			rect = svg_element("rect");
-			attr(rect, "x", rect_x_value = /*bar*/ ctx[51].x);
-			attr(rect, "y", rect_y_value = /*bar*/ ctx[51].y);
-			attr(rect, "width", rect_width_value = /*bar*/ ctx[51].width);
-			attr(rect, "height", rect_height_value = /*bar*/ ctx[51].height);
+			attr(rect, "x", rect_x_value = /*bar*/ ctx[53].x);
+			attr(rect, "y", rect_y_value = /*bar*/ ctx[53].y);
+			attr(rect, "width", rect_width_value = /*bar*/ ctx[53].width);
+			attr(rect, "height", rect_height_value = /*bar*/ ctx[53].height);
 			attr(rect, "rx", "1.1");
 			attr(rect, "class", "precip-bar svelte-1q22nou");
-			toggle_class(rect, "wet", /*bar*/ ctx[51].mm >= PRECIP_THRESHOLD_MM_H);
+			toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[53].mm));
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*bar*/ ctx[51].x)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*bar*/ ctx[53].x)) {
 				attr(rect, "x", rect_x_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_y_value !== (rect_y_value = /*bar*/ ctx[51].y)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_y_value !== (rect_y_value = /*bar*/ ctx[53].y)) {
 				attr(rect, "y", rect_y_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*bar*/ ctx[51].width)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*bar*/ ctx[53].width)) {
 				attr(rect, "width", rect_width_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_height_value !== (rect_height_value = /*bar*/ ctx[51].height)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_height_value !== (rect_height_value = /*bar*/ ctx[53].height)) {
 				attr(rect, "height", rect_height_value);
 			}
 
 			if (dirty[0] & /*chart*/ 4096) {
-				toggle_class(rect, "wet", /*bar*/ ctx[51].mm >= PRECIP_THRESHOLD_MM_H);
+				toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[53].mm));
 			}
 		},
 		d(detaching) {
@@ -6570,26 +6758,26 @@ function create_each_block_1(ctx) {
 	return {
 		c() {
 			rect = svg_element("rect");
-			attr(rect, "x", rect_x_value = /*block*/ ctx[48].x);
+			attr(rect, "x", rect_x_value = /*block*/ ctx[50].x);
 			attr(rect, "y", "212");
-			attr(rect, "width", rect_width_value = /*block*/ ctx[48].width);
+			attr(rect, "width", rect_width_value = /*block*/ ctx[50].width);
 			attr(rect, "height", "23");
 			attr(rect, "rx", "2.8");
-			attr(rect, "class", rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-1q22nou"));
+			attr(rect, "class", rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[50].key}`) + " svelte-1q22nou"));
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*block*/ ctx[48].x)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*block*/ ctx[50].x)) {
 				attr(rect, "x", rect_x_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*block*/ ctx[48].width)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*block*/ ctx[50].width)) {
 				attr(rect, "width", rect_width_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_class_value !== (rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-1q22nou"))) {
+			if (dirty[0] & /*chart*/ 4096 && rect_class_value !== (rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[50].key}`) + " svelte-1q22nou"))) {
 				attr(rect, "class", rect_class_value);
 			}
 		},
@@ -6642,7 +6830,7 @@ function create_else_block_2$1(ctx) {
 }
 
 // (62:8) {#if chart.newSnowMax > 0.05}
-function create_if_block_18(ctx) {
+function create_if_block_19(ctx) {
 	let text_1;
 	let t_value = /*chart*/ ctx[12].newSnowMaxLabel + "";
 	let t;
@@ -6694,7 +6882,7 @@ function create_if_block_18(ctx) {
 }
 
 // (70:8) {#if chart.nowX !== null}
-function create_if_block_17(ctx) {
+function create_if_block_18(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6760,7 +6948,7 @@ function create_if_block_17(ctx) {
 }
 
 // (75:8) {#if chart.currentX !== null && chart.currentY !== null}
-function create_if_block_16(ctx) {
+function create_if_block_17(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6813,7 +7001,7 @@ function create_if_block_16(ctx) {
 }
 
 // (79:8) {#if tooltip}
-function create_if_block_15(ctx) {
+function create_if_block_16(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6858,11 +7046,11 @@ function create_each_block(ctx) {
 		c() {
 			text_1 = svg_element("text");
 			t0 = text("+");
-			t1 = text(/*hour*/ ctx[45]);
+			t1 = text(/*hour*/ ctx[47]);
 			t2 = text(" h");
-			attr(text_1, "x", 42 + 306 * /*hour*/ ctx[45] / 144);
+			attr(text_1, "x", 42 + 306 * /*hour*/ ctx[47] / 144);
 			attr(text_1, "y", "334");
-			attr(text_1, "text-anchor", /*hour*/ ctx[45] === 144 ? 'end' : 'middle');
+			attr(text_1, "text-anchor", /*hour*/ ctx[47] === 144 ? 'end' : 'middle');
 			attr(text_1, "class", "axis timeline-tick svelte-1q22nou");
 		},
 		m(target, anchor) {
@@ -6881,7 +7069,7 @@ function create_each_block(ctx) {
 }
 
 // (86:6) {#if tooltip}
-function create_if_block_12$1(ctx) {
+function create_if_block_13$1(ctx) {
 	let div1;
 	let b0;
 	let t0_value = /*tooltip*/ ctx[11].timeLabel + "";
@@ -6912,8 +7100,8 @@ function create_if_block_12$1(ctx) {
 	let t10;
 	let t11;
 	let div1_style_value;
-	let if_block0 = /*tooltip*/ ctx[11].phase && create_if_block_14$1(ctx);
-	let if_block1 = /*terrainM*/ ctx[2] !== null && create_if_block_13$1(ctx);
+	let if_block0 = /*tooltip*/ ctx[11].phase && create_if_block_15$1(ctx);
+	let if_block1 = /*terrainM*/ ctx[2] !== null && create_if_block_14$1(ctx);
 
 	return {
 		c() {
@@ -6935,7 +7123,7 @@ function create_if_block_12$1(ctx) {
 			t7 = text(t7_value);
 			t8 = space();
 			span2 = element("span");
-			t9 = text("New snow ");
+			t9 = text("Snowfall so far ");
 			b3 = element("b");
 			t10 = text(t10_value);
 			t11 = space();
@@ -6983,7 +7171,7 @@ function create_if_block_12$1(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_14$1(ctx);
+					if_block0 = create_if_block_15$1(ctx);
 					if_block0.c();
 					if_block0.m(div1, t2);
 				}
@@ -7003,7 +7191,7 @@ function create_if_block_12$1(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_13$1(ctx);
+					if_block1 = create_if_block_14$1(ctx);
 					if_block1.c();
 					if_block1.m(div0, null);
 				}
@@ -7028,7 +7216,7 @@ function create_if_block_12$1(ctx) {
 }
 
 // (89:10) {#if tooltip.phase}
-function create_if_block_14$1(ctx) {
+function create_if_block_15$1(ctx) {
 	let strong;
 	let i;
 	let i_class_value;
@@ -7069,7 +7257,7 @@ function create_if_block_14$1(ctx) {
 }
 
 // (94:12) {#if terrainM !== null}
-function create_if_block_13$1(ctx) {
+function create_if_block_14$1(ctx) {
 	let span;
 	let t0;
 	let b;
@@ -7126,7 +7314,7 @@ function create_else_block_1$1(ctx) {
 }
 
 // (102:11) {#if chart.currentPhase}
-function create_if_block_11$1(ctx) {
+function create_if_block_12$1(ctx) {
 	let i;
 	let i_class_value;
 	let t_value = precipitationLabel(/*chart*/ ctx[12].currentPhase) + "";
@@ -7159,7 +7347,7 @@ function create_if_block_11$1(ctx) {
 }
 
 // (103:8) {#if chart.currentPosition}
-function create_if_block_10$1(ctx) {
+function create_if_block_11$1(ctx) {
 	let strong;
 	let t_value = /*chart*/ ctx[12].currentPosition + "";
 	let t;
@@ -7186,7 +7374,7 @@ function create_if_block_10$1(ctx) {
 }
 
 // (113:54) {#if chart.precip24h===null}
-function create_if_block_9$1(ctx) {
+function create_if_block_10$1(ctx) {
 	let t;
 
 	return {
@@ -7204,7 +7392,49 @@ function create_if_block_9$1(ctx) {
 	};
 }
 
-// (121:6) {:else}
+// (117:6) {#if flow}
+function create_if_block_9$1(ctx) {
+	let span;
+	let t0;
+	let t1_value = /*flow*/ ctx[14].direction + "";
+	let t1;
+	let t2;
+	let t3_value = Math.round(/*flow*/ ctx[14].relativeHumidity) + "";
+	let t3;
+	let t4;
+
+	return {
+		c() {
+			span = element("span");
+			t0 = text("Terrain flow: ");
+			t1 = text(t1_value);
+			t2 = text(" · ");
+			t3 = text(t3_value);
+			t4 = text("% RH · experimental");
+			attr(span, "title", "Kinematic wind–terrain exposure over a 4 km span. Does not change forecast precipitation amounts.");
+			attr(span, "class", "svelte-1q22nou");
+		},
+		m(target, anchor) {
+			insert(target, span, anchor);
+			append(span, t0);
+			append(span, t1);
+			append(span, t2);
+			append(span, t3);
+			append(span, t4);
+		},
+		p(ctx, dirty) {
+			if (dirty[0] & /*flow*/ 16384 && t1_value !== (t1_value = /*flow*/ ctx[14].direction + "")) set_data(t1, t1_value);
+			if (dirty[0] & /*flow*/ 16384 && t3_value !== (t3_value = Math.round(/*flow*/ ctx[14].relativeHumidity) + "")) set_data(t3, t3_value);
+		},
+		d(detaching) {
+			if (detaching) {
+				detach(span);
+			}
+		}
+	};
+}
+
+// (124:6) {:else}
 function create_else_block$1(ctx) {
 	let span;
 	let t_value = noEventMessage(/*point*/ ctx[1], /*terrainM*/ ctx[2], /*timestamp*/ ctx[5]) + "";
@@ -7231,7 +7461,7 @@ function create_else_block$1(ctx) {
 	};
 }
 
-// (118:6) {#if event}
+// (121:6) {#if event}
 function create_if_block_5$1(ctx) {
 	let span;
 	let t0_value = /*event*/ ctx[13].dominantPhase.icon + "";
@@ -7326,12 +7556,12 @@ function create_if_block_5$1(ctx) {
 	};
 }
 
-// (119:226) 
+// (122:226) 
 function create_if_block_8$1(ctx) {
 	let t0;
 	let t1_value = formatSnow(/*event*/ ctx[13].newSnowCm, /*units*/ ctx[4]) + "";
 	let t1;
-	let t2_value = (/*event*/ ctx[13].activeNow ? ' remaining' : '') + "";
+	let t2_value = (/*event*/ ctx[13].activeNow ? ' still to fall' : '') + "";
 	let t2;
 
 	return {
@@ -7347,7 +7577,7 @@ function create_if_block_8$1(ctx) {
 		},
 		p(ctx, dirty) {
 			if (dirty[0] & /*event, units*/ 8208 && t1_value !== (t1_value = formatSnow(/*event*/ ctx[13].newSnowCm, /*units*/ ctx[4]) + "")) set_data(t1, t1_value);
-			if (dirty[0] & /*event*/ 8192 && t2_value !== (t2_value = (/*event*/ ctx[13].activeNow ? ' remaining' : '') + "")) set_data(t2, t2_value);
+			if (dirty[0] & /*event*/ 8192 && t2_value !== (t2_value = (/*event*/ ctx[13].activeNow ? ' still to fall' : '') + "")) set_data(t2, t2_value);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -7359,7 +7589,7 @@ function create_if_block_8$1(ctx) {
 	};
 }
 
-// (119:152) {#if event.incomplete}
+// (122:152) {#if event.incomplete}
 function create_if_block_7$1(ctx) {
 	let t;
 
@@ -7379,7 +7609,7 @@ function create_if_block_7$1(ctx) {
 	};
 }
 
-// (120:8) {#if !event.activeNow}
+// (123:8) {#if !event.activeNow}
 function create_if_block_6$1(ctx) {
 	let button;
 	let mounted;
@@ -7397,7 +7627,7 @@ function create_if_block_6$1(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*jumpToEvent*/ ctx[18]);
+				dispose = listen(button, "click", /*jumpToEvent*/ ctx[19]);
 				mounted = true;
 			}
 		},
@@ -7413,7 +7643,7 @@ function create_if_block_6$1(ctx) {
 	};
 }
 
-// (125:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
+// (128:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
 function create_if_block_4$1(ctx) {
 	let button;
 
@@ -7447,7 +7677,7 @@ function create_if_block_4$1(ctx) {
 			append(button, t3);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*click_handler_3*/ ctx[28]);
+				dispose = listen(button, "click", /*click_handler_3*/ ctx[30]);
 				mounted = true;
 			}
 		},
@@ -7469,7 +7699,7 @@ function create_if_block_4$1(ctx) {
 	};
 }
 
-// (126:4) {#if chart.currentPhase?.confidence === 'low'}
+// (129:4) {#if chart.currentPhase?.confidence === 'low'}
 function create_if_block_3$1(ctx) {
 	let div;
 
@@ -7490,7 +7720,7 @@ function create_if_block_3$1(ctx) {
 	};
 }
 
-// (127:4) {#if event && chart.coverageNote}
+// (130:4) {#if event && chart.coverageNote}
 function create_if_block_2$1(ctx) {
 	let div;
 	let t_value = /*chart*/ ctx[12].coverageNote + "";
@@ -7552,8 +7782,8 @@ function create_fragment$2(ctx) {
 	let current;
 	let mounted;
 	let dispose;
-	let if_block0 = /*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[14] && create_if_block_23(ctx);
-	let if_block1 = /*tab*/ ctx[0] === 'graph' && /*chart*/ ctx[12] && create_if_block_22(ctx);
+	let if_block0 = /*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[15] && create_if_block_24(ctx);
+	let if_block1 = /*tab*/ ctx[0] === 'graph' && /*chart*/ ctx[12] && create_if_block_23(ctx);
 	const if_block_creators = [create_if_block$1, create_else_block_5];
 	const if_blocks = [];
 
@@ -7658,15 +7888,15 @@ function create_fragment$2(ctx) {
 			append(button3, t13);
 			append(div4, t14);
 			if_blocks[current_block_type_index].m(div4, null);
-			/*div4_binding*/ ctx[29](div4);
+			/*div4_binding*/ ctx[31](div4);
 			current = true;
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "pointerdown", /*startDrag*/ ctx[16]),
-					listen(button1, "click", /*click_handler*/ ctx[23]),
-					listen(button2, "click", /*click_handler_1*/ ctx[24]),
-					listen(button3, "click", /*click_handler_2*/ ctx[25])
+					listen(button0, "pointerdown", /*startDrag*/ ctx[17]),
+					listen(button1, "click", /*click_handler*/ ctx[25]),
+					listen(button2, "click", /*click_handler_1*/ ctx[26]),
+					listen(button3, "click", /*click_handler_2*/ ctx[27])
 				];
 
 				mounted = true;
@@ -7676,11 +7906,11 @@ function create_fragment$2(ctx) {
 			if ((!current || dirty[0] & /*placeName*/ 8) && t2_value !== (t2_value = (/*placeName*/ ctx[3] || 'Selected point') + "")) set_data(t2, t2_value);
 			if ((!current || dirty[0] & /*chart*/ 4096) && t4_value !== (t4_value = (/*chart*/ ctx[12]?.validLabel ?? 'ECMWF profile · Windy terrain') + "")) set_data(t4, t4_value);
 
-			if (/*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[14]) {
+			if (/*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[15]) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_23(ctx);
+					if_block0 = create_if_block_24(ctx);
 					if_block0.c();
 					if_block0.m(div1, t6);
 				}
@@ -7693,7 +7923,7 @@ function create_fragment$2(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_22(ctx);
+					if_block1 = create_if_block_23(ctx);
 					if_block1.c();
 					if_block1.m(div1, t7);
 				}
@@ -7765,7 +7995,7 @@ function create_fragment$2(ctx) {
 			if (if_block0) if_block0.d();
 			if (if_block1) if_block1.d();
 			if_blocks[current_block_type_index].d();
-			/*div4_binding*/ ctx[29](null);
+			/*div4_binding*/ ctx[31](null);
 			mounted = false;
 			run_all(dispose);
 		}
@@ -7823,8 +8053,10 @@ function instance$2($$self, $$props, $$invalidate) {
 	let event;
 	let chart;
 	let showNow;
+	let flow;
 	let { point } = $$props;
 	let { terrainM = null } = $$props;
+	let { terrainSlopes = null } = $$props;
 	let { placeName = '' } = $$props;
 	let { tab = 'graph' } = $$props;
 	let { units = 'metric' } = $$props;
@@ -7851,10 +8083,9 @@ function instance$2($$self, $$props, $$invalidate) {
 	}
 
 	function phaseAt(p, terrain, index) {
-		if (terrain === null || !Number.isFinite(terrain)) return null;
-		const precip = precipMmAt(p.forecast, index);
-		if (precip === null || precip < PRECIP_THRESHOLD_MM_H) return null;
-		return terrainPrecipitationType(buildProfile(p.forecast, index), terrain);
+		return isPrecipitating(precipMmAt(p.forecast, index))
+		? buildSnowForecast(p, terrain).thermalPhases[index]
+		: null;
 	}
 
 	function terrainPosition(difference) {
@@ -7899,6 +8130,10 @@ function instance$2($$self, $$props, $$invalidate) {
 		window.removeEventListener('pointermove', dragMove);
 	}
 
+	function keepChartVisible() {
+		$$invalidate(10, position = clampPosition(position.x, position.y));
+	}
+
 	function setTimeline(time) {
 		if (!Number.isFinite(time)) return;
 
@@ -7921,7 +8156,7 @@ function instance$2($$self, $$props, $$invalidate) {
 
 	function resetToNow() {
 		if (!point?.times?.length) return;
-		$$invalidate(22, realNow = Date.now());
+		$$invalidate(24, realNow = Date.now());
 		setTimeline(realNow);
 	}
 
@@ -7933,7 +8168,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			if (!phase) continue;
 
 			const left = Math.max(42, x(p.times[i])),
-				right = Math.min(348, x(intervalEnd(p.times, i)));
+				right = Math.min(348, x(supportedIntervalEnd(p.times, i, p.forecast.__precipPeriodsH)));
 
 			if (right <= left) continue;
 			const previous = blocks.at(-1);
@@ -7946,32 +8181,6 @@ function instance$2($$self, $$props, $$invalidate) {
 		}
 
 		return blocks;
-	}
-
-	function phaseSummary(phases, precip, newSnow) {
-		const amounts = {
-			snow: 0,
-			'wet-snow': 0,
-			mix: 0,
-			rain: 0,
-			'ice-pellets': 0,
-			'freezing-rain': 0
-		};
-
-		let total = 0;
-
-		phases.forEach((phase, i) => {
-			const mm = precip[i];
-			if (!phase || mm === null || mm < PRECIP_THRESHOLD_MM_H) return;
-			amounts[phase.key] += mm;
-			total += mm;
-		});
-
-		const finalSnow = newSnow.length ? newSnow[newSnow.length - 1] : 0;
-		if (total < PRECIP_THRESHOLD_MM_H) return 'Dry forecast · no meaningful precipitation.';
-		const ranked = Object.entries(amounts).sort((a, b) => b[1] - a[1]);
-		const [key, amount] = ranked[0], pct = Math.round(amount / total * 100);
-		return `${phaseName(key)} ${pct}% · new snow est. ${formatSnow(finalSnow, units)}`;
 	}
 
 	function buildChart(p, terrain, target, crossingTime, now, units) {
@@ -8052,18 +8261,18 @@ function instance$2($$self, $$props, $$invalidate) {
 			};
 		}).filter((b, i) => b.height > .1 && p.times[i] < t1);
 
-		const phases = p.times.map((_, i) => phaseAt(p, terrain, i));
+		const snowSeries = buildSnowForecast(p, terrain);
+
+		const phases = p.times.map((_, i) => isPrecipitating(precipValues[i])
+		? snowSeries.thermalPhases[i]
+		: null);
+
 		const coverage = forecastCoverage(precipValues, phases, p.times);
-		const cumulativeNewSnow = [];
-		let running = 0;
 
-		for (let i = 0; i < p.times.length; i++) {
-			const dt = Math.max(0, (intervalEnd(p.times, i) - p.times[i]) / 3600_000);
-			running = estimateNewSnowStep(precipValues[i], phases[i], running, dt).cumulativeCm;
-			cumulativeNewSnow.push(running);
-		}
+		const cumulativeNewSnow = snowSeries.cumulativeSnowfallCm,
+			snowPrefix = snowSeries.prefix;
 
-		const newSnowMax = Math.max(0, ...cumulativeNewSnow.slice(0, coverage.prefix)),
+		const newSnowMax = Math.max(0, ...cumulativeNewSnow),
 			snowTop = 288,
 			snowBottom = 316;
 
@@ -8071,15 +8280,15 @@ function instance$2($$self, $$props, $$invalidate) {
 		? v / newSnowMax * (snowBottom - snowTop)
 		: 0);
 
-		const newSnowPoints = coverage.prefix
+		const newSnowPoints = snowPrefix
 		? [
 				`${x(t0).toFixed(1)},${snowBottom}`,
-				...cumulativeNewSnow.slice(0, coverage.prefix).map((v, i) => `${x(intervalEnd(p.times, i)).toFixed(1)},${snowY(v).toFixed(1)}`)
+				...cumulativeNewSnow.map((v, i) => `${x(snowSeries.ends[i]).toFixed(1)},${snowY(v).toFixed(1)}`)
 			].join(' ')
 		: '';
 
-		const newSnowArea = coverage.prefix > 0
-		? `M ${x(p.times[0]).toFixed(1)} ${snowBottom} L ${newSnowPoints.replace(/,/g, ' ')} L ${x(intervalEnd(p.times, coverage.prefix - 1)).toFixed(1)} ${snowBottom} Z`
+		const newSnowArea = snowPrefix > 0
+		? `M ${x(t0).toFixed(1)} ${snowBottom} L ${newSnowPoints.replace(/,/g, ' ')} L ${x(snowSeries.ends[snowPrefix - 1]).toFixed(1)} ${snowBottom} Z`
 		: '';
 
 		const end24 = target + 24 * 3600_000;
@@ -8091,15 +8300,14 @@ function instance$2($$self, $$props, $$invalidate) {
 		? Math.round(Number(minEntry.value) / 10) * 10
 		: null;
 
-		let newSnow24h = 0;
+		const snow24 = snowForecastWindow(snowSeries, target, end24);
+		const currentPrecip = precipMmAtTime(p.forecast, p.times, target);
 
-		for (const i of windowIndices) {
-			if (p.times[i] >= end24) continue;
-			const dt = (Math.min(end24, p.times[i] + forecastIntervalHours(p.times, i) * 3600_000) - Math.max(target, p.times[i])) / 3600_000;
-			newSnow24h = estimateNewSnowStep(precipValues[i], phases[i], newSnow24h, dt).cumulativeCm;
-		}
+		const currentPhase = isPrecipitating(currentPrecip)
+		? phases[currentIndex]
+		: null;
 
-		const currentKey = phases[currentIndex]?.key ?? null;
+		const currentKey = currentPhase?.key ?? null;
 		let nextChangeLabel = '';
 		let nextChangeTime = null;
 
@@ -8136,18 +8344,19 @@ function instance$2($$self, $$props, $$invalidate) {
 			: null,
 			currentTerrainDifference,
 			currentPosition: terrainPosition(currentTerrainDifference),
-			currentPrecip: precipValues[currentIndex] ?? null,
-			currentPhase: phases[currentIndex],
-			currentCondition: conditionLabel(precipValues[currentIndex], phases[currentIndex]),
-			coverageComplete: coverage.complete,
+			currentPrecip,
+			currentPhase,
+			currentCondition: conditionLabel(currentPrecip, currentPhase),
+			coverageComplete: coverage.complete && snowPrefix === p.times.filter(t => t < t1).length,
 			precipCount: coverage.precipCount,
-			snowPrefix: coverage.prefix,
-			coverageNote: coverage.note,
+			snowPrefix,
+			coverageNote: coverage.note || (snowPrefix < p.times.filter(t => t < t1).length
+			? 'Snowfall estimate stops at missing data'
+			: ''),
 			midTimeLabel: '+' + Math.round((t1 - t0) / 7200000) + ' h',
 			endTimeLabel: '+' + Math.round((t1 - t0) / 3600000) + ' h',
-			currentNewSnow: cumulativeNewSnow[currentIndex] ?? 0,
 			precipBars,
-			hasPrecip: validPrecip.some(v => v >= PRECIP_THRESHOLD_MM_H),
+			hasPrecip: validPrecip.some(v => isPrecipitating(v)),
 			precipMaxLabel: precipMax
 			? formatPrecip(precipMax, units).replace(/\s*(mm|in)\/h$/, '')
 			: '—',
@@ -8155,15 +8364,15 @@ function instance$2($$self, $$props, $$invalidate) {
 			maxScale: max,
 			validLabel: `Forecast ${formatTooltipTime(target)} · ${formatRun(p.runTime)}`,
 			phaseBlocks: buildBlocks(p, phases, x),
-			phaseSummary: phaseSummary(phases, precipValues, cumulativeNewSnow),
 			newSnowPoints,
 			newSnowArea,
 			newSnowMax,
 			newSnowMaxLabel: formatSnow(newSnowMax, units),
 			cumulativeNewSnow,
 			min24Snowline,
-			window24Complete: coversWindow(p.times, coverage.known, target, end24),
-			newSnow24h: Math.max(0, newSnow24h),
+			window24Complete: snow24.complete,
+			newSnow24h: snow24.snowfallCm,
+			remainingSnow24h: snow24.remainingLayerCm,
 			nextChangeLabel,
 			nextChangeTime
 		};
@@ -8204,9 +8413,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			})(),
 			precip: precipMmAt(point.forecast, idx),
 			phase: phaseAt(point, terrainM, idx),
-			newSnow: idx < chart.snowPrefix
-			? idx === 0 ? 0 : chart.cumulativeNewSnow[idx - 1] ?? 0
-			: null,
+			newSnow: snowfallAtTime(buildSnowForecast(point, terrainM), time),
 			timeLabel: formatTooltipTime(time)
 		});
 	}
@@ -8285,7 +8492,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			ctx.font = '700 21px Arial';
 
 			ctx.fillText(
-				`Next 24 h · min estimated snowline ${formatElevation(chart.min24Snowline, units)} · new snow ${chart.window24Complete
+				`Next 24 h · min estimated snowline ${formatElevation(chart.min24Snowline, units)} · snowfall ${chart.window24Complete
 				? formatSnow(chart.newSnow24h, units)
 				: 'unavailable'}`,
 				52,
@@ -8302,7 +8509,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			y += 30;
 			ctx.fillStyle = '#8799a4';
 			ctx.font = '18px Arial';
-			ctx.fillText('Estimated new snow, not existing snowpack. ECMWF profile and Windy terrain.', 52, y);
+			ctx.fillText('Gross snowfall estimate; excludes existing snowpack. Accuracy not independently validated.', 52, y);
 			const png = await new Promise((resolve, reject) => canvas.toBlob(v => v ? resolve(v) : reject(new Error('PNG failed')), 'image/png'));
 			const href = URL.createObjectURL(png), a = document.createElement('a');
 			a.href = href;
@@ -8326,8 +8533,9 @@ function instance$2($$self, $$props, $$invalidate) {
 			y: window.innerWidth <= 520 ? 34 : 54
 		});
 
-		$$invalidate(22, realNow = Date.now());
-		realNowTimer = setInterval(() => $$invalidate(22, realNow = Date.now()), 30000);
+		$$invalidate(24, realNow = Date.now());
+		realNowTimer = setInterval(() => $$invalidate(24, realNow = Date.now()), 30000);
+		window.addEventListener('resize', keepChartVisible);
 
 		try {
 			const t = store.get('timestamp');
@@ -8344,6 +8552,7 @@ function instance$2($$self, $$props, $$invalidate) {
 
 	onDestroy(() => {
 		if (realNowTimer) clearInterval(realNowTimer);
+		window.removeEventListener('resize', keepChartVisible);
 		window.removeEventListener('pointermove', dragMove);
 		window.removeEventListener('pointerup', stopDrag);
 
@@ -8378,6 +8587,7 @@ function instance$2($$self, $$props, $$invalidate) {
 	$$self.$$set = $$props => {
 		if ('point' in $$props) $$invalidate(1, point = $$props.point);
 		if ('terrainM' in $$props) $$invalidate(2, terrainM = $$props.terrainM);
+		if ('terrainSlopes' in $$props) $$invalidate(23, terrainSlopes = $$props.terrainSlopes);
 		if ('placeName' in $$props) $$invalidate(3, placeName = $$props.placeName);
 		if ('tab' in $$props) $$invalidate(0, tab = $$props.tab);
 		if ('units' in $$props) $$invalidate(4, units = $$props.units);
@@ -8392,12 +8602,18 @@ function instance$2($$self, $$props, $$invalidate) {
 			$$invalidate(13, event = nextWintryEvent(point, terrainM, timestamp));
 		}
 
-		if ($$self.$$.dirty[0] & /*point, terrainM, timestamp, crossing, realNow, units*/ 4194422) {
+		if ($$self.$$.dirty[0] & /*point, terrainM, timestamp, crossing, realNow, units*/ 16777334) {
 			$$invalidate(12, chart = buildChart(point, terrainM, timestamp, crossing?.crossingTime ?? null, realNow, units));
 		}
 
-		if ($$self.$$.dirty[0] & /*timestamp, realNow*/ 4194336) {
-			$$invalidate(14, showNow = Math.abs(timestamp - realNow) > 90 * 60_000);
+		if ($$self.$$.dirty[0] & /*timestamp, realNow*/ 16777248) {
+			$$invalidate(15, showNow = Math.abs(timestamp - realNow) > 90 * 60_000);
+		}
+
+		if ($$self.$$.dirty[0] & /*point, timestamp, terrainM, terrainSlopes*/ 8388646) {
+			$$invalidate(14, flow = point
+			? terrainFlow(point.forecast, forecastIntervalIndex(point.times, timestamp), terrainM, terrainSlopes)
+			: null);
 		}
 	};
 
@@ -8416,6 +8632,7 @@ function instance$2($$self, $$props, $$invalidate) {
 		tooltip,
 		chart,
 		event,
+		flow,
 		showNow,
 		dispatch,
 		startDrag,
@@ -8424,6 +8641,7 @@ function instance$2($$self, $$props, $$invalidate) {
 		resetToNow,
 		handlePointer,
 		downloadPng,
+		terrainSlopes,
 		realNow,
 		click_handler,
 		click_handler_1,
@@ -8448,6 +8666,7 @@ class SnowlineChart extends SvelteComponent {
 			{
 				point: 1,
 				terrainM: 2,
+				terrainSlopes: 23,
 				placeName: 3,
 				tab: 0,
 				units: 4
@@ -9034,7 +9253,13 @@ let sequence = 0;
 /** Match interval-start timestamps to profile times. Canonical internal amounts
  * remain three-hour equivalents so existing snow integration retains its units. */ function alignPrecipIntervals(times, amounts, targets) {
     const values = [], periods = [];
+    const validAxis = times.length > 0 && times.every((t, i)=>Number.isFinite(t) && (i === 0 || t > times[i - 1]));
     for (const time of targets){
+        if (!validAxis || !Number.isFinite(time)) {
+            values.push(null);
+            periods.push(null);
+            continue;
+        }
         let index = -1;
         for(let i = 0; i < times.length; i++){
             if (times[i] <= time) index = i;
@@ -9043,13 +9268,13 @@ let sequence = 0;
         const dt = index >= 0 ? (index + 1 < times.length ? times[index + 1] - times[index] : index > 0 ? times[index] - times[index - 1] : NaN) / 3600000 : NaN;
         const raw = index >= 0 ? amounts[index] : null;
         const mm = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN;
-        if (!Number.isFinite(dt) || dt <= 0 || dt > 3 || time >= times[index] + dt * 3600000 || !Number.isFinite(mm)) {
+        if (!Number.isFinite(dt) || dt <= 0 || dt > 3 || time >= times[index] + dt * 3600000 || !Number.isFinite(mm) || mm < 0) {
             values.push(null);
             periods.push(null);
             continue;
         }
-        values.push(Math.max(0, mm) * 3 / dt);
-        periods.push(dt);
+        values.push(mm * 3 / dt);
+        periods.push((times[index] + dt * 3600000 - time) / 3600000);
     }
     return {
         '__precipMm3h': values,
@@ -9550,6 +9775,21 @@ function pointKey(p) {
         ]));
 }
 
+const HOUR = 3600_000;
+/** Reject malformed axes instead of shifting weather values onto other times. */ function buildForecastTimes(data, refTime) {
+    const length = Number(data.hours?.length);
+    if (!Number.isInteger(length) || length <= 0) return [];
+    const times = [];
+    for(let i = 0; i < length; i++){
+        const raw = valueAt(data.hours, i);
+        if (raw === null) return [];
+        const time = raw > 1e12 ? raw : raw > 1e9 ? raw * 1000 : refTime === null ? NaN : refTime + raw * HOUR;
+        if (!Number.isFinite(time) || i > 0 && time <= times[i - 1]) return [];
+        times.push(time);
+    }
+    return times.filter((time)=>time <= times[0] + 144 * HOUR);
+}
+
 const PROFILE_CACHE_TTL_MS = 15 * 60_000;
 function isOlderRun(run, activeRun) {
     return run !== null && activeRun !== null && run < activeRun - 60_000;
@@ -9612,6 +9852,11899 @@ function automaticRefreshDue(state, now = Date.now()) {
     }
 }
 
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+function assert(x) {
+    if (!x) {
+        throw new Error('Assertion failed.');
+    }
+}
+const DEG_TO_RAD = Math.PI / 180;
+const normalizeRotation = (rotation) => {
+    const mappedRotation = (rotation % 360 + 360) % 360;
+    if (mappedRotation === 0 || mappedRotation === 90 || mappedRotation === 180 || mappedRotation === 270) {
+        return mappedRotation;
+    }
+    else {
+        throw new Error(`Invalid rotation ${rotation}.`);
+    }
+};
+const IDENTITY_MATRIX = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+/**
+ * Applies a linear transformation (no translation) to a width-by-height frame about its center, with the result
+ * sitting in the positive quadrant.
+ */
+const centeredTransformationMatrix = (linear, width, height) => {
+    const [a, b, , c, d] = linear;
+    // Bounding box of the transformed frame
+    const transformedWidth = Math.abs(a) * width + Math.abs(c) * height;
+    const transformedHeight = Math.abs(b) * width + Math.abs(d) * height;
+    // The transformation happens about the origin (the frame's top-left corner), so we move the center to the
+    // origin, transform, then move it back
+    return multiplyMatrices(multiplyMatrices(translationMatrix(-width / 2, -height / 2), linear), translationMatrix(transformedWidth / 2, transformedHeight / 2));
+};
+const rotationMatrix = (rotationInDegrees) => {
+    const theta = rotationInDegrees * DEG_TO_RAD;
+    const cosTheta = Math.round(Math.cos(theta));
+    const sinTheta = Math.round(Math.sin(theta));
+    // Points are row vectors, meaning this is the transpose of your typical rotation matrix
+    return [
+        cosTheta, sinTheta, 0,
+        -sinTheta, cosTheta, 0,
+        0, 0, 1,
+    ];
+};
+const translationMatrix = (x, y) => {
+    // Points are row vectors, meaning this is the transpose of your typical translation matrix
+    return [
+        1, 0, 0,
+        0, 1, 0,
+        x, y, 1,
+    ];
+};
+const scaleMatrix = (x, y) => {
+    return [
+        x, 0, 0,
+        0, y, 0,
+        0, 0, 1,
+    ];
+};
+/** Computes a * b. Since points are row vectors, this applies a first, then b. */
+const multiplyMatrices = (a, b) => {
+    const result = new Array(9);
+    for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+            result[3 * i + j] = a[3 * i] * b[j] + a[3 * i + 1] * b[3 + j] + a[3 * i + 2] * b[6 + j];
+        }
+    }
+    return result;
+};
+/**
+ * Composes two "rotate, then flip" transformations into one. A flip conjugates any rotation that follows it, meaning
+ * the second rotation flips direction if the first flip is set.
+ */
+const composeRotationAndFlip = (rotation1, flip1, rotation2, flip2) => {
+    return {
+        rotation: normalizeRotation(rotation1 + (flip1 ? -rotation2 : rotation2)),
+        flip: flip1 !== flip2,
+    };
+};
+const last = (arr) => {
+    return arr && arr[arr.length - 1];
+};
+const isU32 = (value) => {
+    return value >= 0 && value < 2 ** 32;
+};
+const isI32 = (value) => {
+    return value >= -2147483648 && value < 2 ** 31;
+};
+/** Reads an exponential-Golomb universal code from a Bitstream.  */
+const readExpGolomb = (bitstream) => {
+    let leadingZeroBits = 0;
+    while (bitstream.readBits(1) === 0 && leadingZeroBits < 32) {
+        leadingZeroBits++;
+    }
+    if (leadingZeroBits >= 32) {
+        throw new Error('Invalid exponential-Golomb code.');
+    }
+    const result = (1 << leadingZeroBits) - 1 + bitstream.readBits(leadingZeroBits);
+    return result;
+};
+/** Reads a signed exponential-Golomb universal code from a Bitstream. */
+const readSignedExpGolomb = (bitstream) => {
+    const codeNum = readExpGolomb(bitstream);
+    return ((codeNum & 1) === 0)
+        ? -(codeNum >> 1)
+        : ((codeNum + 1) >> 1);
+};
+const toUint8Array = (source) => {
+    if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
+        return source;
+    }
+    else if (ArrayBuffer.isView(source)) {
+        return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+    }
+    else {
+        return new Uint8Array(source);
+    }
+};
+const toDataView = (source) => {
+    if (source.constructor === DataView) {
+        return source;
+    }
+    else if (ArrayBuffer.isView(source)) {
+        return new DataView(source.buffer, source.byteOffset, source.byteLength);
+    }
+    else {
+        return new DataView(source);
+    }
+};
+// Include a polyfill for environments that don't have TextEncoder (like AudioWorkletGlobalScope)
+const TextEncoder = typeof globalThis.TextEncoder !== 'undefined'
+    ? globalThis.TextEncoder
+    : class TextEncoder {
+        constructor() {
+            this.encoding = 'utf-8';
+        }
+        encode(input = '') {
+            // UTF-8 needs at most 3 bytes per UTF-16 code unit
+            const bytes = new Uint8Array(3 * input.length);
+            let n = 0;
+            for (let i = 0; i < input.length; i++) {
+                let c = input.charCodeAt(i);
+                if (c < 0x80) {
+                    bytes[n++] = c;
+                }
+                else if (c < 0x800) {
+                    bytes[n++] = 0xc0 | (c >> 6);
+                    bytes[n++] = 0x80 | (c & 63);
+                }
+                else if (c < 0xd800 || c > 0xdfff) {
+                    bytes[n++] = 0xe0 | (c >> 12);
+                    bytes[n++] = 0x80 | ((c >> 6) & 63);
+                    bytes[n++] = 0x80 | (c & 63);
+                }
+                else {
+                    const next = i + 1 < input.length ? input.charCodeAt(i + 1) : 0;
+                    if (c < 0xdc00 && next >= 0xdc00 && next <= 0xdfff) {
+                        c = 0x10000 + ((c - 0xd800) << 10) + (next - 0xdc00);
+                        i++;
+                        bytes[n++] = 0xf0 | (c >> 18);
+                        bytes[n++] = 0x80 | ((c >> 12) & 63);
+                        bytes[n++] = 0x80 | ((c >> 6) & 63);
+                        bytes[n++] = 0x80 | (c & 63);
+                    }
+                    else {
+                        bytes[n++] = 0xef;
+                        bytes[n++] = 0xbf;
+                        bytes[n++] = 0xbd;
+                    }
+                }
+            }
+            return bytes.slice(0, n);
+        }
+    };
+const textEncoder = /* #__PURE__ */ new TextEncoder();
+// For the color space mappings, see Rec. ITU-T H.273.
+const COLOR_PRIMARIES_MAP = {
+    bt709: 1, // ITU-R BT.709
+    bt470bg: 5, // ITU-R BT.470BG
+    smpte170m: 6, // ITU-R BT.601 525 - SMPTE 170M
+    bt2020: 9, // ITU-R BT.202
+    smpte432: 12, // SMPTE EG 432-1
+};
+const TRANSFER_CHARACTERISTICS_MAP = {
+    'bt709': 1, // ITU-R BT.709
+    'smpte170m': 6, // SMPTE 170M
+    'linear': 8, // Linear transfer characteristics
+    'iec61966-2-1': 13, // IEC 61966-2-1
+    'pq': 16, // Rec. ITU-R BT.2100-2 perceptual quantization (PQ) system
+    'hlg': 18, // Rec. ITU-R BT.2100-2 hybrid loggamma (HLG) system
+};
+const MATRIX_COEFFICIENTS_MAP = {
+    'rgb': 0, // Identity
+    'bt709': 1, // ITU-R BT.709
+    'bt470bg': 5, // ITU-R BT.470BG
+    'smpte170m': 6, // SMPTE 170M
+    'bt2020-ncl': 9, // ITU-R BT.2020-2 (non-constant luminance)
+};
+const colorSpaceIsEmpty = (colorSpace) => {
+    return (!colorSpace
+        || (colorSpace.primaries == null
+            && colorSpace.transfer == null
+            && colorSpace.matrix == null
+            && colorSpace.fullRange == null));
+};
+const isAllowSharedBufferSource = (x) => {
+    return (x instanceof ArrayBuffer
+        || (typeof SharedArrayBuffer !== 'undefined' && x instanceof SharedArrayBuffer)
+        || ArrayBuffer.isView(x));
+};
+class AsyncMutex {
+    constructor() {
+        this.currentPromise = Promise.resolve();
+        this.pending = 0;
+    }
+    async acquire() {
+        let resolver;
+        const nextPromise = new Promise((resolve) => {
+            let resolved = false;
+            resolver = () => {
+                if (resolved) {
+                    return;
+                }
+                resolve();
+                this.pending--;
+                resolved = true;
+            };
+        });
+        const currentPromiseAlias = this.currentPromise;
+        this.currentPromise = nextPromise;
+        this.pending++;
+        await currentPromiseAlias;
+        return resolver;
+    }
+}
+const bytesToHexString = (bytes) => {
+    return [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
+};
+const reverseBitsU32 = (x) => {
+    x = ((x >> 1) & 0x55555555) | ((x & 0x55555555) << 1);
+    x = ((x >> 2) & 0x33333333) | ((x & 0x33333333) << 2);
+    x = ((x >> 4) & 0x0f0f0f0f) | ((x & 0x0f0f0f0f) << 4);
+    x = ((x >> 8) & 0x00ff00ff) | ((x & 0x00ff00ff) << 8);
+    x = ((x >> 16) & 0x0000ffff) | ((x & 0x0000ffff) << 16);
+    return x >>> 0; // Ensure it's treated as an unsigned 32-bit integer
+};
+/** Returns the largest index i such that val[i] <= key, or -1 if no such index exists. */
+const binarySearchLessOrEqual = (arr, key, valueGetter) => {
+    let low = 0;
+    let high = arr.length - 1;
+    let ans = -1;
+    while (low <= high) {
+        const mid = (low + (high - low + 1) / 2) | 0;
+        const midVal = valueGetter(arr[mid]);
+        if (midVal <= key) {
+            ans = mid;
+            low = mid + 1;
+        }
+        else {
+            high = mid - 1;
+        }
+    }
+    return ans;
+};
+const promiseWithResolvers = () => {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve: resolve, reject: reject };
+};
+const assertNever = (x) => {
+    // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
+    throw new Error(`Unexpected value: ${x}`);
+};
+const getUint24 = (view, byteOffset, littleEndian) => {
+    const byte1 = view.getUint8(byteOffset);
+    const byte2 = view.getUint8(byteOffset + 1);
+    const byte3 = view.getUint8(byteOffset + 2);
+    {
+        return (byte1 << 16) | (byte2 << 8) | byte3;
+    }
+};
+const setUint24 = (view, byteOffset, value, littleEndian) => {
+    // Ensure the value is within 24-bit unsigned range (0 to 16777215)
+    value = value >>> 0; // Convert to unsigned 32-bit
+    value = value & 0xFFFFFF; // Mask to 24 bits
+    {
+        view.setUint8(byteOffset, (value >>> 16) & 0xFF);
+        view.setUint8(byteOffset + 1, (value >>> 8) & 0xFF);
+        view.setUint8(byteOffset + 2, value & 0xFF);
+    }
+};
+const clamp = (value, min, max) => {
+    return Math.max(min, Math.min(max, value));
+};
+const lerp = (from, to, t) => {
+    return from + (to - from) * t;
+};
+const UNDETERMINED_LANGUAGE = 'und';
+const roundToMultiple = (value, multiple) => {
+    return Math.round(value / multiple) * multiple;
+};
+const floorToDivisor = (value, multiple) => {
+    return Math.floor(value * multiple) / multiple;
+};
+const popcount = (value) => {
+    let count = 0;
+    while (value !== 0) {
+        value &= value - 1;
+        count++;
+    }
+    return count;
+};
+const ISO_639_2_REGEX = /^[a-z]{3}$/;
+const isIso639Dash2LanguageCode = (x) => {
+    return ISO_639_2_REGEX.test(x);
+};
+// Since the result will be truncated, add a bit of eps to compensate for floating point errors
+const SECOND_TO_MICROSECOND_FACTOR = 1e6 * (1 + Number.EPSILON);
+const computeRationalApproximation = (x, maxDenominator) => {
+    // Handle negative numbers
+    const sign = x < 0 ? -1 : 1;
+    x = Math.abs(x);
+    let prevNumerator = 0, prevDenominator = 1;
+    let currNumerator = 1, currDenominator = 0;
+    // Continued fraction algorithm
+    let remainder = x;
+    while (true) {
+        const integer = Math.floor(remainder);
+        // Calculate next convergent
+        const nextNumerator = integer * currNumerator + prevNumerator;
+        const nextDenominator = integer * currDenominator + prevDenominator;
+        if (nextDenominator > maxDenominator) {
+            return {
+                num: sign * currNumerator,
+                den: currDenominator,
+            };
+        }
+        prevNumerator = currNumerator;
+        prevDenominator = currDenominator;
+        currNumerator = nextNumerator;
+        currDenominator = nextDenominator;
+        remainder = 1 / (remainder - integer);
+        // Guard against precision issues
+        if (!isFinite(remainder)) {
+            break;
+        }
+    }
+    return {
+        num: sign * currNumerator,
+        den: currDenominator,
+    };
+};
+class CallSerializer {
+    constructor() {
+        this.currentPromise = Promise.resolve();
+    }
+    call(fn) {
+        return this.currentPromise = this.currentPromise.then(fn);
+    }
+}
+let isFirefoxCache = null;
+const isFirefox = () => {
+    if (isFirefoxCache !== null) {
+        return isFirefoxCache;
+    }
+    return isFirefoxCache = typeof navigator !== 'undefined' && navigator.userAgent?.includes('Firefox');
+};
+let isChromiumCache = null;
+const isChromium = () => {
+    if (isChromiumCache !== null) {
+        return isChromiumCache;
+    }
+    return isChromiumCache = !!(typeof navigator !== 'undefined'
+        // eslint-disable-next-line @typescript-eslint/no-deprecated
+        && (navigator.vendor?.includes('Google Inc') || /Chrome/.test(navigator.userAgent)));
+};
+let chromiumVersionCache = null;
+const getChromiumVersion = () => {
+    if (chromiumVersionCache !== null) {
+        return chromiumVersionCache;
+    }
+    if (typeof navigator === 'undefined') {
+        return null;
+    }
+    const match = /\bChrome\/(\d+)/.exec(navigator.userAgent);
+    if (!match) {
+        return null;
+    }
+    return chromiumVersionCache = Number(match[1]);
+};
+const missingWebCodecsClassMessage = (className) => {
+    if (typeof globalThis.isSecureContext !== 'undefined' && !globalThis.isSecureContext) {
+        // WebCodecs is not exposed in insecure contexts
+        return `${className} is not available in this environment; this may be because this page is running in an`
+            + ` insecure context. Try serving your page over HTTPS or use localhost.`;
+    }
+    return `${className} is not available in this environment.`;
+};
+// Browsers (at least Chromium) close codecs that have been idle for a long time and report this error
+const isCodecReclaimedError = (error) => {
+    return error instanceof DOMException
+        && error.name === 'QuotaExceededError'
+        && /reclaimed/i.test(error.message);
+};
+const NativePromiseConstructor = /* #__PURE__ */ (async () => { })().constructor;
+/**
+ * Needed to properly deal with custom Promise implementations and because this is closer to how the JS spec does it.
+ */
+const isThenable = (value) => {
+    if (value instanceof NativePromiseConstructor || value instanceof Promise) {
+        return true;
+    }
+    // Fall back to a crude duck typing check
+    return typeof value?.then === 'function';
+};
+const keyValueIterator = function* (object) {
+    for (const key in object) {
+        const value = object[key];
+        if (value === undefined) {
+            continue;
+        }
+        yield { key, value };
+    }
+};
+const polyfillSymbolDispose = () => {
+    // https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html
+    // @ts-expect-error Readonly
+    Symbol.dispose ??= Symbol('Symbol.dispose');
+};
+const isNumber = (x) => {
+    return typeof x === 'number' && !Number.isNaN(x);
+};
+const arrayArgmin = (array, getValue) => {
+    let minIndex = -1;
+    let minValue = Infinity;
+    for (let i = 0; i < array.length; i++) {
+        const value = getValue(array[i]);
+        if (value < minValue) {
+            minValue = value;
+            minIndex = i;
+        }
+    }
+    return minIndex;
+};
+const simplifyRational = (rational) => {
+    assert(Number.isInteger(rational.num));
+    assert(Number.isInteger(rational.den));
+    assert(rational.den !== 0);
+    let a = Math.abs(rational.num);
+    let b = Math.abs(rational.den);
+    // Euclidean algorithm
+    while (b !== 0) {
+        const t = a % b;
+        a = b;
+        b = t;
+    }
+    const gcd = a || 1;
+    return {
+        num: rational.num / gcd,
+        den: rational.den / gcd,
+    };
+};
+const validateRectangle = (rect, propertyPath) => {
+    if (typeof rect !== 'object' || !rect) {
+        throw new TypeError(`${propertyPath} must be an object.`);
+    }
+    if (!Number.isInteger(rect.left) || rect.left < 0) {
+        throw new TypeError(`${propertyPath}.left must be a non-negative integer.`);
+    }
+    if (!Number.isInteger(rect.top) || rect.top < 0) {
+        throw new TypeError(`${propertyPath}.top must be a non-negative integer.`);
+    }
+    if (!Number.isInteger(rect.width) || rect.width < 0) {
+        throw new TypeError(`${propertyPath}.width must be a non-negative integer.`);
+    }
+    if (!Number.isInteger(rect.height) || rect.height < 0) {
+        throw new TypeError(`${propertyPath}.height must be a non-negative integer.`);
+    }
+};
+const wait = (ms) => {
+    return new Promise(resolve => setTimeout(resolve, ms));
+};
+const toArray = (x) => {
+    if (Array.isArray(x)) {
+        return x;
+    }
+    else {
+        return [x];
+    }
+};
+/**
+ * A class that manages event listeners and dispatches events to them.
+ *
+ * @group Miscellaneous
+ * @public
+ */
+class EventEmitter {
+    constructor() {
+        /** @internal */
+        this._listeners = new Map();
+    }
+    /** Registers a listener for the given event. Returns a function that, when called, removes the listener again. */
+    on(event, listener, options) {
+        if (!this._listeners.has(event)) {
+            this._listeners.set(event, new Set());
+        }
+        const entry = { fn: listener, once: options?.once ?? false };
+        this._listeners.get(event).add(entry);
+        return () => {
+            this._listeners.get(event)?.delete(entry);
+        };
+    }
+    /** @internal */
+    _emit(...args) {
+        const [event, data] = args;
+        const listeners = this._listeners.get(event);
+        if (!listeners) {
+            return;
+        }
+        for (const entry of listeners) {
+            try {
+                entry.fn(data);
+            }
+            catch (error) {
+                // Deliberately not routed through Logging here: Logging emits via an EventEmitter, so a throwing
+                // log listener would recurse straight back into this handler.
+                console.error(error);
+            }
+            if (entry.once) {
+                listeners.delete(entry);
+            }
+        }
+    }
+}
+const isRecordStringString = (value) => {
+    return value !== null
+        && typeof value === 'object'
+        && Object.getPrototypeOf(value) === Object.prototype
+        && Object.values(value).every(x => typeof x === 'string');
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/**
+ * Controls how much information Mediabunny prints to the console. Higher levels include all lower levels.
+ *
+ * @group Logging
+ * @public
+ */
+var LogLevel;
+(function (LogLevel) {
+    /** Nothing is printed to the console. */
+    LogLevel[LogLevel["Silent"] = 0] = "Silent";
+    /** Only errors are printed. */
+    LogLevel[LogLevel["Errors"] = 1] = "Errors";
+    /** Errors and warnings are printed. */
+    LogLevel[LogLevel["Warnings"] = 2] = "Warnings";
+    /** Errors, warnings, and informational messages are printed. */
+    LogLevel[LogLevel["Info"] = 3] = "Info";
+})(LogLevel || (LogLevel = {}));
+/**
+ * Mediabunny's central logging singleton. Use {@link Logging.level} to control how much is printed to the console,
+ * and subscribe to log events using {@link Logging.on}.
+ *
+ * Having manual control over logging is useful for command-line applications where you want full say over the output.
+ *
+ * @group Logging
+ * @public
+ */
+class Logging {
+    constructor() { }
+    /** The current log level. Defaults to {@link LogLevel.Info}. */
+    static get level() {
+        return Logging._level;
+    }
+    static set level(value) {
+        if (value !== LogLevel.Silent
+            && value !== LogLevel.Errors
+            && value !== LogLevel.Warnings
+            && value !== LogLevel.Info) {
+            throw new TypeError('Invalid log level. Use one of the values of the LogLevel enum.');
+        }
+        Logging._level = value;
+    }
+    /** @internal */
+    static get _emitter() {
+        // Created lazily to avoid touching the EventEmitter binding at module-eval time
+        return Logging._emitterInstance ??= new EventEmitter();
+    }
+    /** Registers a listener for a log event. Returns a function that, when called, removes the listener again. */
+    static on(event, listener, options) {
+        return Logging._emitter.on(event, listener, options);
+    }
+    /** @internal */
+    static _error(...args) {
+        Logging._emitter._emit('error', args);
+        if (Logging._level >= LogLevel.Errors) {
+            console.error(...args);
+        }
+    }
+    /** @internal */
+    static _warn(...args) {
+        Logging._emitter._emit('warn', args);
+        if (Logging._level >= LogLevel.Warnings) {
+            console.warn(...args);
+        }
+    }
+    /** @internal */
+    static _info(...args) {
+        Logging._emitter._emit('info', args);
+        if (Logging._level >= LogLevel.Info) {
+            console.info(...args);
+        }
+    }
+}
+/** @internal */
+Logging._level = LogLevel.Info;
+/** @internal */
+Logging._emitterInstance = null;
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/**
+ * Image data with additional metadata.
+ *
+ * @group Metadata tags
+ * @public
+ */
+class RichImageData {
+    /** Creates a new {@link RichImageData}. */
+    constructor(
+    /** The raw image data. */
+    data, 
+    /** An RFC 6838 MIME type (e.g. image/jpeg, image/png, etc.) */
+    mimeType) {
+        this.data = data;
+        this.mimeType = mimeType;
+        if (!(data instanceof Uint8Array)) {
+            throw new TypeError('data must be a Uint8Array.');
+        }
+        if (typeof mimeType !== 'string') {
+            throw new TypeError('mimeType must be a string.');
+        }
+    }
+}
+/**
+ * A file attached to a media file.
+ *
+ * @group Metadata tags
+ * @public
+ */
+class AttachedFile {
+    /** Creates a new {@link AttachedFile}. */
+    constructor(
+    /** The raw file data. */
+    data, 
+    /** An RFC 6838 MIME type (e.g. image/jpeg, image/png, font/ttf, etc.) */
+    mimeType, 
+    /** The name of the file. */
+    name, 
+    /** A description of the file. */
+    description) {
+        this.data = data;
+        this.mimeType = mimeType;
+        this.name = name;
+        this.description = description;
+        if (!(data instanceof Uint8Array)) {
+            throw new TypeError('data must be a Uint8Array.');
+        }
+        if (mimeType !== undefined && typeof mimeType !== 'string') {
+            throw new TypeError('mimeType, when provided, must be a string.');
+        }
+        if (name !== undefined && typeof name !== 'string') {
+            throw new TypeError('name, when provided, must be a string.');
+        }
+        if (description !== undefined && typeof description !== 'string') {
+            throw new TypeError('description, when provided, must be a string.');
+        }
+    }
+}
+const validateMetadataTags = (tags) => {
+    if (!tags || typeof tags !== 'object') {
+        throw new TypeError('tags must be an object.');
+    }
+    if (tags.title !== undefined && typeof tags.title !== 'string') {
+        throw new TypeError('tags.title, when provided, must be a string.');
+    }
+    if (tags.description !== undefined && typeof tags.description !== 'string') {
+        throw new TypeError('tags.description, when provided, must be a string.');
+    }
+    if (tags.artist !== undefined && typeof tags.artist !== 'string') {
+        throw new TypeError('tags.artist, when provided, must be a string.');
+    }
+    if (tags.album !== undefined && typeof tags.album !== 'string') {
+        throw new TypeError('tags.album, when provided, must be a string.');
+    }
+    if (tags.albumArtist !== undefined && typeof tags.albumArtist !== 'string') {
+        throw new TypeError('tags.albumArtist, when provided, must be a string.');
+    }
+    if (tags.trackNumber !== undefined && (!Number.isInteger(tags.trackNumber) || tags.trackNumber <= 0)) {
+        throw new TypeError('tags.trackNumber, when provided, must be a positive integer.');
+    }
+    if (tags.tracksTotal !== undefined
+        && (!Number.isInteger(tags.tracksTotal) || tags.tracksTotal <= 0)) {
+        throw new TypeError('tags.tracksTotal, when provided, must be a positive integer.');
+    }
+    if (tags.discNumber !== undefined && (!Number.isInteger(tags.discNumber) || tags.discNumber <= 0)) {
+        throw new TypeError('tags.discNumber, when provided, must be a positive integer.');
+    }
+    if (tags.discsTotal !== undefined
+        && (!Number.isInteger(tags.discsTotal) || tags.discsTotal <= 0)) {
+        throw new TypeError('tags.discsTotal, when provided, must be a positive integer.');
+    }
+    if (tags.genre !== undefined && typeof tags.genre !== 'string') {
+        throw new TypeError('tags.genre, when provided, must be a string.');
+    }
+    if (tags.date !== undefined && (!(tags.date instanceof Date) || Number.isNaN(tags.date.getTime()))) {
+        throw new TypeError('tags.date, when provided, must be a valid Date.');
+    }
+    if (tags.beatsPerMinute !== undefined
+        && (!Number.isInteger(tags.beatsPerMinute) || tags.beatsPerMinute <= 0)) {
+        throw new TypeError('tags.beatsPerMinute, when provided, must be a positive integer.');
+    }
+    if (tags.lyrics !== undefined && typeof tags.lyrics !== 'string') {
+        throw new TypeError('tags.lyrics, when provided, must be a string.');
+    }
+    if (tags.images !== undefined) {
+        if (!Array.isArray(tags.images)) {
+            throw new TypeError('tags.images, when provided, must be an array.');
+        }
+        for (const image of tags.images) {
+            if (!image || typeof image !== 'object') {
+                throw new TypeError('Each image in tags.images must be an object.');
+            }
+            if (!(image.data instanceof Uint8Array)) {
+                throw new TypeError('Each image.data must be a Uint8Array.');
+            }
+            if (typeof image.mimeType !== 'string') {
+                throw new TypeError('Each image.mimeType must be a string.');
+            }
+            if (!['coverFront', 'coverBack', 'unknown'].includes(image.kind)) {
+                throw new TypeError('Each image.kind must be \'coverFront\', \'coverBack\', or \'unknown\'.');
+            }
+        }
+    }
+    if (tags.comment !== undefined && typeof tags.comment !== 'string') {
+        throw new TypeError('tags.comment, when provided, must be a string.');
+    }
+    if (tags.raw !== undefined) {
+        if (!tags.raw || typeof tags.raw !== 'object') {
+            throw new TypeError('tags.raw, when provided, must be an object.');
+        }
+        for (const value of Object.values(tags.raw)) {
+            if (value !== null
+                && typeof value !== 'string'
+                && !(Array.isArray(value) && value.every(x => typeof x === 'string'))
+                && !(value instanceof Uint8Array)
+                && !(value instanceof RichImageData)
+                && !(value instanceof AttachedFile)
+                && !isRecordStringString(value)) {
+                throw new TypeError('Each value in tags.raw must be a string, string array, Uint8Array, RichImageData, AttachedFile, '
+                    + 'Record<string, string>, or null.');
+            }
+        }
+    }
+};
+const validateTrackDisposition = (disposition) => {
+    if (!disposition || typeof disposition !== 'object') {
+        throw new TypeError('disposition must be an object.');
+    }
+    if (disposition.default !== undefined && typeof disposition.default !== 'boolean') {
+        throw new TypeError('disposition.default must be a boolean.');
+    }
+    if (disposition.primary !== undefined && typeof disposition.primary !== 'boolean') {
+        throw new TypeError('disposition.primary must be a boolean.');
+    }
+    if (disposition.forced !== undefined && typeof disposition.forced !== 'boolean') {
+        throw new TypeError('disposition.forced must be a boolean.');
+    }
+    if (disposition.original !== undefined && typeof disposition.original !== 'boolean') {
+        throw new TypeError('disposition.original must be a boolean.');
+    }
+    if (disposition.commentary !== undefined && typeof disposition.commentary !== 'boolean') {
+        throw new TypeError('disposition.commentary must be a boolean.');
+    }
+    if (disposition.hearingImpaired !== undefined && typeof disposition.hearingImpaired !== 'boolean') {
+        throw new TypeError('disposition.hearingImpaired must be a boolean.');
+    }
+    if (disposition.visuallyImpaired !== undefined && typeof disposition.visuallyImpaired !== 'boolean') {
+        throw new TypeError('disposition.visuallyImpaired must be a boolean.');
+    }
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+class Bitstream {
+    constructor(bytes) {
+        this.bytes = bytes;
+        /** Current offset in bits. */
+        this.pos = 0;
+    }
+    seekToByte(byteOffset) {
+        this.pos = 8 * byteOffset;
+    }
+    readBit() {
+        const byteIndex = Math.floor(this.pos / 8);
+        const byte = this.bytes[byteIndex] ?? 0;
+        const bitIndex = 0b111 - (this.pos & 0b111);
+        const bit = (byte & (1 << bitIndex)) >> bitIndex;
+        this.pos++;
+        return bit;
+    }
+    readBits(n) {
+        if (n === 1) {
+            return this.readBit();
+        }
+        let result = 0;
+        for (let i = 0; i < n; i++) {
+            result <<= 1;
+            result |= this.readBit();
+        }
+        return result;
+    }
+    writeBits(n, value) {
+        const end = this.pos + n;
+        for (let i = this.pos; i < end; i++) {
+            const byteIndex = Math.floor(i / 8);
+            let byte = this.bytes[byteIndex];
+            const bitIndex = 0b111 - (i & 0b111);
+            byte &= ~(1 << bitIndex);
+            byte |= ((value & (1 << (end - i - 1))) >> (end - i - 1)) << bitIndex;
+            this.bytes[byteIndex] = byte;
+        }
+        this.pos = end;
+    }
+    copyBits(n, other) {
+        let i = 0;
+        for (i; i < n - 7; i += 8) {
+            this.writeBits(8, other.readBits(8));
+        }
+        const leftover = n - i;
+        if (leftover > 0) {
+            this.writeBits(leftover, other.readBits(leftover));
+        }
+    }
+    readAlignedByte() {
+        if (this.pos % 8 !== 0) {
+            throw new Error('Bitstream is not byte-aligned.');
+        }
+        const byteIndex = this.pos / 8;
+        const byte = this.bytes[byteIndex] ?? 0;
+        this.pos += 8;
+        return byte;
+    }
+    skipBits(n) {
+        this.pos += n;
+    }
+    getBitsLeft() {
+        return this.bytes.length * 8 - this.pos;
+    }
+    clone() {
+        const clone = new Bitstream(this.bytes);
+        clone.pos = this.pos;
+        return clone;
+    }
+}
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const aacFrequencyTable = [
+    96000, 88200, 64000, 48000, 44100, 32000,
+    24000, 22050, 16000, 12000, 11025, 8000, 7350,
+];
+const aacChannelMap = [-1, 1, 2, 3, 4, 5, 6, 8];
+const buildAacAudioSpecificConfig = (config) => {
+    const usesSbr = config.objectType === 5 || config.objectType === 29;
+    const usesPs = config.objectType === 29;
+    // SBR runs the core coder at half the output rate, and PS upmixes a mono core to stereo
+    const coreSampleRate = usesSbr ? config.outputSampleRate / 2 : config.outputSampleRate;
+    const coreNumberOfChannels = usesPs ? 1 : config.outputNumberOfChannels;
+    const channelConfiguration = aacChannelMap.indexOf(coreNumberOfChannels);
+    if (channelConfiguration === -1) {
+        throw new TypeError(`Unsupported number of channels: ${config.outputNumberOfChannels}`);
+    }
+    // Object type, sampling frequency, channel configuration, then a bare GASpecificConfig
+    let bitCount = 5 + 4 + 4 + 3;
+    if (config.objectType >= 32) {
+        bitCount += 6;
+    }
+    if (findAacFrequencyIndex(coreSampleRate) === 15) {
+        bitCount += 24;
+    }
+    if (usesSbr) {
+        bitCount += 4 + 5; // Extension sampling frequency and the object type of the core coder
+        if (findAacFrequencyIndex(config.outputSampleRate) === 15) {
+            bitCount += 24;
+        }
+    }
+    const byteCount = Math.ceil(bitCount / 8);
+    const bytes = new Uint8Array(byteCount);
+    const bitstream = new Bitstream(bytes);
+    writeAacObjectType(bitstream, config.objectType);
+    writeAacSamplingFrequency(bitstream, coreSampleRate);
+    bitstream.writeBits(4, channelConfiguration);
+    if (usesSbr) {
+        writeAacSamplingFrequency(bitstream, config.outputSampleRate);
+        writeAacObjectType(bitstream, 2); // AAC-LC underneath
+    }
+    bitstream.writeBits(3, 0); // frameLengthFlag, dependsOnCoreCoder, extensionFlag
+    return bytes;
+};
+const writeAacObjectType = (bitstream, objectType) => {
+    if (objectType < 32) {
+        bitstream.writeBits(5, objectType);
+    }
+    else {
+        bitstream.writeBits(5, 31);
+        bitstream.writeBits(6, objectType - 32);
+    }
+};
+const writeAacSamplingFrequency = (bitstream, sampleRate) => {
+    const frequencyIndex = findAacFrequencyIndex(sampleRate);
+    bitstream.writeBits(4, frequencyIndex);
+    if (frequencyIndex === 15) {
+        bitstream.writeBits(24, sampleRate);
+    }
+};
+const findAacFrequencyIndex = (sampleRate) => {
+    const index = aacFrequencyTable.indexOf(sampleRate);
+    return index === -1 ? 15 : index;
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/** Sample rates indexed by fscod (Table 4.1) */
+const AC3_SAMPLE_RATES = [48000, 44100, 32000];
+/** E-AC-3 reduced sample rates for fscod2 per ATSC A/52:2018 */
+const EAC3_REDUCED_SAMPLE_RATES = [24000, 22050, 16000];
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+// This file is generated by scripts/write-version.ts. Do not edit manually.
+const VERSION = '1.61.5';
+const VERSIONED_NAME = `Mediabunny v${VERSION}`;
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+// References for AVC/HEVC code:
+// ISO 14496-15
+// Rec. ITU-T H.264
+// Rec. ITU-T H.265
+// https://stackoverflow.com/questions/24884827
+var AvcNalUnitType;
+(function (AvcNalUnitType) {
+    AvcNalUnitType[AvcNalUnitType["NON_IDR_SLICE"] = 1] = "NON_IDR_SLICE";
+    AvcNalUnitType[AvcNalUnitType["SLICE_DPA"] = 2] = "SLICE_DPA";
+    AvcNalUnitType[AvcNalUnitType["SLICE_DPB"] = 3] = "SLICE_DPB";
+    AvcNalUnitType[AvcNalUnitType["SLICE_DPC"] = 4] = "SLICE_DPC";
+    AvcNalUnitType[AvcNalUnitType["IDR"] = 5] = "IDR";
+    AvcNalUnitType[AvcNalUnitType["SEI"] = 6] = "SEI";
+    AvcNalUnitType[AvcNalUnitType["SPS"] = 7] = "SPS";
+    AvcNalUnitType[AvcNalUnitType["PPS"] = 8] = "PPS";
+    AvcNalUnitType[AvcNalUnitType["AUD"] = 9] = "AUD";
+    AvcNalUnitType[AvcNalUnitType["SPS_EXT"] = 13] = "SPS_EXT";
+})(AvcNalUnitType || (AvcNalUnitType = {}));
+var HevcNalUnitType;
+(function (HevcNalUnitType) {
+    HevcNalUnitType[HevcNalUnitType["RASL_N"] = 8] = "RASL_N";
+    HevcNalUnitType[HevcNalUnitType["RASL_R"] = 9] = "RASL_R";
+    HevcNalUnitType[HevcNalUnitType["BLA_W_LP"] = 16] = "BLA_W_LP";
+    HevcNalUnitType[HevcNalUnitType["RSV_IRAP_VCL23"] = 23] = "RSV_IRAP_VCL23";
+    HevcNalUnitType[HevcNalUnitType["VPS_NUT"] = 32] = "VPS_NUT";
+    HevcNalUnitType[HevcNalUnitType["SPS_NUT"] = 33] = "SPS_NUT";
+    HevcNalUnitType[HevcNalUnitType["PPS_NUT"] = 34] = "PPS_NUT";
+    HevcNalUnitType[HevcNalUnitType["AUD_NUT"] = 35] = "AUD_NUT";
+    HevcNalUnitType[HevcNalUnitType["PREFIX_SEI_NUT"] = 39] = "PREFIX_SEI_NUT";
+    HevcNalUnitType[HevcNalUnitType["SUFFIX_SEI_NUT"] = 40] = "SUFFIX_SEI_NUT";
+})(HevcNalUnitType || (HevcNalUnitType = {}));
+const iterateNalUnitsInAnnexB = function* (packetData) {
+    let i = 0;
+    let nalStart = -1;
+    while (i < packetData.length - 2) {
+        const zeroIndex = packetData.indexOf(0, i);
+        if (zeroIndex === -1 || zeroIndex >= packetData.length - 2) {
+            break;
+        }
+        i = zeroIndex;
+        let startCodeLength = 0;
+        // Check for 4-byte start code (0x00000001)
+        if (i + 3 < packetData.length
+            && packetData[i + 1] === 0
+            && packetData[i + 2] === 0
+            && packetData[i + 3] === 1) {
+            startCodeLength = 4;
+        }
+        else if (packetData[i + 1] === 0 && packetData[i + 2] === 1) {
+            // Check for 3-byte start code (0x000001)
+            startCodeLength = 3;
+        }
+        if (startCodeLength === 0) {
+            i++;
+            continue;
+        }
+        // If we had a previous NAL unit, yield it
+        if (nalStart !== -1 && i > nalStart) {
+            yield {
+                offset: nalStart,
+                length: i - nalStart,
+            };
+        }
+        nalStart = i + startCodeLength;
+        i = nalStart;
+    }
+    // Yield the last NAL unit if there is one
+    if (nalStart !== -1 && nalStart < packetData.length) {
+        yield {
+            offset: nalStart,
+            length: packetData.length - nalStart,
+        };
+    }
+};
+const iterateNalUnitsInLengthPrefixed = function* (packetData, lengthSize) {
+    let offset = 0;
+    const dataView = new DataView(packetData.buffer, packetData.byteOffset, packetData.byteLength);
+    while (offset + lengthSize <= packetData.length) {
+        let nalUnitLength;
+        if (lengthSize === 1) {
+            nalUnitLength = dataView.getUint8(offset);
+        }
+        else if (lengthSize === 2) {
+            nalUnitLength = dataView.getUint16(offset, false);
+        }
+        else if (lengthSize === 3) {
+            nalUnitLength = getUint24(dataView, offset);
+        }
+        else {
+            assert(lengthSize === 4);
+            nalUnitLength = dataView.getUint32(offset, false);
+        }
+        offset += lengthSize;
+        yield {
+            offset,
+            length: nalUnitLength,
+        };
+        offset += nalUnitLength;
+    }
+};
+const iterateAvcNalUnits = (packetData, decoderConfig) => {
+    if (decoderConfig.description) {
+        const bytes = toUint8Array(decoderConfig.description);
+        const lengthSizeMinusOne = bytes[4] & 0b11;
+        const lengthSize = (lengthSizeMinusOne + 1);
+        return iterateNalUnitsInLengthPrefixed(packetData, lengthSize);
+    }
+    else {
+        return iterateNalUnitsInAnnexB(packetData);
+    }
+};
+const extractNalUnitTypeForAvc = (byte) => {
+    return byte & 0x1F;
+};
+const removeEmulationPreventionBytes = (data) => {
+    const result = [];
+    const len = data.length;
+    for (let i = 0; i < len; i++) {
+        // Look for the 0x000003 pattern
+        if (i + 2 < len && data[i] === 0x00 && data[i + 1] === 0x00 && data[i + 2] === 0x03) {
+            result.push(0x00, 0x00); // Push the first two bytes
+            i += 2; // Skip the 0x03 byte
+        }
+        else {
+            result.push(data[i]);
+        }
+    }
+    return new Uint8Array(result);
+};
+const concatNalUnitsInLengthPrefixed = (nalUnits, lengthSize) => {
+    const totalLength = nalUnits.reduce((a, b) => a + lengthSize + b.byteLength, 0);
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const nalUnit of nalUnits) {
+        const dataView = new DataView(result.buffer, result.byteOffset, result.byteLength);
+        switch (lengthSize) {
+            case 1:
+                dataView.setUint8(offset, nalUnit.byteLength);
+                break;
+            case 2:
+                dataView.setUint16(offset, nalUnit.byteLength, false);
+                break;
+            case 3:
+                setUint24(dataView, offset, nalUnit.byteLength);
+                break;
+            case 4:
+                dataView.setUint32(offset, nalUnit.byteLength, false);
+                break;
+        }
+        offset += lengthSize;
+        result.set(nalUnit, offset);
+        offset += nalUnit.byteLength;
+    }
+    return result;
+};
+/** Builds an AvcDecoderConfigurationRecord from an AVC packet in Annex B format. */
+const extractAvcDecoderConfigurationRecord = (packetData) => {
+    try {
+        const spsUnits = [];
+        const ppsUnits = [];
+        const spsExtUnits = [];
+        for (const loc of iterateNalUnitsInAnnexB(packetData)) {
+            const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
+            const type = extractNalUnitTypeForAvc(nalUnit[0]);
+            if (type === AvcNalUnitType.SPS) {
+                spsUnits.push(nalUnit);
+            }
+            else if (type === AvcNalUnitType.PPS) {
+                ppsUnits.push(nalUnit);
+            }
+            else if (type === AvcNalUnitType.SPS_EXT) {
+                spsExtUnits.push(nalUnit);
+            }
+        }
+        if (spsUnits.length === 0) {
+            return null;
+        }
+        if (ppsUnits.length === 0) {
+            return null;
+        }
+        // Let's get the first SPS for profile and level information
+        const spsData = spsUnits[0];
+        const spsInfo = parseAvcSps(spsData);
+        assert(spsInfo !== null);
+        const hasExtendedData = spsInfo.profileIdc === 100
+            || spsInfo.profileIdc === 110
+            || spsInfo.profileIdc === 122
+            || spsInfo.profileIdc === 144;
+        return {
+            configurationVersion: 1,
+            avcProfileIndication: spsInfo.profileIdc,
+            profileCompatibility: spsInfo.constraintFlags,
+            avcLevelIndication: spsInfo.levelIdc,
+            lengthSizeMinusOne: 3, // Typically 4 bytes for length field
+            sequenceParameterSets: spsUnits,
+            pictureParameterSets: ppsUnits,
+            chromaFormat: hasExtendedData ? spsInfo.chromaFormatIdc : null,
+            bitDepthLumaMinus8: hasExtendedData ? spsInfo.bitDepthLumaMinus8 : null,
+            bitDepthChromaMinus8: hasExtendedData ? spsInfo.bitDepthChromaMinus8 : null,
+            sequenceParameterSetExt: hasExtendedData ? spsExtUnits : null,
+        };
+    }
+    catch (error) {
+        Logging._error('Error building AVC Decoder Configuration Record:', error);
+        return null;
+    }
+};
+/** Serializes an AvcDecoderConfigurationRecord into the format specified in Section 5.3.3.1 of ISO 14496-15. */
+const serializeAvcDecoderConfigurationRecord = (record) => {
+    const bytes = [];
+    // Write header
+    bytes.push(record.configurationVersion);
+    bytes.push(record.avcProfileIndication);
+    bytes.push(record.profileCompatibility);
+    bytes.push(record.avcLevelIndication);
+    bytes.push(0xFC | (record.lengthSizeMinusOne & 0x03)); // Reserved bits (6) + lengthSizeMinusOne (2)
+    // Reserved bits (3) + numOfSequenceParameterSets (5)
+    bytes.push(0xE0 | (record.sequenceParameterSets.length & 0x1F));
+    // Write SPS
+    for (const sps of record.sequenceParameterSets) {
+        const length = sps.byteLength;
+        bytes.push(length >> 8); // High byte
+        bytes.push(length & 0xFF); // Low byte
+        for (let i = 0; i < length; i++) {
+            bytes.push(sps[i]);
+        }
+    }
+    bytes.push(record.pictureParameterSets.length);
+    // Write PPS
+    for (const pps of record.pictureParameterSets) {
+        const length = pps.byteLength;
+        bytes.push(length >> 8); // High byte
+        bytes.push(length & 0xFF); // Low byte
+        for (let i = 0; i < length; i++) {
+            bytes.push(pps[i]);
+        }
+    }
+    if ((record.avcProfileIndication === 100
+        || record.avcProfileIndication === 110
+        || record.avcProfileIndication === 122
+        || record.avcProfileIndication === 144)
+        && record.chromaFormat !== null // Can happen if the data was too short
+    ) {
+        assert(record.bitDepthLumaMinus8 !== null);
+        assert(record.bitDepthChromaMinus8 !== null);
+        assert(record.sequenceParameterSetExt !== null);
+        bytes.push(0xFC | (record.chromaFormat & 0x03)); // Reserved bits + chroma_format
+        bytes.push(0xF8 | (record.bitDepthLumaMinus8 & 0x07)); // Reserved bits + bit_depth_luma_minus8
+        bytes.push(0xF8 | (record.bitDepthChromaMinus8 & 0x07)); // Reserved bits + bit_depth_chroma_minus8
+        bytes.push(record.sequenceParameterSetExt.length);
+        // Write SPS Ext
+        for (const spsExt of record.sequenceParameterSetExt) {
+            const length = spsExt.byteLength;
+            bytes.push(length >> 8); // High byte
+            bytes.push(length & 0xFF); // Low byte
+            for (let i = 0; i < length; i++) {
+                bytes.push(spsExt[i]);
+            }
+        }
+    }
+    return new Uint8Array(bytes);
+};
+const AVC_HEVC_ASPECT_RATIO_IDC_TABLE = {
+    1: { num: 1, den: 1 },
+    2: { num: 12, den: 11 },
+    3: { num: 10, den: 11 },
+    4: { num: 16, den: 11 },
+    5: { num: 40, den: 33 },
+    6: { num: 24, den: 11 },
+    7: { num: 20, den: 11 },
+    8: { num: 32, den: 11 },
+    9: { num: 80, den: 33 },
+    10: { num: 18, den: 11 },
+    11: { num: 15, den: 11 },
+    12: { num: 64, den: 33 },
+    13: { num: 160, den: 99 },
+    14: { num: 4, den: 3 },
+    15: { num: 3, den: 2 },
+    16: { num: 2, den: 1 },
+};
+/** Parses an AVC SPS (Sequence Parameter Set) to extract basic information. */
+const parseAvcSps = (sps) => {
+    try {
+        const emulationUnpreventedBytes = removeEmulationPreventionBytes(sps);
+        const bitstream = new Bitstream(emulationUnpreventedBytes);
+        bitstream.skipBits(1); // forbidden_zero_bit
+        bitstream.skipBits(2); // nal_ref_idc
+        const nalUnitType = bitstream.readBits(5);
+        if (nalUnitType !== 7) { // SPS NAL unit type is 7
+            return null;
+        }
+        const profileIdc = bitstream.readAlignedByte();
+        const constraintFlags = bitstream.readAlignedByte();
+        const levelIdc = bitstream.readAlignedByte();
+        readExpGolomb(bitstream); // seq_parameter_set_id
+        // "When chroma_format_idc is not present, it shall be inferred to be equal to 1 (4:2:0 chroma format)."
+        let chromaFormatIdc = 1;
+        // "When bit_depth_luma_minus8 is not present, it shall be inferred to be equal to 0.""
+        let bitDepthLumaMinus8 = 0;
+        // "When bit_depth_chroma_minus8 is not present, it shall be inferred to be equal to 0."
+        let bitDepthChromaMinus8 = 0;
+        // "When separate_colour_plane_flag is not present, it shall be inferred to be equal to 0."
+        let separateColourPlaneFlag = 0;
+        // Handle high profile chroma_format_idc
+        if (profileIdc === 100
+            || profileIdc === 110
+            || profileIdc === 122
+            || profileIdc === 244
+            || profileIdc === 44
+            || profileIdc === 83
+            || profileIdc === 86
+            || profileIdc === 118
+            || profileIdc === 128) {
+            chromaFormatIdc = readExpGolomb(bitstream);
+            if (chromaFormatIdc === 3) {
+                separateColourPlaneFlag = bitstream.readBits(1);
+            }
+            bitDepthLumaMinus8 = readExpGolomb(bitstream);
+            bitDepthChromaMinus8 = readExpGolomb(bitstream);
+            bitstream.skipBits(1); // qpprime_y_zero_transform_bypass_flag
+            const seqScalingMatrixPresentFlag = bitstream.readBits(1);
+            if (seqScalingMatrixPresentFlag) {
+                for (let i = 0; i < (chromaFormatIdc !== 3 ? 8 : 12); i++) {
+                    const seqScalingListPresentFlag = bitstream.readBits(1);
+                    if (seqScalingListPresentFlag) {
+                        const sizeOfScalingList = i < 6 ? 16 : 64;
+                        let lastScale = 8;
+                        let nextScale = 8;
+                        for (let j = 0; j < sizeOfScalingList; j++) {
+                            if (nextScale !== 0) {
+                                const deltaScale = readSignedExpGolomb(bitstream);
+                                nextScale = (lastScale + deltaScale + 256) % 256;
+                            }
+                            lastScale = nextScale === 0 ? lastScale : nextScale;
+                        }
+                    }
+                }
+            }
+        }
+        readExpGolomb(bitstream); // log2_max_frame_num_minus4
+        const picOrderCntType = readExpGolomb(bitstream);
+        if (picOrderCntType === 0) {
+            readExpGolomb(bitstream); // log2_max_pic_order_cnt_lsb_minus4
+        }
+        else if (picOrderCntType === 1) {
+            bitstream.skipBits(1); // delta_pic_order_always_zero_flag
+            readSignedExpGolomb(bitstream); // offset_for_non_ref_pic
+            readSignedExpGolomb(bitstream); // offset_for_top_to_bottom_field
+            const numRefFramesInPicOrderCntCycle = readExpGolomb(bitstream);
+            for (let i = 0; i < numRefFramesInPicOrderCntCycle; i++) {
+                readSignedExpGolomb(bitstream); // offset_for_ref_frame[i]
+            }
+        }
+        readExpGolomb(bitstream); // max_num_ref_frames
+        bitstream.skipBits(1); // gaps_in_frame_num_value_allowed_flag
+        const picWidthInMbsMinus1 = readExpGolomb(bitstream);
+        const picHeightInMapUnitsMinus1 = readExpGolomb(bitstream);
+        const codedWidth = 16 * (picWidthInMbsMinus1 + 1);
+        const codedHeight = 16 * (picHeightInMapUnitsMinus1 + 1);
+        let displayWidth = codedWidth;
+        let displayHeight = codedHeight;
+        const frameMbsOnlyFlag = bitstream.readBits(1);
+        if (!frameMbsOnlyFlag) {
+            bitstream.skipBits(1); // mb_adaptive_frame_field_flag
+        }
+        bitstream.skipBits(1); // direct_8x8_inference_flag
+        const frameCroppingFlag = bitstream.readBits(1);
+        if (frameCroppingFlag) {
+            const frameCropLeftOffset = readExpGolomb(bitstream);
+            const frameCropRightOffset = readExpGolomb(bitstream);
+            const frameCropTopOffset = readExpGolomb(bitstream);
+            const frameCropBottomOffset = readExpGolomb(bitstream);
+            let cropUnitX;
+            let cropUnitY;
+            const chromaArrayType = separateColourPlaneFlag === 0 ? chromaFormatIdc : 0;
+            if (chromaArrayType === 0) {
+                // "If ChromaArrayType is equal to 0, CropUnitX and CropUnitY are derived as:"
+                cropUnitX = 1;
+                cropUnitY = 2 - frameMbsOnlyFlag;
+            }
+            else {
+                // "Otherwise (ChromaArrayType is equal to 1, 2, or 3), CropUnitX and CropUnitY are derived as:"
+                const subWidthC = chromaFormatIdc === 3 ? 1 : 2;
+                const subHeightC = chromaFormatIdc === 1 ? 2 : 1;
+                cropUnitX = subWidthC;
+                cropUnitY = subHeightC * (2 - frameMbsOnlyFlag);
+            }
+            displayWidth -= (cropUnitX * (frameCropLeftOffset + frameCropRightOffset));
+            displayHeight -= (cropUnitY * (frameCropTopOffset + frameCropBottomOffset));
+        }
+        // 2 = unspecified
+        let colourPrimaries = 2;
+        let transferCharacteristics = 2;
+        let matrixCoefficients = 2;
+        let fullRangeFlag = 0;
+        let pixelAspectRatio = { num: 1, den: 1 };
+        let numReorderFrames = null;
+        let maxDecFrameBuffering = null;
+        let bitstreamRestrictionFlagBitOffset = null;
+        let bitstreamRestrictionFlag = null;
+        const vuiParametersFlagBitOffset = bitstream.pos;
+        const vuiParametersPresentFlag = bitstream.readBits(1);
+        if (vuiParametersPresentFlag) {
+            const aspectRatioInfoPresentFlag = bitstream.readBits(1);
+            if (aspectRatioInfoPresentFlag) {
+                const aspectRatioIdc = bitstream.readBits(8);
+                if (aspectRatioIdc === 255) { // Extended_SAR
+                    pixelAspectRatio = {
+                        num: bitstream.readBits(16),
+                        den: bitstream.readBits(16),
+                    };
+                }
+                else {
+                    const aspectRatio = AVC_HEVC_ASPECT_RATIO_IDC_TABLE[aspectRatioIdc];
+                    if (aspectRatio) {
+                        pixelAspectRatio = aspectRatio;
+                    }
+                }
+            }
+            const overscanInfoPresentFlag = bitstream.readBits(1);
+            if (overscanInfoPresentFlag) {
+                bitstream.skipBits(1); // overscan_appropriate_flag
+            }
+            const videoSignalTypePresentFlag = bitstream.readBits(1);
+            if (videoSignalTypePresentFlag) {
+                bitstream.skipBits(3); // video_format
+                fullRangeFlag = bitstream.readBits(1);
+                const colourDescriptionPresentFlag = bitstream.readBits(1);
+                if (colourDescriptionPresentFlag) {
+                    colourPrimaries = bitstream.readBits(8);
+                    transferCharacteristics = bitstream.readBits(8);
+                    matrixCoefficients = bitstream.readBits(8);
+                }
+            }
+            const chromaLocInfoPresentFlag = bitstream.readBits(1);
+            if (chromaLocInfoPresentFlag) {
+                readExpGolomb(bitstream); // chroma_sample_loc_type_top_field
+                readExpGolomb(bitstream); // chroma_sample_loc_type_bottom_field
+            }
+            const timingInfoPresentFlag = bitstream.readBits(1);
+            if (timingInfoPresentFlag) {
+                bitstream.skipBits(32); // num_units_in_tick
+                bitstream.skipBits(32); // time_scale
+                bitstream.skipBits(1); // fixed_frame_rate_flag
+            }
+            const nalHrdParametersPresentFlag = bitstream.readBits(1);
+            if (nalHrdParametersPresentFlag) {
+                skipAvcHrdParameters(bitstream);
+            }
+            const vclHrdParametersPresentFlag = bitstream.readBits(1);
+            if (vclHrdParametersPresentFlag) {
+                skipAvcHrdParameters(bitstream);
+            }
+            if (nalHrdParametersPresentFlag || vclHrdParametersPresentFlag) {
+                bitstream.skipBits(1); // low_delay_hrd_flag
+            }
+            bitstream.skipBits(1); // pic_struct_present_flag
+            bitstreamRestrictionFlagBitOffset = bitstream.pos;
+            bitstreamRestrictionFlag = bitstream.readBits(1);
+            if (bitstreamRestrictionFlag) {
+                bitstream.skipBits(1); // motion_vectors_over_pic_boundaries_flag
+                readExpGolomb(bitstream); // max_bytes_per_pic_denom
+                readExpGolomb(bitstream); // max_bits_per_mb_denom
+                readExpGolomb(bitstream); // log2_max_mv_length_horizontal
+                readExpGolomb(bitstream); // log2_max_mv_length_vertical
+                numReorderFrames = readExpGolomb(bitstream);
+                maxDecFrameBuffering = readExpGolomb(bitstream);
+            }
+        }
+        if (numReorderFrames === null) {
+            assert(maxDecFrameBuffering === null);
+            const constraintSet3Flag = constraintFlags & 0b00010000;
+            if ((profileIdc === 44 || profileIdc === 86 || profileIdc === 100
+                || profileIdc === 110 || profileIdc === 122 || profileIdc === 244) && constraintSet3Flag) {
+                // "If profile_idc is equal to 44, 86, 100, 110, 122, or 244 and constraint_set3_flag is equal to 1, the
+                // value of num_reorder_frames shall be inferred to be equal to 0."
+                numReorderFrames = 0;
+                maxDecFrameBuffering = 0;
+            }
+            else {
+                const picWidthInMbs = picWidthInMbsMinus1 + 1;
+                const picHeightInMapUnits = picHeightInMapUnitsMinus1 + 1;
+                const frameHeightInMbs = (2 - frameMbsOnlyFlag) * picHeightInMapUnits;
+                const levelInfo = AVC_LEVEL_TABLE.find(x => x.level >= levelIdc) ?? last(AVC_LEVEL_TABLE);
+                // "MaxDpbFrames is equal to
+                // Min( MaxDpbMbs / ( picWidthInMbs * frameHeightInMbs ), 16 ) and MaxDpbMbs is given in Table A-1."
+                const maxDpbFrames = Math.min(Math.floor(levelInfo.maxDpbMbs / (picWidthInMbs * frameHeightInMbs)), 16);
+                // "Otherwise, [...] the value of num_reorder_frames shall be inferred to be equal to MaxDpbFrames."
+                numReorderFrames = maxDpbFrames;
+                maxDecFrameBuffering = maxDpbFrames;
+            }
+        }
+        assert(maxDecFrameBuffering !== null);
+        return {
+            emulationUnpreventedBytes,
+            profileIdc,
+            constraintFlags,
+            levelIdc,
+            frameMbsOnlyFlag,
+            chromaFormatIdc,
+            bitDepthLumaMinus8,
+            bitDepthChromaMinus8,
+            codedWidth,
+            codedHeight,
+            displayWidth,
+            displayHeight,
+            pixelAspectRatio,
+            colourPrimaries,
+            matrixCoefficients,
+            transferCharacteristics,
+            fullRangeFlag,
+            numReorderFrames,
+            maxDecFrameBuffering,
+            vuiParametersFlagBitOffset,
+            bitstreamRestrictionFlagBitOffset,
+            bitstreamRestrictionFlag,
+        };
+    }
+    catch (error) {
+        Logging._error('Error parsing AVC SPS:', error);
+        return null;
+    }
+};
+const skipAvcHrdParameters = (bitstream) => {
+    const cpb_cnt_minus1 = readExpGolomb(bitstream);
+    bitstream.skipBits(4); // bit_rate_scale
+    bitstream.skipBits(4); // cpb_size_scale
+    for (let i = 0; i <= cpb_cnt_minus1; i++) {
+        readExpGolomb(bitstream); // bit_rate_value_minus1[i]
+        readExpGolomb(bitstream); // cpb_size_value_minus1[i]
+        bitstream.skipBits(1); // cbr_flag[i]
+    }
+    bitstream.skipBits(5); // initial_cpb_removal_delay_length_minus1
+    bitstream.skipBits(5); // cpb_removal_delay_length_minus1
+    bitstream.skipBits(5); // dpb_output_delay_length_minus1
+    bitstream.skipBits(5); // time_offset_length
+};
+const iterateHevcNalUnits = (packetData, decoderConfig) => {
+    if (decoderConfig.description) {
+        const bytes = toUint8Array(decoderConfig.description);
+        const lengthSizeMinusOne = bytes[21] & 0b11;
+        const lengthSize = (lengthSizeMinusOne + 1);
+        return iterateNalUnitsInLengthPrefixed(packetData, lengthSize);
+    }
+    else {
+        return iterateNalUnitsInAnnexB(packetData);
+    }
+};
+const extractNalUnitTypeForHevc = (byte) => {
+    return (byte >> 1) & 0x3F;
+};
+/** Parses an HEVC SPS (Sequence Parameter Set) to extract video information. */
+const parseHevcSps = (sps) => {
+    try {
+        const bitstream = new Bitstream(removeEmulationPreventionBytes(sps));
+        bitstream.skipBits(16); // NAL header
+        bitstream.readBits(4); // sps_video_parameter_set_id
+        const spsMaxSubLayersMinus1 = bitstream.readBits(3);
+        const spsTemporalIdNestingFlag = bitstream.readBits(1);
+        const { general_profile_space, general_tier_flag, general_profile_idc, general_profile_compatibility_flags, general_constraint_indicator_flags, general_level_idc, } = parseProfileTierLevel(bitstream, spsMaxSubLayersMinus1);
+        readExpGolomb(bitstream); // sps_seq_parameter_set_id
+        const chromaFormatIdc = readExpGolomb(bitstream);
+        let separateColourPlaneFlag = 0;
+        if (chromaFormatIdc === 3) {
+            separateColourPlaneFlag = bitstream.readBits(1);
+        }
+        const picWidthInLumaSamples = readExpGolomb(bitstream);
+        const picHeightInLumaSamples = readExpGolomb(bitstream);
+        let displayWidth = picWidthInLumaSamples;
+        let displayHeight = picHeightInLumaSamples;
+        if (bitstream.readBits(1)) { // conformance_window_flag
+            const confWinLeftOffset = readExpGolomb(bitstream);
+            const confWinRightOffset = readExpGolomb(bitstream);
+            const confWinTopOffset = readExpGolomb(bitstream);
+            const confWinBottomOffset = readExpGolomb(bitstream);
+            // SubWidthC and SubHeightC depend on chroma_format_idc and separate_colour_plane_flag
+            let subWidthC = 1;
+            let subHeightC = 1;
+            const chromaArrayType = separateColourPlaneFlag === 0 ? chromaFormatIdc : 0;
+            if (chromaArrayType === 1) {
+                subWidthC = 2;
+                subHeightC = 2;
+            }
+            else if (chromaArrayType === 2) {
+                subWidthC = 2;
+                subHeightC = 1;
+            }
+            displayWidth -= (confWinLeftOffset + confWinRightOffset) * subWidthC;
+            displayHeight -= (confWinTopOffset + confWinBottomOffset) * subHeightC;
+        }
+        const bitDepthLumaMinus8 = readExpGolomb(bitstream);
+        const bitDepthChromaMinus8 = readExpGolomb(bitstream);
+        readExpGolomb(bitstream); // log2_max_pic_order_cnt_lsb_minus4
+        const spsSubLayerOrderingInfoPresentFlag = bitstream.readBits(1);
+        const startI = spsSubLayerOrderingInfoPresentFlag ? 0 : spsMaxSubLayersMinus1;
+        let spsMaxNumReorderPics = 0;
+        for (let i = startI; i <= spsMaxSubLayersMinus1; i++) {
+            readExpGolomb(bitstream); // sps_max_dec_pic_buffering_minus1[i]
+            spsMaxNumReorderPics = readExpGolomb(bitstream); // sps_max_num_reorder_pics[i]
+            readExpGolomb(bitstream); // sps_max_latency_increase_plus1[i]
+        }
+        readExpGolomb(bitstream); // log2_min_luma_coding_block_size_minus3
+        readExpGolomb(bitstream); // log2_diff_max_min_luma_coding_block_size
+        readExpGolomb(bitstream); // log2_min_luma_transform_block_size_minus2
+        readExpGolomb(bitstream); // log2_diff_max_min_luma_transform_block_size
+        readExpGolomb(bitstream); // max_transform_hierarchy_depth_inter
+        readExpGolomb(bitstream); // max_transform_hierarchy_depth_intra
+        if (bitstream.readBits(1)) { // scaling_list_enabled_flag
+            if (bitstream.readBits(1)) {
+                skipScalingListData(bitstream);
+            }
+        }
+        bitstream.skipBits(1); // amp_enabled_flag
+        bitstream.skipBits(1); // sample_adaptive_offset_enabled_flag
+        if (bitstream.readBits(1)) { // pcm_enabled_flag
+            bitstream.skipBits(4); // pcm_sample_bit_depth_luma_minus1
+            bitstream.skipBits(4); // pcm_sample_bit_depth_chroma_minus1
+            readExpGolomb(bitstream); // log2_min_pcm_luma_coding_block_size_minus3
+            readExpGolomb(bitstream); // log2_diff_max_min_pcm_luma_coding_block_size
+            bitstream.skipBits(1); // pcm_loop_filter_disabled_flag
+        }
+        const numShortTermRefPicSets = readExpGolomb(bitstream);
+        skipAllStRefPicSets(bitstream, numShortTermRefPicSets);
+        if (bitstream.readBits(1)) { // long_term_ref_pics_present_flag
+            const numLongTermRefPicsSps = readExpGolomb(bitstream);
+            for (let i = 0; i < numLongTermRefPicsSps; i++) {
+                readExpGolomb(bitstream); // lt_ref_pic_poc_lsb_sps[i]
+                bitstream.skipBits(1); // used_by_curr_pic_lt_sps_flag[i]
+            }
+        }
+        bitstream.skipBits(1); // sps_temporal_mvp_enabled_flag
+        bitstream.skipBits(1); // strong_intra_smoothing_enabled_flag
+        let colourPrimaries = 2;
+        let transferCharacteristics = 2;
+        let matrixCoefficients = 2;
+        let fullRangeFlag = 0;
+        let minSpatialSegmentationIdc = 0;
+        let pixelAspectRatio = { num: 1, den: 1 };
+        if (bitstream.readBits(1)) { // vui_parameters_present_flag
+            const vui = parseHevcVui(bitstream, spsMaxSubLayersMinus1);
+            pixelAspectRatio = vui.pixelAspectRatio;
+            colourPrimaries = vui.colourPrimaries;
+            transferCharacteristics = vui.transferCharacteristics;
+            matrixCoefficients = vui.matrixCoefficients;
+            fullRangeFlag = vui.fullRangeFlag;
+            minSpatialSegmentationIdc = vui.minSpatialSegmentationIdc;
+        }
+        return {
+            displayWidth,
+            displayHeight,
+            pixelAspectRatio,
+            colourPrimaries,
+            transferCharacteristics,
+            matrixCoefficients,
+            fullRangeFlag,
+            maxDecFrameBuffering: spsMaxNumReorderPics + 1,
+            spsMaxSubLayersMinus1,
+            spsTemporalIdNestingFlag,
+            generalProfileSpace: general_profile_space,
+            generalTierFlag: general_tier_flag,
+            generalProfileIdc: general_profile_idc,
+            generalProfileCompatibilityFlags: general_profile_compatibility_flags,
+            generalConstraintIndicatorFlags: general_constraint_indicator_flags,
+            generalLevelIdc: general_level_idc,
+            chromaFormatIdc,
+            bitDepthLumaMinus8,
+            bitDepthChromaMinus8,
+            minSpatialSegmentationIdc,
+        };
+    }
+    catch (error) {
+        Logging._error('Error parsing HEVC SPS:', error);
+        return null;
+    }
+};
+/** Builds a HevcDecoderConfigurationRecord from an HEVC packet in Annex B format. */
+const extractHevcDecoderConfigurationRecord = (packetData) => {
+    try {
+        const vpsUnits = [];
+        const spsUnits = [];
+        const ppsUnits = [];
+        const seiUnits = [];
+        for (const loc of iterateNalUnitsInAnnexB(packetData)) {
+            const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
+            const type = extractNalUnitTypeForHevc(nalUnit[0]);
+            if (type === HevcNalUnitType.VPS_NUT) {
+                vpsUnits.push(nalUnit);
+            }
+            else if (type === HevcNalUnitType.SPS_NUT) {
+                spsUnits.push(nalUnit);
+            }
+            else if (type === HevcNalUnitType.PPS_NUT) {
+                ppsUnits.push(nalUnit);
+            }
+            else if (type === HevcNalUnitType.PREFIX_SEI_NUT || type === HevcNalUnitType.SUFFIX_SEI_NUT) {
+                seiUnits.push(nalUnit);
+            }
+        }
+        if (spsUnits.length === 0 || ppsUnits.length === 0)
+            return null;
+        const spsInfo = parseHevcSps(spsUnits[0]);
+        if (!spsInfo)
+            return null;
+        // Parse PPS for parallelismType
+        let parallelismType = 0;
+        if (ppsUnits.length > 0) {
+            const pps = ppsUnits[0];
+            const ppsBitstream = new Bitstream(removeEmulationPreventionBytes(pps));
+            ppsBitstream.skipBits(16); // NAL header
+            readExpGolomb(ppsBitstream); // pps_pic_parameter_set_id
+            readExpGolomb(ppsBitstream); // pps_seq_parameter_set_id
+            ppsBitstream.skipBits(1); // dependent_slice_segments_enabled_flag
+            ppsBitstream.skipBits(1); // output_flag_present_flag
+            ppsBitstream.skipBits(3); // num_extra_slice_header_bits
+            ppsBitstream.skipBits(1); // sign_data_hiding_enabled_flag
+            ppsBitstream.skipBits(1); // cabac_init_present_flag
+            readExpGolomb(ppsBitstream); // num_ref_idx_l0_default_active_minus1
+            readExpGolomb(ppsBitstream); // num_ref_idx_l1_default_active_minus1
+            readSignedExpGolomb(ppsBitstream); // init_qp_minus26
+            ppsBitstream.skipBits(1); // constrained_intra_pred_flag
+            ppsBitstream.skipBits(1); // transform_skip_enabled_flag
+            if (ppsBitstream.readBits(1)) { // cu_qp_delta_enabled_flag
+                readExpGolomb(ppsBitstream); // diff_cu_qp_delta_depth
+            }
+            readSignedExpGolomb(ppsBitstream); // pps_cb_qp_offset
+            readSignedExpGolomb(ppsBitstream); // pps_cr_qp_offset
+            ppsBitstream.skipBits(1); // pps_slice_chroma_qp_offsets_present_flag
+            ppsBitstream.skipBits(1); // weighted_pred_flag
+            ppsBitstream.skipBits(1); // weighted_bipred_flag
+            ppsBitstream.skipBits(1); // transquant_bypass_enabled_flag
+            const tiles_enabled_flag = ppsBitstream.readBits(1);
+            const entropy_coding_sync_enabled_flag = ppsBitstream.readBits(1);
+            if (!tiles_enabled_flag && !entropy_coding_sync_enabled_flag)
+                parallelismType = 0;
+            else if (tiles_enabled_flag && !entropy_coding_sync_enabled_flag)
+                parallelismType = 2;
+            else if (!tiles_enabled_flag && entropy_coding_sync_enabled_flag)
+                parallelismType = 3;
+            else
+                parallelismType = 0;
+        }
+        const arrays = [
+            ...(vpsUnits.length
+                ? [
+                    {
+                        arrayCompleteness: 1,
+                        nalUnitType: HevcNalUnitType.VPS_NUT,
+                        nalUnits: vpsUnits,
+                    },
+                ]
+                : []),
+            ...(spsUnits.length
+                ? [
+                    {
+                        arrayCompleteness: 1,
+                        nalUnitType: HevcNalUnitType.SPS_NUT,
+                        nalUnits: spsUnits,
+                    },
+                ]
+                : []),
+            ...(ppsUnits.length
+                ? [
+                    {
+                        arrayCompleteness: 1,
+                        nalUnitType: HevcNalUnitType.PPS_NUT,
+                        nalUnits: ppsUnits,
+                    },
+                ]
+                : []),
+            ...(seiUnits.length
+                ? [
+                    {
+                        arrayCompleteness: 1,
+                        nalUnitType: extractNalUnitTypeForHevc(seiUnits[0][0]),
+                        nalUnits: seiUnits,
+                    },
+                ]
+                : []),
+        ];
+        const record = {
+            configurationVersion: 1,
+            generalProfileSpace: spsInfo.generalProfileSpace,
+            generalTierFlag: spsInfo.generalTierFlag,
+            generalProfileIdc: spsInfo.generalProfileIdc,
+            generalProfileCompatibilityFlags: spsInfo.generalProfileCompatibilityFlags,
+            generalConstraintIndicatorFlags: spsInfo.generalConstraintIndicatorFlags,
+            generalLevelIdc: spsInfo.generalLevelIdc,
+            minSpatialSegmentationIdc: spsInfo.minSpatialSegmentationIdc,
+            parallelismType,
+            chromaFormatIdc: spsInfo.chromaFormatIdc,
+            bitDepthLumaMinus8: spsInfo.bitDepthLumaMinus8,
+            bitDepthChromaMinus8: spsInfo.bitDepthChromaMinus8,
+            avgFrameRate: 0,
+            constantFrameRate: 0,
+            numTemporalLayers: spsInfo.spsMaxSubLayersMinus1 + 1,
+            temporalIdNested: spsInfo.spsTemporalIdNestingFlag,
+            lengthSizeMinusOne: 3,
+            arrays,
+        };
+        return record;
+    }
+    catch (error) {
+        Logging._error('Error building HEVC Decoder Configuration Record:', error);
+        return null;
+    }
+};
+const parseProfileTierLevel = (bitstream, maxNumSubLayersMinus1) => {
+    const general_profile_space = bitstream.readBits(2);
+    const general_tier_flag = bitstream.readBits(1);
+    const general_profile_idc = bitstream.readBits(5);
+    let general_profile_compatibility_flags = 0;
+    for (let i = 0; i < 32; i++) {
+        general_profile_compatibility_flags = (general_profile_compatibility_flags << 1) | bitstream.readBits(1);
+    }
+    const general_constraint_indicator_flags = new Uint8Array(6);
+    for (let i = 0; i < 6; i++) {
+        general_constraint_indicator_flags[i] = bitstream.readBits(8);
+    }
+    const general_level_idc = bitstream.readBits(8);
+    const sub_layer_profile_present_flag = [];
+    const sub_layer_level_present_flag = [];
+    for (let i = 0; i < maxNumSubLayersMinus1; i++) {
+        sub_layer_profile_present_flag.push(bitstream.readBits(1));
+        sub_layer_level_present_flag.push(bitstream.readBits(1));
+    }
+    if (maxNumSubLayersMinus1 > 0) {
+        for (let i = maxNumSubLayersMinus1; i < 8; i++) {
+            bitstream.skipBits(2); // reserved_zero_2bits
+        }
+    }
+    for (let i = 0; i < maxNumSubLayersMinus1; i++) {
+        if (sub_layer_profile_present_flag[i])
+            bitstream.skipBits(88);
+        if (sub_layer_level_present_flag[i])
+            bitstream.skipBits(8);
+    }
+    return {
+        general_profile_space,
+        general_tier_flag,
+        general_profile_idc,
+        general_profile_compatibility_flags,
+        general_constraint_indicator_flags,
+        general_level_idc,
+    };
+};
+const skipScalingListData = (bitstream) => {
+    for (let sizeId = 0; sizeId < 4; sizeId++) {
+        for (let matrixId = 0; matrixId < (sizeId === 3 ? 2 : 6); matrixId++) {
+            const scaling_list_pred_mode_flag = bitstream.readBits(1);
+            if (!scaling_list_pred_mode_flag) {
+                readExpGolomb(bitstream); // scaling_list_pred_matrix_id_delta
+            }
+            else {
+                const coefNum = Math.min(64, 1 << (4 + (sizeId << 1)));
+                if (sizeId > 1) {
+                    readSignedExpGolomb(bitstream); // scaling_list_dc_coef_minus8
+                }
+                for (let i = 0; i < coefNum; i++) {
+                    readSignedExpGolomb(bitstream); // scaling_list_delta_coef
+                }
+            }
+        }
+    }
+};
+const skipAllStRefPicSets = (bitstream, num_short_term_ref_pic_sets) => {
+    const NumDeltaPocs = [];
+    for (let stRpsIdx = 0; stRpsIdx < num_short_term_ref_pic_sets; stRpsIdx++) {
+        NumDeltaPocs[stRpsIdx] = skipStRefPicSet(bitstream, stRpsIdx, num_short_term_ref_pic_sets, NumDeltaPocs);
+    }
+};
+const skipStRefPicSet = (bitstream, stRpsIdx, num_short_term_ref_pic_sets, NumDeltaPocs) => {
+    let NumDeltaPocsThis = 0;
+    let inter_ref_pic_set_prediction_flag = 0;
+    let RefRpsIdx = 0;
+    if (stRpsIdx !== 0) {
+        inter_ref_pic_set_prediction_flag = bitstream.readBits(1);
+    }
+    if (inter_ref_pic_set_prediction_flag) {
+        if (stRpsIdx === num_short_term_ref_pic_sets) {
+            const delta_idx_minus1 = readExpGolomb(bitstream);
+            RefRpsIdx = stRpsIdx - (delta_idx_minus1 + 1);
+        }
+        else {
+            RefRpsIdx = stRpsIdx - 1;
+        }
+        bitstream.readBits(1); // delta_rps_sign
+        readExpGolomb(bitstream); // abs_delta_rps_minus1
+        // The number of iterations is NumDeltaPocs[RefRpsIdx] + 1
+        const numDelta = NumDeltaPocs[RefRpsIdx] ?? 0;
+        for (let j = 0; j <= numDelta; j++) {
+            const used_by_curr_pic_flag = bitstream.readBits(1);
+            if (!used_by_curr_pic_flag) {
+                bitstream.readBits(1); // use_delta_flag
+            }
+        }
+        NumDeltaPocsThis = NumDeltaPocs[RefRpsIdx];
+    }
+    else {
+        const num_negative_pics = readExpGolomb(bitstream);
+        const num_positive_pics = readExpGolomb(bitstream);
+        for (let i = 0; i < num_negative_pics; i++) {
+            readExpGolomb(bitstream); // delta_poc_s0_minus1[i]
+            bitstream.readBits(1); // used_by_curr_pic_s0_flag[i]
+        }
+        for (let i = 0; i < num_positive_pics; i++) {
+            readExpGolomb(bitstream); // delta_poc_s1_minus1[i]
+            bitstream.readBits(1); // used_by_curr_pic_s1_flag[i]
+        }
+        NumDeltaPocsThis = num_negative_pics + num_positive_pics;
+    }
+    return NumDeltaPocsThis;
+};
+const parseHevcVui = (bitstream, sps_max_sub_layers_minus1) => {
+    // Defaults: 2 = unspecified
+    let colourPrimaries = 2;
+    let transferCharacteristics = 2;
+    let matrixCoefficients = 2;
+    let fullRangeFlag = 0;
+    let minSpatialSegmentationIdc = 0;
+    let pixelAspectRatio = { num: 1, den: 1 };
+    if (bitstream.readBits(1)) { // aspect_ratio_info_present_flag
+        const aspect_ratio_idc = bitstream.readBits(8);
+        if (aspect_ratio_idc === 255) {
+            pixelAspectRatio = {
+                num: bitstream.readBits(16),
+                den: bitstream.readBits(16),
+            };
+        }
+        else {
+            const aspectRatio = AVC_HEVC_ASPECT_RATIO_IDC_TABLE[aspect_ratio_idc];
+            if (aspectRatio) {
+                pixelAspectRatio = aspectRatio;
+            }
+        }
+    }
+    if (bitstream.readBits(1)) { // overscan_info_present_flag
+        bitstream.readBits(1); // overscan_appropriate_flag
+    }
+    if (bitstream.readBits(1)) { // video_signal_type_present_flag
+        bitstream.readBits(3); // video_format
+        fullRangeFlag = bitstream.readBits(1);
+        if (bitstream.readBits(1)) { // colour_description_present_flag
+            colourPrimaries = bitstream.readBits(8);
+            transferCharacteristics = bitstream.readBits(8);
+            matrixCoefficients = bitstream.readBits(8);
+        }
+    }
+    if (bitstream.readBits(1)) { // chroma_loc_info_present_flag
+        readExpGolomb(bitstream); // chroma_sample_loc_type_top_field
+        readExpGolomb(bitstream); // chroma_sample_loc_type_bottom_field
+    }
+    bitstream.readBits(1); // neutral_chroma_indication_flag
+    bitstream.readBits(1); // field_seq_flag
+    bitstream.readBits(1); // frame_field_info_present_flag
+    if (bitstream.readBits(1)) { // default_display_window_flag
+        readExpGolomb(bitstream); // def_disp_win_left_offset
+        readExpGolomb(bitstream); // def_disp_win_right_offset
+        readExpGolomb(bitstream); // def_disp_win_top_offset
+        readExpGolomb(bitstream); // def_disp_win_bottom_offset
+    }
+    if (bitstream.readBits(1)) { // vui_timing_info_present_flag
+        bitstream.readBits(32); // vui_num_units_in_tick
+        bitstream.readBits(32); // vui_time_scale
+        if (bitstream.readBits(1)) { // vui_poc_proportional_to_timing_flag
+            readExpGolomb(bitstream); // vui_num_ticks_poc_diff_one_minus1
+        }
+        if (bitstream.readBits(1)) {
+            skipHevcHrdParameters(bitstream, true, sps_max_sub_layers_minus1);
+        }
+    }
+    if (bitstream.readBits(1)) { // bitstream_restriction_flag
+        bitstream.readBits(1); // tiles_fixed_structure_flag
+        bitstream.readBits(1); // motion_vectors_over_pic_boundaries_flag
+        bitstream.readBits(1); // restricted_ref_pic_lists_flag
+        minSpatialSegmentationIdc = readExpGolomb(bitstream);
+        readExpGolomb(bitstream); // max_bytes_per_pic_denom
+        readExpGolomb(bitstream); // max_bits_per_min_cu_denom
+        readExpGolomb(bitstream); // log2_max_mv_length_horizontal
+        readExpGolomb(bitstream); // log2_max_mv_length_vertical
+    }
+    return {
+        pixelAspectRatio,
+        colourPrimaries,
+        transferCharacteristics,
+        matrixCoefficients,
+        fullRangeFlag,
+        minSpatialSegmentationIdc,
+    };
+};
+const skipHevcHrdParameters = (bitstream, commonInfPresentFlag, maxNumSubLayersMinus1) => {
+    let nal_hrd_parameters_present_flag = false;
+    let vcl_hrd_parameters_present_flag = false;
+    let sub_pic_hrd_params_present_flag = false;
+    {
+        nal_hrd_parameters_present_flag = bitstream.readBits(1) === 1;
+        vcl_hrd_parameters_present_flag = bitstream.readBits(1) === 1;
+        if (nal_hrd_parameters_present_flag || vcl_hrd_parameters_present_flag) {
+            sub_pic_hrd_params_present_flag = bitstream.readBits(1) === 1;
+            if (sub_pic_hrd_params_present_flag) {
+                bitstream.readBits(8); // tick_divisor_minus2
+                bitstream.readBits(5); // du_cpb_removal_delay_increment_length_minus1
+                bitstream.readBits(1); // sub_pic_cpb_params_in_pic_timing_sei_flag
+                bitstream.readBits(5); // dpb_output_delay_du_length_minus1
+            }
+            bitstream.readBits(4); // bit_rate_scale
+            bitstream.readBits(4); // cpb_size_scale
+            if (sub_pic_hrd_params_present_flag) {
+                bitstream.readBits(4); // cpb_size_du_scale
+            }
+            bitstream.readBits(5); // initial_cpb_removal_delay_length_minus1
+            bitstream.readBits(5); // au_cpb_removal_delay_length_minus1
+            bitstream.readBits(5); // dpb_output_delay_length_minus1
+        }
+    }
+    for (let i = 0; i <= maxNumSubLayersMinus1; i++) {
+        const fixed_pic_rate_general_flag = bitstream.readBits(1) === 1;
+        let fixed_pic_rate_within_cvs_flag = true; // Default assumption if general is true
+        if (!fixed_pic_rate_general_flag) {
+            fixed_pic_rate_within_cvs_flag = bitstream.readBits(1) === 1;
+        }
+        let low_delay_hrd_flag = false; // Default assumption
+        if (fixed_pic_rate_within_cvs_flag) {
+            readExpGolomb(bitstream); // elemental_duration_in_tc_minus1[i]
+        }
+        else {
+            low_delay_hrd_flag = bitstream.readBits(1) === 1;
+        }
+        let CpbCnt = 1; // Default if low_delay is true
+        if (!low_delay_hrd_flag) {
+            const cpb_cnt_minus1 = readExpGolomb(bitstream); // cpb_cnt_minus1[i]
+            CpbCnt = cpb_cnt_minus1 + 1;
+        }
+        if (nal_hrd_parameters_present_flag) {
+            skipSubLayerHrdParameters(bitstream, CpbCnt, sub_pic_hrd_params_present_flag);
+        }
+        if (vcl_hrd_parameters_present_flag) {
+            skipSubLayerHrdParameters(bitstream, CpbCnt, sub_pic_hrd_params_present_flag);
+        }
+    }
+};
+const skipSubLayerHrdParameters = (bitstream, CpbCnt, sub_pic_hrd_params_present_flag) => {
+    for (let i = 0; i < CpbCnt; i++) {
+        readExpGolomb(bitstream); // bit_rate_value_minus1[i]
+        readExpGolomb(bitstream); // cpb_size_value_minus1[i]
+        if (sub_pic_hrd_params_present_flag) {
+            readExpGolomb(bitstream); // cpb_size_du_value_minus1[i]
+            readExpGolomb(bitstream); // bit_rate_du_value_minus1[i]
+        }
+        bitstream.readBits(1); // cbr_flag[i]
+    }
+};
+/** Serializes an HevcDecoderConfigurationRecord into the format specified in Section 8.3.3.1 of ISO 14496-15. */
+const serializeHevcDecoderConfigurationRecord = (record) => {
+    const bytes = [];
+    bytes.push(record.configurationVersion);
+    bytes.push(((record.generalProfileSpace & 0x3) << 6)
+        | ((record.generalTierFlag & 0x1) << 5)
+        | (record.generalProfileIdc & 0x1F));
+    bytes.push((record.generalProfileCompatibilityFlags >>> 24) & 0xFF);
+    bytes.push((record.generalProfileCompatibilityFlags >>> 16) & 0xFF);
+    bytes.push((record.generalProfileCompatibilityFlags >>> 8) & 0xFF);
+    bytes.push(record.generalProfileCompatibilityFlags & 0xFF);
+    bytes.push(...record.generalConstraintIndicatorFlags);
+    bytes.push(record.generalLevelIdc & 0xFF);
+    bytes.push(0xF0 | ((record.minSpatialSegmentationIdc >> 8) & 0x0F)); // Reserved + high nibble
+    bytes.push(record.minSpatialSegmentationIdc & 0xFF); // Low byte
+    bytes.push(0xFC | (record.parallelismType & 0x03));
+    bytes.push(0xFC | (record.chromaFormatIdc & 0x03));
+    bytes.push(0xF8 | (record.bitDepthLumaMinus8 & 0x07));
+    bytes.push(0xF8 | (record.bitDepthChromaMinus8 & 0x07));
+    bytes.push((record.avgFrameRate >> 8) & 0xFF); // High byte
+    bytes.push(record.avgFrameRate & 0xFF); // Low byte
+    bytes.push(((record.constantFrameRate & 0x03) << 6)
+        | ((record.numTemporalLayers & 0x07) << 3)
+        | ((record.temporalIdNested & 0x01) << 2)
+        | (record.lengthSizeMinusOne & 0x03));
+    bytes.push(record.arrays.length & 0xFF);
+    for (const arr of record.arrays) {
+        bytes.push(((arr.arrayCompleteness & 0x01) << 7)
+            | (0 << 6)
+            | (arr.nalUnitType & 0x3F));
+        bytes.push((arr.nalUnits.length >> 8) & 0xFF); // High byte
+        bytes.push(arr.nalUnits.length & 0xFF); // Low byte
+        for (const nal of arr.nalUnits) {
+            bytes.push((nal.length >> 8) & 0xFF); // High byte
+            bytes.push(nal.length & 0xFF); // Low byte
+            for (let i = 0; i < nal.length; i++) {
+                bytes.push(nal[i]);
+            }
+        }
+    }
+    return new Uint8Array(bytes);
+};
+var HevcNaluOrderState;
+(function (HevcNaluOrderState) {
+    HevcNaluOrderState[HevcNaluOrderState["audAllowed"] = 0] = "audAllowed";
+    HevcNaluOrderState[HevcNaluOrderState["beforeFirstVcl"] = 1] = "beforeFirstVcl";
+    HevcNaluOrderState[HevcNaluOrderState["afterFirstVcl"] = 2] = "afterFirstVcl";
+    HevcNaluOrderState[HevcNaluOrderState["eoBitstreamAllowed"] = 3] = "eoBitstreamAllowed";
+    HevcNaluOrderState[HevcNaluOrderState["noMoreDataAllowed"] = 4] = "noMoreDataAllowed";
+})(HevcNaluOrderState || (HevcNaluOrderState = {}));
+// The color spaces from section 7.2.2 of the VP9 spec The matrix column is taken from FFmpeg's libavcodec/vp9.c
+const VP9_COLOR_SPACE_TABLE = {
+    1: { colourPrimaries: 5, transferCharacteristics: 6, matrixCoefficients: 5 }, // CS_BT_601
+    2: { colourPrimaries: 1, transferCharacteristics: 1, matrixCoefficients: 1 }, // CS_BT_709
+    3: { colourPrimaries: 6, transferCharacteristics: 6, matrixCoefficients: 6 }, // CS_SMPTE_170
+    4: { colourPrimaries: 7, transferCharacteristics: 7, matrixCoefficients: 7 }, // CS_SMPTE_240
+    5: { colourPrimaries: 9, transferCharacteristics: 14, matrixCoefficients: 9 }, // CS_BT_2020
+    7: { colourPrimaries: 1, transferCharacteristics: 13, matrixCoefficients: 0 }, // CS_RGB (sRGB)
+};
+const extractVp9CodecInfoFromPacket = (packet) => {
+    // eslint-disable-next-line @stylistic/max-len
+    // https://storage.googleapis.com/downloads.webmproject.org/docs/vp9/vp9-bitstream-specification-v0.7-20170222-draft.pdf
+    // http://downloads.webmproject.org/docs/vp9/vp9-bitstream_superframe-and-uncompressed-header_v1.0.pdf
+    const bitstream = new Bitstream(packet);
+    // Frame marker (0b10)
+    const frameMarker = bitstream.readBits(2);
+    if (frameMarker !== 2) {
+        return null;
+    }
+    // Profile
+    const profileLowBit = bitstream.readBits(1);
+    const profileHighBit = bitstream.readBits(1);
+    const profile = (profileHighBit << 1) + profileLowBit;
+    // Skip reserved bit for profile 3
+    if (profile === 3) {
+        bitstream.skipBits(1);
+    }
+    // show_existing_frame
+    const showExistingFrame = bitstream.readBits(1);
+    if (showExistingFrame === 1) {
+        return null;
+    }
+    // frame_type (0 = key frame)
+    const frameType = bitstream.readBits(1);
+    if (frameType !== 0) {
+        return null;
+    }
+    // Skip show_frame and error_resilient_mode
+    bitstream.skipBits(2);
+    // Sync code (0x498342)
+    const syncCode = bitstream.readBits(24);
+    if (syncCode !== 0x498342) {
+        return null;
+    }
+    // Color config
+    let bitDepth = 8;
+    if (profile >= 2) {
+        const tenOrTwelveBit = bitstream.readBits(1);
+        bitDepth = tenOrTwelveBit ? 12 : 10;
+    }
+    // Color space
+    const colorSpace = bitstream.readBits(3);
+    let chromaSubsampling = 0;
+    let videoFullRangeFlag = 0;
+    if (colorSpace !== 7) { // 7 is CS_RGB
+        const colorRange = bitstream.readBits(1);
+        videoFullRangeFlag = colorRange;
+        if (profile === 1 || profile === 3) {
+            const subsamplingX = bitstream.readBits(1);
+            const subsamplingY = bitstream.readBits(1);
+            // 0 = 4:2:0 vertical
+            // 1 = 4:2:0 colocated
+            // 2 = 4:2:2
+            // 3 = 4:4:4
+            chromaSubsampling = !subsamplingX && !subsamplingY
+                ? 3 // 0,0 = 4:4:4
+                : subsamplingX && !subsamplingY
+                    ? 2 // 1,0 = 4:2:2
+                    : 1; // 1,1 = 4:2:0 colocated (default)
+            // Skip reserved bit
+            bitstream.skipBits(1);
+        }
+        else {
+            // For profile 0 and 2, always 4:2:0
+            chromaSubsampling = 1; // Using colocated as default
+        }
+    }
+    else {
+        // RGB is always 4:4:4
+        chromaSubsampling = 3;
+        videoFullRangeFlag = 1;
+    }
+    // Parse frame size
+    const widthMinusOne = bitstream.readBits(16);
+    const heightMinusOne = bitstream.readBits(16);
+    const width = widthMinusOne + 1;
+    const height = heightMinusOne + 1;
+    // Calculate level based on dimensions
+    const pictureSize = width * height;
+    let level = last(VP9_LEVEL_TABLE).level; // Default to highest level
+    for (const entry of VP9_LEVEL_TABLE) {
+        if (pictureSize <= entry.maxPictureSize) {
+            level = entry.level;
+            break;
+        }
+    }
+    const colorSpaceValues = VP9_COLOR_SPACE_TABLE[colorSpace];
+    const colourPrimaries = colorSpaceValues?.colourPrimaries ?? 2;
+    const transferCharacteristics = colorSpaceValues?.transferCharacteristics ?? 2;
+    const matrixCoefficients = colorSpaceValues?.matrixCoefficients ?? 2;
+    return {
+        profile,
+        level,
+        bitDepth,
+        chromaSubsampling,
+        videoFullRangeFlag,
+        colourPrimaries,
+        transferCharacteristics,
+        matrixCoefficients,
+    };
+};
+/** Iterates over all OBUs in an AV1 packet bitstream. */
+const iterateAv1PacketObus = function* (packet) {
+    // https://aomediacodec.github.io/av1-spec/av1-spec.pdf
+    const bitstream = new Bitstream(packet);
+    const readLeb128 = () => {
+        let value = 0;
+        for (let i = 0; i < 8; i++) {
+            const byte = bitstream.readAlignedByte();
+            // No bit shift since the value can get big
+            value += (byte & 0x7f) * 2 ** (i * 7);
+            if (!(byte & 0x80)) {
+                break;
+            }
+            // Spec requirement
+            if (i === 7 && (byte & 0x80)) {
+                return null;
+            }
+        }
+        // Spec requirement
+        if (value > 2 ** 32 - 1) {
+            return null;
+        }
+        return value;
+    };
+    while (bitstream.getBitsLeft() >= 8) {
+        // Parse OBU header
+        bitstream.skipBits(1);
+        const obuType = bitstream.readBits(4);
+        const obuExtension = bitstream.readBits(1);
+        const obuHasSizeField = bitstream.readBits(1);
+        bitstream.skipBits(1);
+        // Skip extension header if present
+        if (obuExtension) {
+            bitstream.skipBits(8);
+        }
+        // Read OBU size if present
+        let obuSize;
+        if (obuHasSizeField) {
+            const obuSizeValue = readLeb128();
+            if (obuSizeValue === null)
+                return; // It was invalid
+            obuSize = obuSizeValue;
+        }
+        else {
+            // Calculate remaining bits and convert to bytes, rounding down
+            obuSize = Math.floor(bitstream.getBitsLeft() / 8);
+        }
+        assert(bitstream.pos % 8 === 0);
+        yield {
+            type: obuType,
+            data: packet.subarray(bitstream.pos / 8, bitstream.pos / 8 + obuSize),
+        };
+        // Move to next OBU
+        bitstream.skipBits(obuSize * 8);
+    }
+};
+/**
+ * When AV1 codec information is not provided by the container, we can still try to extract the information by digging
+ * into the AV1 bitstream.
+ */
+const extractAv1CodecInfoFromPacket = (packet) => {
+    // https://aomediacodec.github.io/av1-spec/av1-spec.pdf
+    for (const { type, data } of iterateAv1PacketObus(packet)) {
+        if (type !== 1) {
+            continue; // 1 == OBU_SEQUENCE_HEADER
+        }
+        const bitstream = new Bitstream(data);
+        // Read sequence header fields
+        const seqProfile = bitstream.readBits(3);
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        bitstream.readBits(1);
+        const reducedStillPictureHeader = bitstream.readBits(1);
+        let seqLevel = 0;
+        let seqTier = 0;
+        let bufferDelayLengthMinus1 = 0;
+        if (reducedStillPictureHeader) {
+            seqLevel = bitstream.readBits(5);
+        }
+        else {
+            const timingInfoPresentFlag = bitstream.readBits(1);
+            let decoderModelInfoPresentFlag = 0;
+            if (timingInfoPresentFlag) {
+                bitstream.skipBits(32); // num_units_in_display_tick
+                bitstream.skipBits(32); // time_scale
+                const equalPictureInterval = bitstream.readBits(1);
+                if (equalPictureInterval) {
+                    // num_ticks_per_picture_minus_1 is uvlc-coded, so we need to seek past it manually
+                    let leadingZeros = 0;
+                    while (leadingZeros < 32 && !bitstream.readBits(1)) {
+                        leadingZeros++;
+                    }
+                    if (leadingZeros < 32) {
+                        bitstream.skipBits(leadingZeros);
+                    }
+                }
+                decoderModelInfoPresentFlag = bitstream.readBits(1);
+                if (decoderModelInfoPresentFlag) {
+                    bufferDelayLengthMinus1 = bitstream.readBits(5);
+                    bitstream.skipBits(32); // num_units_in_decoding_tick
+                    bitstream.skipBits(5); // buffer_removal_time_length_minus_1
+                    bitstream.skipBits(5); // frame_presentation_time_length_minus_1
+                }
+            }
+            const initialDisplayDelayPresentFlag = bitstream.readBits(1);
+            const operatingPointsCntMinus1 = bitstream.readBits(5);
+            for (let i = 0; i <= operatingPointsCntMinus1; i++) {
+                bitstream.skipBits(12); // operating_point_idc[i]
+                const seqLevelIdx = bitstream.readBits(5);
+                if (i === 0) {
+                    seqLevel = seqLevelIdx;
+                }
+                if (seqLevelIdx > 7) {
+                    const seqTierTemp = bitstream.readBits(1);
+                    if (i === 0) {
+                        seqTier = seqTierTemp;
+                    }
+                }
+                if (decoderModelInfoPresentFlag) {
+                    const decoderModelPresentForThisOp = bitstream.readBits(1);
+                    if (decoderModelPresentForThisOp) {
+                        const n = bufferDelayLengthMinus1 + 1;
+                        bitstream.skipBits(n); // decoder_buffer_delay[op]
+                        bitstream.skipBits(n); // encoder_buffer_delay[op]
+                        bitstream.skipBits(1); // low_delay_mode_flag[op]
+                    }
+                }
+                if (initialDisplayDelayPresentFlag) {
+                    const initialDisplayDelayPresentForThisOp = bitstream.readBits(1);
+                    if (initialDisplayDelayPresentForThisOp) {
+                        bitstream.skipBits(4); // initial_display_delay_minus_1[i]
+                    }
+                }
+            }
+        }
+        // Frame size
+        const frameWidthBitsMinus1 = bitstream.readBits(4);
+        const frameHeightBitsMinus1 = bitstream.readBits(4);
+        const n1 = frameWidthBitsMinus1 + 1;
+        bitstream.skipBits(n1); // max_frame_width_minus_1
+        const n2 = frameHeightBitsMinus1 + 1;
+        bitstream.skipBits(n2); // max_frame_height_minus_1
+        // Frame IDs
+        let frameIdNumbersPresentFlag = 0;
+        if (reducedStillPictureHeader) {
+            frameIdNumbersPresentFlag = 0;
+        }
+        else {
+            frameIdNumbersPresentFlag = bitstream.readBits(1);
+        }
+        if (frameIdNumbersPresentFlag) {
+            bitstream.skipBits(4); // delta_frame_id_length_minus_2
+            bitstream.skipBits(3); // additional_frame_id_length_minus_1
+        }
+        bitstream.skipBits(1); // use_128x128_superblock
+        bitstream.skipBits(1); // enable_filter_intra
+        bitstream.skipBits(1); // enable_intra_edge_filter
+        if (!reducedStillPictureHeader) {
+            bitstream.skipBits(1); // enable_interintra_compound
+            bitstream.skipBits(1); // enable_masked_compound
+            bitstream.skipBits(1); // enable_warped_motion
+            bitstream.skipBits(1); // enable_dual_filter
+            const enableOrderHint = bitstream.readBits(1);
+            if (enableOrderHint) {
+                bitstream.skipBits(1); // enable_jnt_comp
+                bitstream.skipBits(1); // enable_ref_frame_mvs
+            }
+            const seqChooseScreenContentTools = bitstream.readBits(1);
+            let seqForceScreenContentTools = 0;
+            if (seqChooseScreenContentTools) {
+                seqForceScreenContentTools = 2; // SELECT_SCREEN_CONTENT_TOOLS
+            }
+            else {
+                seqForceScreenContentTools = bitstream.readBits(1);
+            }
+            if (seqForceScreenContentTools > 0) {
+                const seqChooseIntegerMv = bitstream.readBits(1);
+                if (!seqChooseIntegerMv) {
+                    bitstream.skipBits(1); // seq_force_integer_mv
+                }
+            }
+            if (enableOrderHint) {
+                bitstream.skipBits(3); // order_hint_bits_minus_1
+            }
+        }
+        bitstream.skipBits(1); // enable_superres
+        bitstream.skipBits(1); // enable_cdef
+        bitstream.skipBits(1); // enable_restoration
+        // color_config()
+        const highBitdepth = bitstream.readBits(1);
+        let bitDepth = 8;
+        if (seqProfile === 2 && highBitdepth) {
+            const twelveBit = bitstream.readBits(1);
+            bitDepth = twelveBit ? 12 : 10;
+        }
+        else if (seqProfile <= 2) {
+            bitDepth = highBitdepth ? 10 : 8;
+        }
+        let monochrome = 0;
+        if (seqProfile !== 1) {
+            monochrome = bitstream.readBits(1);
+        }
+        let colourPrimaries = 2; // CP_UNSPECIFIED
+        let transferCharacteristics = 2; // TC_UNSPECIFIED
+        let matrixCoefficients = 2; // MC_UNSPECIFIED
+        const colorDescriptionPresentFlag = bitstream.readBits(1);
+        if (colorDescriptionPresentFlag) {
+            colourPrimaries = bitstream.readBits(8);
+            transferCharacteristics = bitstream.readBits(8);
+            matrixCoefficients = bitstream.readBits(8);
+        }
+        let videoFullRangeFlag = 0;
+        let chromaSubsamplingX = 1;
+        let chromaSubsamplingY = 1;
+        let chromaSamplePosition = 0; // CSP_UNKNOWN
+        if (monochrome) {
+            videoFullRangeFlag = bitstream.readBits(1);
+        }
+        else if (colourPrimaries === 1 && transferCharacteristics === 13 && matrixCoefficients === 0) {
+            // sRGB with an identity matrix, which is always full range 4:4:4
+            videoFullRangeFlag = 1;
+            chromaSubsamplingX = 0;
+            chromaSubsamplingY = 0;
+        }
+        else {
+            videoFullRangeFlag = bitstream.readBits(1);
+            if (seqProfile === 0) {
+                chromaSubsamplingX = 1;
+                chromaSubsamplingY = 1;
+            }
+            else if (seqProfile === 1) {
+                chromaSubsamplingX = 0;
+                chromaSubsamplingY = 0;
+            }
+            else {
+                if (bitDepth === 12) {
+                    chromaSubsamplingX = bitstream.readBits(1);
+                    chromaSubsamplingY = chromaSubsamplingX ? bitstream.readBits(1) : 0;
+                }
+                else {
+                    chromaSubsamplingX = 1;
+                    chromaSubsamplingY = 0;
+                }
+            }
+            if (chromaSubsamplingX && chromaSubsamplingY) {
+                chromaSamplePosition = bitstream.readBits(2);
+            }
+        }
+        return {
+            profile: seqProfile,
+            level: seqLevel,
+            tier: seqTier,
+            bitDepth,
+            monochrome,
+            chromaSubsamplingX,
+            chromaSubsamplingY,
+            chromaSamplePosition,
+            videoFullRangeFlag,
+            colourPrimaries,
+            transferCharacteristics,
+            matrixCoefficients,
+        };
+    }
+    return null;
+};
+const av1CodecInfoHasColorInfo = (info) => {
+    return info.colourPrimaries !== 2
+        || info.transferCharacteristics !== 2
+        || info.matrixCoefficients !== 2;
+};
+const parseOpusIdentificationHeader = (bytes) => {
+    const view = toDataView(bytes);
+    const outputChannelCount = view.getUint8(9);
+    const preSkip = view.getUint16(10, true);
+    const inputSampleRate = view.getUint32(12, true);
+    const outputGain = view.getInt16(16, true);
+    const channelMappingFamily = view.getUint8(18);
+    let channelMappingTable = null;
+    if (channelMappingFamily) {
+        channelMappingTable = bytes.subarray(19, 19 + 2 + outputChannelCount);
+    }
+    return {
+        outputChannelCount,
+        preSkip,
+        inputSampleRate,
+        outputGain,
+        channelMappingFamily,
+        channelMappingTable,
+    };
+};
+/** Determines a packet's type (key or delta) by digging into the packet bitstream. */
+const determineVideoPacketType = (codec, decoderConfig, packetData) => {
+    switch (codec) {
+        case 'avc':
+            {
+                for (const loc of iterateAvcNalUnits(packetData, decoderConfig)) {
+                    const nalTypeByte = packetData[loc.offset];
+                    const type = extractNalUnitTypeForAvc(nalTypeByte);
+                    if (type >= AvcNalUnitType.NON_IDR_SLICE && type <= AvcNalUnitType.SLICE_DPC) {
+                        return 'delta';
+                    }
+                    if (type === AvcNalUnitType.IDR) {
+                        return 'key';
+                    }
+                    // In addition to IDR, Recovery Point SEI also counts as a valid H.264 keyframe by current consensus.
+                    // See https://github.com/w3c/webcodecs/issues/650 for the relevant discussion. WebKit and Firefox have
+                    // always supported them, but Chromium hasn't.
+                    if (type === AvcNalUnitType.SEI && !isChromium()) {
+                        const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
+                        const bytes = removeEmulationPreventionBytes(nalUnit);
+                        let pos = 1; // Skip NALU header
+                        // sei_rbsp()
+                        do {
+                            // sei_message()
+                            let payloadType = 0;
+                            while (true) {
+                                const nextByte = bytes[pos++];
+                                if (nextByte === undefined)
+                                    break;
+                                payloadType += nextByte;
+                                if (nextByte < 255) {
+                                    break;
+                                }
+                            }
+                            let payloadSize = 0;
+                            while (true) {
+                                const nextByte = bytes[pos++];
+                                if (nextByte === undefined)
+                                    break;
+                                payloadSize += nextByte;
+                                if (nextByte < 255) {
+                                    break;
+                                }
+                            }
+                            // sei_payload()
+                            const PAYLOAD_TYPE_RECOVERY_POINT = 6;
+                            if (payloadType === PAYLOAD_TYPE_RECOVERY_POINT) {
+                                const bitstream = new Bitstream(bytes);
+                                bitstream.pos = 8 * pos;
+                                const recoveryFrameCount = readExpGolomb(bitstream);
+                                const exactMatchFlag = bitstream.readBits(1);
+                                if (recoveryFrameCount === 0 && exactMatchFlag === 1) {
+                                    // https://github.com/w3c/webcodecs/pull/910
+                                    // "recovery_frame_cnt == 0 and exact_match_flag=1 in the SEI recovery payload"
+                                    return 'key';
+                                }
+                            }
+                            pos += payloadSize;
+                        } while (pos < bytes.length - 1);
+                    }
+                }
+                return 'delta';
+            }
+        case 'hevc':
+            {
+                for (const loc of iterateHevcNalUnits(packetData, decoderConfig)) {
+                    const type = extractNalUnitTypeForHevc(packetData[loc.offset]);
+                    if (type < HevcNalUnitType.BLA_W_LP) {
+                        return 'delta';
+                    }
+                    if (type <= HevcNalUnitType.RSV_IRAP_VCL23) {
+                        return 'key';
+                    }
+                }
+                return 'delta';
+            }
+        case 'vp8':
+            {
+                // VP8, once again, by far the easiest to deal with.
+                const frameType = packetData[0] & 0b1;
+                return frameType === 0 ? 'key' : 'delta';
+            }
+        case 'vp9':
+            {
+                const bitstream = new Bitstream(packetData);
+                if (bitstream.readBits(2) !== 2) {
+                    return null;
+                }
+                const profileLowBit = bitstream.readBits(1);
+                const profileHighBit = bitstream.readBits(1);
+                const profile = (profileHighBit << 1) + profileLowBit;
+                // Skip reserved bit for profile 3
+                if (profile === 3) {
+                    bitstream.skipBits(1);
+                }
+                const showExistingFrame = bitstream.readBits(1);
+                if (showExistingFrame) {
+                    return null;
+                }
+                const frameType = bitstream.readBits(1);
+                return frameType === 0 ? 'key' : 'delta';
+            }
+        case 'av1':
+            {
+                let reducedStillPictureHeader = false;
+                for (const { type, data } of iterateAv1PacketObus(packetData)) {
+                    if (type === 1) { // OBU_SEQUENCE_HEADER
+                        const bitstream = new Bitstream(data);
+                        bitstream.skipBits(4);
+                        reducedStillPictureHeader = !!bitstream.readBits(1);
+                    }
+                    else if (type === 3 // OBU_FRAME_HEADER
+                        || type === 6 // OBU_FRAME
+                        || type === 7 // OBU_REDUNDANT_FRAME_HEADER
+                    ) {
+                        if (reducedStillPictureHeader) {
+                            return 'key';
+                        }
+                        const bitstream = new Bitstream(data);
+                        const showExistingFrame = bitstream.readBits(1);
+                        if (showExistingFrame) {
+                            return null;
+                        }
+                        const frameType = bitstream.readBits(2);
+                        return frameType === 0 ? 'key' : 'delta';
+                    }
+                }
+                return null;
+            }
+        case 'prores':
+            {
+                return 'key';
+            }
+        default:
+            {
+                assertNever(codec);
+                assert(false);
+            }
+    }
+};
+var FlacBlockType;
+(function (FlacBlockType) {
+    FlacBlockType[FlacBlockType["STREAMINFO"] = 0] = "STREAMINFO";
+    FlacBlockType[FlacBlockType["VORBIS_COMMENT"] = 4] = "VORBIS_COMMENT";
+    FlacBlockType[FlacBlockType["PICTURE"] = 6] = "PICTURE";
+})(FlacBlockType || (FlacBlockType = {}));
+/**
+ * Parse an AC-3 syncframe to extract BSI (Bit Stream Information) fields.
+ * Section 4.3
+ */
+const parseAc3SyncFrame = (data) => {
+    if (data.length < 7) {
+        return null;
+    }
+    // Check sync word (0x0B77)
+    if (data[0] !== 0x0B || data[1] !== 0x77) {
+        return null;
+    }
+    const bitstream = new Bitstream(data);
+    bitstream.skipBits(16); // sync word
+    bitstream.skipBits(16); // crc1
+    const fscod = bitstream.readBits(2);
+    if (fscod === 3) {
+        return null; // Reserved, invalid
+    }
+    const frmsizecod = bitstream.readBits(6);
+    const bsid = bitstream.readBits(5);
+    // Verify this is AC-3
+    if (bsid > 8) {
+        return null;
+    }
+    const bsmod = bitstream.readBits(3);
+    const acmod = bitstream.readBits(3);
+    // Skip cmixlev (center downmix level) if three front channels are in use (L, C, R).
+    if ((acmod & 0x1) !== 0 && acmod !== 0x1) {
+        bitstream.skipBits(2);
+    }
+    // Skip surmixlev (surround downmix level) if surround channels are in use.
+    if ((acmod & 0x4) !== 0) {
+        bitstream.skipBits(2);
+    }
+    // Skip dsurmod if stereo (acmod === 2)
+    if (acmod === 0x2) {
+        bitstream.skipBits(2);
+    }
+    const lfeon = bitstream.readBits(1);
+    const bitRateCode = Math.floor(frmsizecod / 2);
+    return { fscod, bsid, bsmod, acmod, lfeon, bitRateCode };
+};
+/** Number of audio blocks per syncframe, indexed by numblkscod */
+const EAC3_NUMBLKS_TABLE = [1, 2, 3, 6];
+/**
+ * Parse an E-AC-3 syncframe to extract BSI fields.
+ * Section E.1.2
+ */
+const parseEac3SyncFrame = (data) => {
+    if (data.length < 6) {
+        return null;
+    }
+    // Check sync word (0x0B77)
+    if (data[0] !== 0x0B || data[1] !== 0x77) {
+        return null;
+    }
+    const bitstream = new Bitstream(data);
+    bitstream.skipBits(16); // sync word
+    const strmtyp = bitstream.readBits(2);
+    bitstream.skipBits(3); // substreamid
+    // Only parse independent substreams (strmtyp 0 or 2)
+    if (strmtyp !== 0 && strmtyp !== 2) {
+        return null;
+    }
+    const frmsiz = bitstream.readBits(11);
+    const fscod = bitstream.readBits(2);
+    let fscod2 = 0;
+    let numblkscod;
+    if (fscod === 3) {
+        // fscod2 enables reduced sample rates (24/22.05/16 kHz) per ATSC A/52:2018
+        fscod2 = bitstream.readBits(2);
+        numblkscod = 3; // Implicitly 6 blocks when fscod=3
+    }
+    else {
+        numblkscod = bitstream.readBits(2);
+    }
+    const acmod = bitstream.readBits(3);
+    const lfeon = bitstream.readBits(1);
+    const bsid = bitstream.readBits(5);
+    // Verify this is E-AC-3
+    if (bsid < 11 || bsid > 16) {
+        return null;
+    }
+    // Calculate data rate: ((frmsiz + 1) * fs) / (numblks * 16)
+    const numblks = EAC3_NUMBLKS_TABLE[numblkscod];
+    let fs;
+    if (fscod < 3) {
+        fs = AC3_SAMPLE_RATES[fscod] / 1000;
+    }
+    else {
+        fs = EAC3_REDUCED_SAMPLE_RATES[fscod2] / 1000;
+    }
+    const dataRate = Math.round(((frmsiz + 1) * fs) / (numblks * 16));
+    // These fields require parsing beyond the first frame.
+    // Defaults are correct for almost all content.
+    const bsmod = 0;
+    const numDepSub = 0;
+    const chanLoc = 0;
+    const substream = {
+        fscod,
+        fscod2,
+        bsid,
+        bsmod,
+        acmod,
+        lfeon,
+        numDepSub,
+        chanLoc,
+    };
+    return {
+        dataRate,
+        substreams: [substream],
+    };
+};
+/** Extension substream sync word. Section 7.4.1 */
+const DTS_EXSS_SYNC_WORD = 0x64582025;
+/** The core frame header never reaches beyond this many bytes. */
+const DTS_CORE_FRAME_HEADER_SIZE = 18;
+/** An extension substream always declares its own size within this many bytes. */
+const DTS_EXSS_HEADER_PREFIX_SIZE = 10;
+/** Number of PCM samples in one core PCM block; the core codes its length as a count of these. */
+const DTS_PCM_BLOCK_SAMPLES = 32;
+/** Size of the DTSSpecificBox (ddts) payload in bytes. */
+const DTS_SPECIFIC_BOX_SIZE = 20;
+/** Number of PCM blocks that a core frame's length must be a multiple of. */
+const DTS_SUBBAND_SAMPLES = 8;
+/** Core sample rates indexed by SFREQ. Zeroes mark invalid codes. Table 5-4 */
+const DTS_CORE_SAMPLE_RATES = [
+    0, 8000, 16000, 32000, 0, 0, 11025, 22050,
+    44100, 0, 0, 12000, 24000, 48000, 96000, 192000,
+];
+/**
+ * Core bit rates in bps indexed by RATE, where a zero means the code isn't a constant rate. Table 5-7
+ *
+ * Note that FFmpeg's ff_dca_bit_rates has 896000 where the spec has 960, and defines rates for codes 25 to 28
+ * which this revision of the spec calls invalid. We keep the latter, since they cost nothing and some content
+ * predating the spec revision uses them.
+ */
+const DTS_CORE_BIT_RATES = [
+    32000, 56000, 64000, 96000, 112000, 128000, 192000, 224000,
+    256000, 320000, 384000, 448000, 512000, 576000, 640000, 768000,
+    960000, 1024000, 1152000, 1280000, 1344000, 1408000, 1411200, 1472000,
+    1536000, 1920000, 2048000, 3072000, 3840000, 0, 0, 0,
+];
+/** Source PCM resolutions in bits indexed by PCMR. Zeroes mark invalid codes. */
+const DTS_PCM_RESOLUTIONS = [16, 16, 20, 20, 0, 24, 24, 0];
+/** Channel counts indexed by AMODE, not counting LFE. */
+const DTS_AMODE_CHANNEL_COUNTS = [1, 2, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 6, 7, 8, 8];
+/**
+ * Speaker layout masks indexed by AMODE, expressed with the same bits as `ChannelLayout` in the DTSSpecificBox
+ * and `nuSpkrActivityMask` in an extension substream asset descriptor.
+ */
+const DTS_AMODE_CHANNEL_LAYOUTS = [
+    0x0001, 0x0002, 0x0002, 0x0002, 0x0002, 0x0003, 0x0012, 0x0013,
+    0x0006, 0x0007, 0x0206, 0x0143, 0x0053, 0x0207, 0x0246, 0x0217,
+];
+/** The LFE1 speaker bit in a channel layout mask. */
+const DTS_CHANNEL_LAYOUT_LFE1 = 0x0008;
+/** Reference clock rates indexed by nuRefClockCode. The last code is unused. Table 7-3 */
+const DTS_EXSS_REF_CLOCKS = [32000, 44100, 48000, 0];
+/** Sample rates used by extension substream assets, indexed by nuMaxSampleRate. */
+const DTS_EXSS_SAMPLE_RATES = [
+    8000, 16000, 32000, 64000, 128000, 22050, 44100, 88200,
+    176400, 352800, 12000, 24000, 48000, 96000, 192000, 384000,
+];
+/** Frame durations that the DTSSpecificBox can express, indexed by FrameDuration. */
+const DTS_SPECIFIC_BOX_FRAME_DURATIONS = [512, 1024, 2048, 4096];
+/**
+ * Parse one complete DTS frame, being a core substream frame followed by any number of extension substreams,
+ * or an extension substream on its own. Section 5 and Section 7.4.1
+ */
+const parseDtsFrame = (data) => {
+    const core = parseDtsCoreFrameHeader(data);
+    const view = toDataView(data);
+    // The core substream is padded out to a 4-byte boundary before the first extension substream starts
+    let offset = core ? Math.ceil(core.frameSize / 4) * 4 : 0;
+    let firstExss = null;
+    while (offset + 4 <= data.length && view.getUint32(offset) === DTS_EXSS_SYNC_WORD) {
+        const exss = parseDtsExssHeader(data.subarray(offset));
+        if (!exss) {
+            break;
+        }
+        firstExss ??= exss;
+        offset += exss.frameSize;
+    }
+    if (core) {
+        // The core describes what every DTS decoder can play back; the extension substreams only build on top of
+        // it, so the core's parameters are the ones we report.
+        return {
+            frameSize: firstExss ? offset : core.frameSize,
+            sampleRate: core.sampleRate,
+            numberOfChannels: core.numberOfChannels,
+            sampleCount: core.sampleCount,
+            channelLayout: core.channelLayout,
+            pcmResolution: core.pcmResolution,
+            bitRate: core.bitRate,
+            core,
+            hasExtensions: firstExss !== null,
+        };
+    }
+    if (!firstExss?.asset) {
+        return null;
+    }
+    const { asset } = firstExss;
+    return {
+        frameSize: offset,
+        sampleRate: asset.sampleRate,
+        numberOfChannels: asset.numberOfChannels,
+        sampleCount: asset.sampleCount,
+        channelLayout: asset.channelLayout,
+        pcmResolution: asset.pcmResolution,
+        bitRate: 0,
+        core: null,
+        hasExtensions: true,
+    };
+};
+/** Parse the header of a core substream frame. Section 5.3 */
+const parseDtsCoreFrameHeader = (data) => {
+    if (data.length < DTS_CORE_FRAME_HEADER_SIZE) {
+        return null;
+    }
+    if (data[0] !== 0x7f || data[1] !== 0xfe || data[2] !== 0x80 || data[3] !== 0x01) {
+        return null;
+    }
+    const bitstream = new Bitstream(data);
+    bitstream.skipBits(32); // SYNC
+    bitstream.skipBits(1); // FTYPE
+    // Terminating frames carry fewer samples than a full PCM block; we don't handle those
+    if (bitstream.readBits(5) !== DTS_PCM_BLOCK_SAMPLES - 1) {
+        return null;
+    }
+    const cpf = bitstream.readBits(1);
+    const npcmblocks = bitstream.readBits(7) + 1;
+    if (npcmblocks % DTS_SUBBAND_SAMPLES !== 0) {
+        return null;
+    }
+    const frameSize = bitstream.readBits(14) + 1;
+    if (frameSize < 96) {
+        return null;
+    }
+    const amode = bitstream.readBits(6);
+    if (amode >= DTS_AMODE_CHANNEL_COUNTS.length) {
+        return null;
+    }
+    const sampleRate = DTS_CORE_SAMPLE_RATES[bitstream.readBits(4)];
+    if (sampleRate === 0) {
+        return null;
+    }
+    const bitRate = DTS_CORE_BIT_RATES[bitstream.readBits(5)];
+    if (bitstream.readBits(1) !== 0) {
+        return null; // A reserved bit that must be zero, so a cheap way to reject false sync words
+    }
+    bitstream.skipBits(1 + 1 + 1 + 1); // DYNF, TIMEF, AUXF, HDCD
+    bitstream.skipBits(3 + 1 + 1); // EXT_AUDIO_ID, EXT_AUDIO, ASPF
+    const lff = bitstream.readBits(2);
+    if (lff === 3) {
+        return null;
+    }
+    bitstream.skipBits(1); // HFLAG
+    if (cpf) {
+        bitstream.skipBits(16); // HCRC
+    }
+    bitstream.skipBits(1 + 4 + 2); // FILTS, VERNUM, CHIST
+    const pcmResolution = DTS_PCM_RESOLUTIONS[bitstream.readBits(3)];
+    if (pcmResolution === 0) {
+        return null;
+    }
+    const lfePresent = lff !== 0;
+    return {
+        frameSize,
+        sampleRate,
+        numberOfChannels: DTS_AMODE_CHANNEL_COUNTS[amode] + (lfePresent ? 1 : 0),
+        sampleCount: npcmblocks * DTS_PCM_BLOCK_SAMPLES,
+        channelLayout: DTS_AMODE_CHANNEL_LAYOUTS[amode] | (lfePresent ? DTS_CHANNEL_LAYOUT_LFE1 : 0),
+        amode,
+        lfePresent,
+        bitRate,
+        pcmResolution,
+    };
+};
+/** Parse the header of an extension substream, along with its first audio asset descriptor. Section 7.4.1 */
+const parseDtsExssHeader = (data) => {
+    if (data.length < DTS_EXSS_HEADER_PREFIX_SIZE) {
+        return null;
+    }
+    if (data[0] !== 0x64 || data[1] !== 0x58 || data[2] !== 0x20 || data[3] !== 0x25) {
+        return null;
+    }
+    const bitstream = new Bitstream(data);
+    bitstream.skipBits(32); // SYNC
+    bitstream.skipBits(8); // nuUserDefinedBits
+    const extSsIndex = bitstream.readBits(2);
+    const wideHeader = bitstream.readBits(1);
+    const headerSizeBits = 8 + 4 * wideHeader;
+    const frameSizeBits = 16 + 4 * wideHeader;
+    bitstream.skipBits(headerSizeBits); // nuExtSSHeaderSize
+    const frameSize = bitstream.readBits(frameSizeBits) + 1;
+    // Everything past this point can run off the end of what we were given, in which case the Bitstream keeps
+    // handing out zeroes; the bounds check further down catches that
+    const incomplete = { frameSize, asset: null };
+    if (!bitstream.readBits(1)) { // bStaticFieldsPresent
+        return incomplete;
+    }
+    const refClock = DTS_EXSS_REF_CLOCKS[bitstream.readBits(2)]; // nuRefClockCode
+    // The frame duration is a count of reference clock cycles, not of samples
+    const frameDurationCycles = 512 * (bitstream.readBits(3) + 1); // nuExSSFrameDurationCode
+    if (bitstream.readBits(1)) { // bTimeStampFlag
+        bitstream.skipBits(32 + 4); // nuTimeStamp, nLSB
+    }
+    const numAudioPresentations = bitstream.readBits(3) + 1;
+    const numAssets = bitstream.readBits(3) + 1;
+    const activeExssMasks = [];
+    for (let i = 0; i < numAudioPresentations; i++) {
+        activeExssMasks.push(bitstream.readBits(extSsIndex + 1));
+    }
+    for (const mask of activeExssMasks) {
+        bitstream.skipBits(8 * popcount(mask)); // nuActiveAssetMask
+    }
+    if (bitstream.readBits(1)) { // bMixMetadataEnbl
+        bitstream.skipBits(2); // nuMixMetadataAdjLevel
+        const spkrMaskBits = (bitstream.readBits(2) + 1) << 2;
+        const numMixOutConfigs = bitstream.readBits(2) + 1;
+        bitstream.skipBits(numMixOutConfigs * spkrMaskBits); // nuMixOutChMask
+    }
+    for (let i = 0; i < numAssets; i++) {
+        bitstream.skipBits(frameSizeBits); // nuAssetFsize
+    }
+    // From here on we're inside the first audio asset descriptor
+    bitstream.skipBits(9); // nuAssetDescriptFsize
+    bitstream.skipBits(3); // nuAssetIndex
+    if (bitstream.readBits(1)) { // bAssetTypeDescrPresent
+        bitstream.skipBits(4); // nuAssetTypeDescriptor
+    }
+    if (bitstream.readBits(1)) { // bLanguageDescrPresent
+        bitstream.skipBits(24); // LanguageDescriptor
+    }
+    if (bitstream.readBits(1)) { // bInfoTextPresent
+        bitstream.skipBits(8 * (bitstream.readBits(10) + 1)); // nuInfoTextByteSize, InfoTextString
+    }
+    const pcmResolution = bitstream.readBits(5) + 1;
+    const sampleRate = DTS_EXSS_SAMPLE_RATES[bitstream.readBits(4)];
+    const numberOfChannels = bitstream.readBits(8) + 1;
+    let channelLayout = 0;
+    if (bitstream.readBits(1)) { // bOne2OneMapChannels2Speakers
+        if (numberOfChannels > 2) {
+            bitstream.skipBits(1); // bEmbeddedStereoFlag
+        }
+        if (numberOfChannels > 6) {
+            bitstream.skipBits(1); // bEmbeddedSixChFlag
+        }
+        if (bitstream.readBits(1)) { // bSpkrMaskEnabled
+            const spkrMaskBits = (bitstream.readBits(2) + 1) << 2;
+            channelLayout = bitstream.readBits(spkrMaskBits); // nuSpkrActivityMask
+        }
+    }
+    if (refClock === 0 || bitstream.getBitsLeft() < 0) {
+        return incomplete;
+    }
+    return {
+        frameSize,
+        asset: {
+            sampleRate,
+            numberOfChannels,
+            sampleCount: Math.round(frameDurationCycles * sampleRate / refClock),
+            channelLayout,
+            pcmResolution,
+        },
+    };
+};
+/** Build the payload of a DTSSpecificBox (ddts) from a frame of the stream it describes. */
+const buildDtsSpecificBox = (frameInfo) => {
+    const bytes = new Uint8Array(DTS_SPECIFIC_BOX_SIZE);
+    const view = toDataView(bytes);
+    view.setUint32(0, frameInfo.sampleRate);
+    view.setUint32(4, frameInfo.bitRate);
+    view.setUint32(8, frameInfo.bitRate);
+    bytes[12] = frameInfo.pcmResolution;
+    // The spec only defines codes for streams built out of a known set of substreams. Anything else is required
+    // to be signaled as 0, meaning the construction is left unspecified.
+    const streamConstruction = frameInfo.core && !frameInfo.hasExtensions ? 1 : 0;
+    const bitstream = new Bitstream(bytes);
+    bitstream.seekToByte(13);
+    bitstream.writeBits(2, Math.max(DTS_SPECIFIC_BOX_FRAME_DURATIONS.indexOf(frameInfo.sampleCount), 0));
+    bitstream.writeBits(5, streamConstruction);
+    bitstream.writeBits(1, frameInfo.core?.lfePresent ? 1 : 0);
+    bitstream.writeBits(6, frameInfo.core?.amode ?? 0);
+    bitstream.writeBits(14, frameInfo.core ? frameInfo.core.frameSize - 1 : 0);
+    bitstream.writeBits(1, 0); // StereoDownmix
+    bitstream.writeBits(3, 0); // RepresentationType
+    bitstream.writeBits(16, frameInfo.channelLayout);
+    bitstream.writeBits(1, 0); // MultiAssetFlag
+    bitstream.writeBits(1, 0); // LBRDurationMod
+    bitstream.writeBits(1, 0); // ReservedBoxPresent
+    bitstream.writeBits(5, 0); // Reserved
+    return bytes;
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/**
+ * List of known video codecs, ordered by encoding preference.
+ * @group Codecs
+ * @public
+ */
+const VIDEO_CODECS = [
+    'avc',
+    'hevc',
+    'vp9',
+    'av1',
+    'vp8',
+    'prores',
+];
+/**
+ * List of known PCM (uncompressed) audio codecs, ordered by encoding preference.
+ * @group Codecs
+ * @public
+ */
+const PCM_AUDIO_CODECS = [
+    'pcm-s16', // We don't prefix 'le' so we're compatible with the WebCodecs-registered PCM codec strings
+    'pcm-s16be',
+    'pcm-s24',
+    'pcm-s24be',
+    'pcm-s32',
+    'pcm-s32be',
+    'pcm-f32',
+    'pcm-f32be',
+    'pcm-f64',
+    'pcm-f64be',
+    'pcm-u8',
+    'pcm-s8',
+    'ulaw',
+    'alaw',
+];
+/**
+ * List of known compressed audio codecs, ordered by encoding preference.
+ * @group Codecs
+ * @public
+ */
+const NON_PCM_AUDIO_CODECS = [
+    'aac',
+    'opus',
+    'mp3',
+    'vorbis',
+    'flac',
+    'ac3',
+    'eac3',
+    'dts',
+];
+/**
+ * List of known audio codecs, ordered by encoding preference.
+ * @group Codecs
+ * @public
+ */
+const AUDIO_CODECS = [
+    ...NON_PCM_AUDIO_CODECS,
+    ...PCM_AUDIO_CODECS,
+];
+/**
+ * List of known subtitle codecs, ordered by encoding preference.
+ * @group Codecs
+ * @public
+ */
+const SUBTITLE_CODECS = [
+    'webvtt',
+]; // TODO add the rest
+// https://en.wikipedia.org/wiki/Advanced_Video_Coding
+const AVC_LEVEL_TABLE = [
+    { maxMacroblocks: 99, maxBitrate: 64000, maxDpbMbs: 396, level: 0x0A }, // Level 1
+    { maxMacroblocks: 396, maxBitrate: 192000, maxDpbMbs: 900, level: 0x0B }, // Level 1.1
+    { maxMacroblocks: 396, maxBitrate: 384000, maxDpbMbs: 2376, level: 0x0C }, // Level 1.2
+    { maxMacroblocks: 396, maxBitrate: 768000, maxDpbMbs: 2376, level: 0x0D }, // Level 1.3
+    { maxMacroblocks: 396, maxBitrate: 2000000, maxDpbMbs: 2376, level: 0x14 }, // Level 2
+    { maxMacroblocks: 792, maxBitrate: 4000000, maxDpbMbs: 4752, level: 0x15 }, // Level 2.1
+    { maxMacroblocks: 1620, maxBitrate: 4000000, maxDpbMbs: 8100, level: 0x16 }, // Level 2.2
+    { maxMacroblocks: 1620, maxBitrate: 10000000, maxDpbMbs: 8100, level: 0x1E }, // Level 3
+    { maxMacroblocks: 3600, maxBitrate: 14000000, maxDpbMbs: 18000, level: 0x1F }, // Level 3.1
+    { maxMacroblocks: 5120, maxBitrate: 20000000, maxDpbMbs: 20480, level: 0x20 }, // Level 3.2
+    { maxMacroblocks: 8192, maxBitrate: 20000000, maxDpbMbs: 32768, level: 0x28 }, // Level 4
+    { maxMacroblocks: 8192, maxBitrate: 50000000, maxDpbMbs: 32768, level: 0x29 }, // Level 4.1
+    { maxMacroblocks: 8704, maxBitrate: 50000000, maxDpbMbs: 34816, level: 0x2A }, // Level 4.2
+    { maxMacroblocks: 22080, maxBitrate: 135000000, maxDpbMbs: 110400, level: 0x32 }, // Level 5
+    { maxMacroblocks: 36864, maxBitrate: 240000000, maxDpbMbs: 184320, level: 0x33 }, // Level 5.1
+    { maxMacroblocks: 36864, maxBitrate: 240000000, maxDpbMbs: 184320, level: 0x34 }, // Level 5.2
+    { maxMacroblocks: 139264, maxBitrate: 240000000, maxDpbMbs: 696320, level: 0x3C }, // Level 6
+    { maxMacroblocks: 139264, maxBitrate: 480000000, maxDpbMbs: 696320, level: 0x3D }, // Level 6.1
+    { maxMacroblocks: 139264, maxBitrate: 800000000, maxDpbMbs: 696320, level: 0x3E }, // Level 6.2
+];
+// https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding
+const HEVC_LEVEL_TABLE = [
+    { maxPictureSize: 36864, maxBitrate: 128000, tier: 'L', level: 30 }, // Level 1 (Low Tier)
+    { maxPictureSize: 122880, maxBitrate: 1500000, tier: 'L', level: 60 }, // Level 2 (Low Tier)
+    { maxPictureSize: 245760, maxBitrate: 3000000, tier: 'L', level: 63 }, // Level 2.1 (Low Tier)
+    { maxPictureSize: 552960, maxBitrate: 6000000, tier: 'L', level: 90 }, // Level 3 (Low Tier)
+    { maxPictureSize: 983040, maxBitrate: 10000000, tier: 'L', level: 93 }, // Level 3.1 (Low Tier)
+    { maxPictureSize: 2228224, maxBitrate: 12000000, tier: 'L', level: 120 }, // Level 4 (Low Tier)
+    { maxPictureSize: 2228224, maxBitrate: 30000000, tier: 'H', level: 120 }, // Level 4 (High Tier)
+    { maxPictureSize: 2228224, maxBitrate: 20000000, tier: 'L', level: 123 }, // Level 4.1 (Low Tier)
+    { maxPictureSize: 2228224, maxBitrate: 50000000, tier: 'H', level: 123 }, // Level 4.1 (High Tier)
+    { maxPictureSize: 8912896, maxBitrate: 25000000, tier: 'L', level: 150 }, // Level 5 (Low Tier)
+    { maxPictureSize: 8912896, maxBitrate: 100000000, tier: 'H', level: 150 }, // Level 5 (High Tier)
+    { maxPictureSize: 8912896, maxBitrate: 40000000, tier: 'L', level: 153 }, // Level 5.1 (Low Tier)
+    { maxPictureSize: 8912896, maxBitrate: 160000000, tier: 'H', level: 153 }, // Level 5.1 (High Tier)
+    { maxPictureSize: 8912896, maxBitrate: 60000000, tier: 'L', level: 156 }, // Level 5.2 (Low Tier)
+    { maxPictureSize: 8912896, maxBitrate: 240000000, tier: 'H', level: 156 }, // Level 5.2 (High Tier)
+    { maxPictureSize: 35651584, maxBitrate: 60000000, tier: 'L', level: 180 }, // Level 6 (Low Tier)
+    { maxPictureSize: 35651584, maxBitrate: 240000000, tier: 'H', level: 180 }, // Level 6 (High Tier)
+    { maxPictureSize: 35651584, maxBitrate: 120000000, tier: 'L', level: 183 }, // Level 6.1 (Low Tier)
+    { maxPictureSize: 35651584, maxBitrate: 480000000, tier: 'H', level: 183 }, // Level 6.1 (High Tier)
+    { maxPictureSize: 35651584, maxBitrate: 240000000, tier: 'L', level: 186 }, // Level 6.2 (Low Tier)
+    { maxPictureSize: 35651584, maxBitrate: 800000000, tier: 'H', level: 186 }, // Level 6.2 (High Tier)
+];
+// https://en.wikipedia.org/wiki/VP9
+const VP9_LEVEL_TABLE = [
+    { maxPictureSize: 36864, maxBitrate: 200000, level: 10 }, // Level 1
+    { maxPictureSize: 73728, maxBitrate: 800000, level: 11 }, // Level 1.1
+    { maxPictureSize: 122880, maxBitrate: 1800000, level: 20 }, // Level 2
+    { maxPictureSize: 245760, maxBitrate: 3600000, level: 21 }, // Level 2.1
+    { maxPictureSize: 552960, maxBitrate: 7200000, level: 30 }, // Level 3
+    { maxPictureSize: 983040, maxBitrate: 12000000, level: 31 }, // Level 3.1
+    { maxPictureSize: 2228224, maxBitrate: 18000000, level: 40 }, // Level 4
+    { maxPictureSize: 2228224, maxBitrate: 30000000, level: 41 }, // Level 4.1
+    { maxPictureSize: 8912896, maxBitrate: 60000000, level: 50 }, // Level 5
+    { maxPictureSize: 8912896, maxBitrate: 120000000, level: 51 }, // Level 5.1
+    { maxPictureSize: 8912896, maxBitrate: 180000000, level: 52 }, // Level 5.2
+    { maxPictureSize: 35651584, maxBitrate: 180000000, level: 60 }, // Level 6
+    { maxPictureSize: 35651584, maxBitrate: 240000000, level: 61 }, // Level 6.1
+    { maxPictureSize: 35651584, maxBitrate: 480000000, level: 62 }, // Level 6.2
+];
+// https://en.wikipedia.org/wiki/AV1
+const AV1_LEVEL_TABLE = [
+    { maxPictureSize: 147456, maxBitrate: 1500000, tier: 'M', level: 0 }, // Level 2.0 (Main Tier)
+    { maxPictureSize: 278784, maxBitrate: 3000000, tier: 'M', level: 1 }, // Level 2.1 (Main Tier)
+    { maxPictureSize: 665856, maxBitrate: 6000000, tier: 'M', level: 4 }, // Level 3.0 (Main Tier)
+    { maxPictureSize: 1065024, maxBitrate: 10000000, tier: 'M', level: 5 }, // Level 3.1 (Main Tier)
+    { maxPictureSize: 2359296, maxBitrate: 12000000, tier: 'M', level: 8 }, // Level 4.0 (Main Tier)
+    { maxPictureSize: 2359296, maxBitrate: 30000000, tier: 'H', level: 8 }, // Level 4.0 (High Tier)
+    { maxPictureSize: 2359296, maxBitrate: 20000000, tier: 'M', level: 9 }, // Level 4.1 (Main Tier)
+    { maxPictureSize: 2359296, maxBitrate: 50000000, tier: 'H', level: 9 }, // Level 4.1 (High Tier)
+    { maxPictureSize: 8912896, maxBitrate: 30000000, tier: 'M', level: 12 }, // Level 5.0 (Main Tier)
+    { maxPictureSize: 8912896, maxBitrate: 100000000, tier: 'H', level: 12 }, // Level 5.0 (High Tier)
+    { maxPictureSize: 8912896, maxBitrate: 40000000, tier: 'M', level: 13 }, // Level 5.1 (Main Tier)
+    { maxPictureSize: 8912896, maxBitrate: 160000000, tier: 'H', level: 13 }, // Level 5.1 (High Tier)
+    { maxPictureSize: 8912896, maxBitrate: 60000000, tier: 'M', level: 14 }, // Level 5.2 (Main Tier)
+    { maxPictureSize: 8912896, maxBitrate: 240000000, tier: 'H', level: 14 }, // Level 5.2 (High Tier)
+    { maxPictureSize: 35651584, maxBitrate: 60000000, tier: 'M', level: 15 }, // Level 5.3 (Main Tier)
+    { maxPictureSize: 35651584, maxBitrate: 240000000, tier: 'H', level: 15 }, // Level 5.3 (High Tier)
+    { maxPictureSize: 35651584, maxBitrate: 60000000, tier: 'M', level: 16 }, // Level 6.0 (Main Tier)
+    { maxPictureSize: 35651584, maxBitrate: 240000000, tier: 'H', level: 16 }, // Level 6.0 (High Tier)
+    { maxPictureSize: 35651584, maxBitrate: 100000000, tier: 'M', level: 17 }, // Level 6.1 (Main Tier)
+    { maxPictureSize: 35651584, maxBitrate: 480000000, tier: 'H', level: 17 }, // Level 6.1 (High Tier)
+    { maxPictureSize: 35651584, maxBitrate: 160000000, tier: 'M', level: 18 }, // Level 6.2 (Main Tier)
+    { maxPictureSize: 35651584, maxBitrate: 800000000, tier: 'H', level: 18 }, // Level 6.2 (High Tier)
+    { maxPictureSize: 35651584, maxBitrate: 160000000, tier: 'M', level: 19 }, // Level 6.3 (Main Tier)
+    { maxPictureSize: 35651584, maxBitrate: 800000000, tier: 'H', level: 19 }, // Level 6.3 (High Tier)
+];
+const VP9_DEFAULT_SUFFIX = '.01.01.01.01.00';
+const AV1_DEFAULT_SUFFIX = '.0.110.01.01.01.0';
+const PRORES_FOURCCS = [
+    'ap4x', // ProRes 4444 XQ
+    'ap4h', // ProRes 4444
+    'apch', // ProRes 422 High Quality
+    'apcn', // ProRes 422 Standard Definition
+    'apcs', // ProRes 422 LT
+    'apco', // ProRes 422 Proxy
+];
+const DTS_FOURCCS = [
+    'dtsc', // DTS core
+    'dtsh', // DTS-HD, core plus extension substreams
+    'dtsl', // DTS-HD Lossless, no core
+    'dtse', // DTS Express
+];
+// Target data rates of the ProRes profiles at 1920x1080 ~30fps, as published by Apple
+const PRORES_PROFILE_TARGET_BITRATES = [
+    { fourCc: 'apco', bitrate: 45_000_000, alpha: false }, // 422 Proxy
+    { fourCc: 'apcs', bitrate: 102_000_000, alpha: false }, // 422 LT
+    { fourCc: 'apcn', bitrate: 147_000_000, alpha: false }, // 422 Standard
+    { fourCc: 'apch', bitrate: 220_000_000, alpha: false }, // 422 HQ
+    { fourCc: 'ap4h', bitrate: 330_000_000, alpha: true }, // 4444
+    { fourCc: 'ap4x', bitrate: 500_000_000, alpha: true }, // 4444 XQ
+];
+const buildVideoCodecString = (codec, width, height, bitrate, alpha) => {
+    if (codec === 'avc') {
+        const profileIndication = 0x64; // High Profile
+        const totalMacroblocks = Math.ceil(width / 16) * Math.ceil(height / 16);
+        // Determine the level based on the table
+        const levelInfo = AVC_LEVEL_TABLE.find(level => totalMacroblocks <= level.maxMacroblocks && bitrate <= level.maxBitrate) ?? last(AVC_LEVEL_TABLE);
+        const levelIndication = levelInfo ? levelInfo.level : 0;
+        const hexProfileIndication = profileIndication.toString(16).padStart(2, '0');
+        const hexProfileCompatibility = '00';
+        const hexLevelIndication = levelIndication.toString(16).padStart(2, '0');
+        return `avc1.${hexProfileIndication}${hexProfileCompatibility}${hexLevelIndication}`;
+    }
+    else if (codec === 'hevc') {
+        const profilePrefix = ''; // Profile space 0
+        const profileIdc = 1; // Main Profile
+        const compatibilityFlags = '6'; // Taken from the example in ISO 14496-15
+        const pictureSize = width * height;
+        const levelInfo = HEVC_LEVEL_TABLE.find(level => pictureSize <= level.maxPictureSize && bitrate <= level.maxBitrate) ?? last(HEVC_LEVEL_TABLE);
+        const constraintFlags = 'B0'; // Progressive source flag
+        return 'hev1.'
+            + `${profilePrefix}${profileIdc}.`
+            + `${compatibilityFlags}.`
+            + `${levelInfo.tier}${levelInfo.level}.`
+            + `${constraintFlags}`;
+    }
+    else if (codec === 'vp8') {
+        return 'vp8'; // Easy, this one
+    }
+    else if (codec === 'vp9') {
+        const profile = '00'; // Profile 0
+        const pictureSize = width * height;
+        const levelInfo = VP9_LEVEL_TABLE.find(level => pictureSize <= level.maxPictureSize && bitrate <= level.maxBitrate) ?? last(VP9_LEVEL_TABLE);
+        const bitDepth = '08'; // 8-bit
+        return `vp09.${profile}.${levelInfo.level.toString().padStart(2, '0')}.${bitDepth}`;
+    }
+    else if (codec === 'av1') {
+        const profile = 0; // Main Profile, single digit
+        const pictureSize = width * height;
+        const levelInfo = AV1_LEVEL_TABLE.find(level => pictureSize <= level.maxPictureSize && bitrate <= level.maxBitrate) ?? last(AV1_LEVEL_TABLE);
+        const level = levelInfo.level.toString().padStart(2, '0');
+        const bitDepth = '08'; // 8-bit
+        return `av01.${profile}.${level}${levelInfo.tier}.${bitDepth}`;
+    }
+    else if (codec === 'prores') {
+        const referencePixels = 1920 * 1080;
+        const scaleFactor = Math.pow((width * height) / referencePixels, 0.95);
+        const candidates = PRORES_PROFILE_TARGET_BITRATES.filter(x => x.alpha === alpha);
+        let bestFourCc = candidates[0].fourCc;
+        let smallestDifference = Infinity;
+        for (const { fourCc, bitrate: targetBitrate } of candidates) {
+            const difference = Math.abs(targetBitrate * scaleFactor - bitrate);
+            if (difference < smallestDifference) {
+                smallestDifference = difference;
+                bestFourCc = fourCc;
+            }
+        }
+        return bestFourCc;
+    }
+    else {
+        assertNever(codec);
+    }
+    throw new TypeError(`Unhandled codec '${String(codec)}'.`);
+};
+const generateAv1CodecConfigurationFromCodecString = (codecString) => {
+    // Reference: https://aomediacodec.github.io/av1-isobmff/
+    const parts = codecString.split('.'); // We can derive the required values from the codec string
+    const marker = 1;
+    const version = 1;
+    const firstByte = (marker << 7) + version;
+    const profile = Number(parts[1]);
+    const levelAndTier = parts[2];
+    const level = Number(levelAndTier.slice(0, -1));
+    const secondByte = (profile << 5) + level;
+    const tier = levelAndTier.slice(-1) === 'H' ? 1 : 0;
+    const bitDepth = Number(parts[3]);
+    const highBitDepth = bitDepth === 8 ? 0 : 1;
+    const twelveBit = bitDepth === 12 ? 1 : 0;
+    const monochrome = parts[4] ? Number(parts[4]) : 0;
+    const chromaSubsamplingX = parts[5] ? Number(parts[5][0]) : 1;
+    const chromaSubsamplingY = parts[5] ? Number(parts[5][1]) : 1;
+    const chromaSamplePosition = parts[5] ? Number(parts[5][2]) : 0; // CSP_UNKNOWN
+    const thirdByte = (tier << 7)
+        + (highBitDepth << 6)
+        + (twelveBit << 5)
+        + (monochrome << 4)
+        + (chromaSubsamplingX << 3)
+        + (chromaSubsamplingY << 2)
+        + chromaSamplePosition;
+    const initialPresentationDelayPresent = 0; // Should be fine
+    const fourthByte = initialPresentationDelayPresent;
+    return [firstByte, secondByte, thirdByte, fourthByte];
+};
+const extractVideoCodecString = (trackInfo) => {
+    const { codec, codecDescription, colorSpace, avcCodecInfo, hevcCodecInfo, vp9CodecInfo, av1CodecInfo, proresFormat, } = trackInfo;
+    if (codec === 'avc') {
+        assert(trackInfo.avcType !== null);
+        if (avcCodecInfo) {
+            const bytes = new Uint8Array([
+                avcCodecInfo.avcProfileIndication,
+                avcCodecInfo.profileCompatibility,
+                avcCodecInfo.avcLevelIndication,
+            ]);
+            return `avc${trackInfo.avcType}.${bytesToHexString(bytes)}`;
+        }
+        if (!codecDescription || codecDescription.byteLength < 4) {
+            throw new TypeError('AVC decoder description is not provided or is not at least 4 bytes long.');
+        }
+        return `avc${trackInfo.avcType}.${bytesToHexString(codecDescription.subarray(1, 4))}`;
+    }
+    else if (codec === 'hevc') {
+        let generalProfileSpace;
+        let generalProfileIdc;
+        let compatibilityFlags;
+        let generalTierFlag;
+        let generalLevelIdc;
+        let constraintFlags;
+        if (hevcCodecInfo) {
+            generalProfileSpace = hevcCodecInfo.generalProfileSpace;
+            generalProfileIdc = hevcCodecInfo.generalProfileIdc;
+            compatibilityFlags = reverseBitsU32(hevcCodecInfo.generalProfileCompatibilityFlags);
+            generalTierFlag = hevcCodecInfo.generalTierFlag;
+            generalLevelIdc = hevcCodecInfo.generalLevelIdc;
+            constraintFlags = [...hevcCodecInfo.generalConstraintIndicatorFlags];
+        }
+        else {
+            if (!codecDescription || codecDescription.byteLength < 23) {
+                throw new TypeError('HEVC decoder description is not provided or is not at least 23 bytes long.');
+            }
+            const view = toDataView(codecDescription);
+            const profileByte = view.getUint8(1);
+            generalProfileSpace = (profileByte >> 6) & 0x03;
+            generalProfileIdc = profileByte & 0x1F;
+            compatibilityFlags = reverseBitsU32(view.getUint32(2));
+            generalTierFlag = (profileByte >> 5) & 0x01;
+            generalLevelIdc = view.getUint8(12);
+            constraintFlags = [];
+            for (let i = 0; i < 6; i++) {
+                constraintFlags.push(view.getUint8(6 + i));
+            }
+        }
+        let codecString = 'hev1.';
+        codecString += ['', 'A', 'B', 'C'][generalProfileSpace] + generalProfileIdc;
+        codecString += '.';
+        codecString += compatibilityFlags.toString(16).toUpperCase();
+        codecString += '.';
+        codecString += generalTierFlag === 0 ? 'L' : 'H';
+        codecString += generalLevelIdc;
+        while (constraintFlags.length > 0 && constraintFlags[constraintFlags.length - 1] === 0) {
+            constraintFlags.pop();
+        }
+        if (constraintFlags.length > 0) {
+            codecString += '.';
+            codecString += constraintFlags.map(x => x.toString(16).toUpperCase()).join('.');
+        }
+        return codecString;
+    }
+    else if (codec === 'vp8') {
+        return 'vp8'; // Easy, this one
+    }
+    else if (codec === 'vp9') {
+        if (!vp9CodecInfo) {
+            // Calculate level based on dimensions
+            const pictureSize = trackInfo.width * trackInfo.height;
+            let level = last(VP9_LEVEL_TABLE).level; // Default to highest level
+            for (const entry of VP9_LEVEL_TABLE) {
+                if (pictureSize <= entry.maxPictureSize) {
+                    level = entry.level;
+                    break;
+                }
+            }
+            // We don't really know better, so let's return a general-purpose, common codec string and hope for the best
+            return `vp09.00.${level.toString().padStart(2, '0')}.08`;
+        }
+        const profile = vp9CodecInfo.profile.toString().padStart(2, '0');
+        const level = vp9CodecInfo.level.toString().padStart(2, '0');
+        const bitDepth = vp9CodecInfo.bitDepth.toString().padStart(2, '0');
+        const chromaSubsampling = vp9CodecInfo.chromaSubsampling.toString().padStart(2, '0');
+        const colourPrimaries = vp9CodecInfo.colourPrimaries.toString().padStart(2, '0');
+        const transferCharacteristics = vp9CodecInfo.transferCharacteristics.toString().padStart(2, '0');
+        const matrixCoefficients = vp9CodecInfo.matrixCoefficients.toString().padStart(2, '0');
+        const videoFullRangeFlag = vp9CodecInfo.videoFullRangeFlag.toString().padStart(2, '0');
+        let string = `vp09.${profile}.${level}.${bitDepth}.${chromaSubsampling}`;
+        string += `.${colourPrimaries}.${transferCharacteristics}.${matrixCoefficients}.${videoFullRangeFlag}`;
+        if (string.endsWith(VP9_DEFAULT_SUFFIX)) {
+            string = string.slice(0, -VP9_DEFAULT_SUFFIX.length);
+        }
+        return string;
+    }
+    else if (codec === 'av1') {
+        if (!av1CodecInfo) {
+            // Calculate level based on dimensions
+            const pictureSize = trackInfo.width * trackInfo.height;
+            let level = last(VP9_LEVEL_TABLE).level; // Default to highest level
+            for (const entry of VP9_LEVEL_TABLE) {
+                if (pictureSize <= entry.maxPictureSize) {
+                    level = entry.level;
+                    break;
+                }
+            }
+            // We don't really know better, so let's return a general-purpose, common codec string and hope for the best
+            return `av01.0.${level.toString().padStart(2, '0')}M.08`;
+        }
+        // https://aomediacodec.github.io/av1-isobmff/#codecsparam
+        const profile = av1CodecInfo.profile; // Single digit
+        const level = av1CodecInfo.level.toString().padStart(2, '0');
+        const tier = av1CodecInfo.tier ? 'H' : 'M';
+        const bitDepth = av1CodecInfo.bitDepth.toString().padStart(2, '0');
+        const monochrome = av1CodecInfo.monochrome ? '1' : '0';
+        const chromaSubsampling = 100 * av1CodecInfo.chromaSubsamplingX
+            + 10 * av1CodecInfo.chromaSubsamplingY
+            + 1 * (av1CodecInfo.chromaSubsamplingX && av1CodecInfo.chromaSubsamplingY
+                ? av1CodecInfo.chromaSamplePosition
+                : 0);
+        let colorPrimaries;
+        let transferCharacteristics;
+        let matrixCoefficients;
+        let videoFullRangeFlag;
+        if (av1CodecInfoHasColorInfo(av1CodecInfo)) {
+            colorPrimaries = av1CodecInfo.colourPrimaries;
+            transferCharacteristics = av1CodecInfo.transferCharacteristics;
+            matrixCoefficients = av1CodecInfo.matrixCoefficients;
+            videoFullRangeFlag = av1CodecInfo.videoFullRangeFlag;
+        }
+        else {
+            // The defaults are 1 (ITU-R BT.709)
+            colorPrimaries = colorSpace?.primaries ? COLOR_PRIMARIES_MAP[colorSpace.primaries] : 1;
+            transferCharacteristics = colorSpace?.transfer ? TRANSFER_CHARACTERISTICS_MAP[colorSpace.transfer] : 1;
+            matrixCoefficients = colorSpace?.matrix ? MATRIX_COEFFICIENTS_MAP[colorSpace.matrix] : 1;
+            videoFullRangeFlag = colorSpace?.fullRange ? 1 : 0;
+        }
+        let string = `av01.${profile}.${level}${tier}.${bitDepth}`;
+        string += `.${monochrome}.${chromaSubsampling.toString().padStart(3, '0')}`;
+        string += `.${colorPrimaries.toString().padStart(2, '0')}`;
+        string += `.${transferCharacteristics.toString().padStart(2, '0')}`;
+        string += `.${matrixCoefficients.toString().padStart(2, '0')}`;
+        string += `.${videoFullRangeFlag}`;
+        if (string.endsWith(AV1_DEFAULT_SUFFIX)) {
+            string = string.slice(0, -AV1_DEFAULT_SUFFIX.length);
+        }
+        return string;
+    }
+    else if (codec === 'prores') {
+        return proresFormat ?? 'apch';
+    }
+    else if (codec !== null) {
+        assertNever(codec);
+    }
+    throw new TypeError(`Unhandled codec '${codec}'.`);
+};
+const PCM_CODEC_REGEX = /^pcm-([usf])(\d+)(be)?$/;
+const parsePcmCodec = (codec) => {
+    assert(PCM_AUDIO_CODECS.includes(codec));
+    if (codec === 'ulaw') {
+        return { dataType: 'ulaw', sampleSize: 1, littleEndian: true, silentValue: 255 };
+    }
+    else if (codec === 'alaw') {
+        return { dataType: 'alaw', sampleSize: 1, littleEndian: true, silentValue: 213 };
+    }
+    const match = PCM_CODEC_REGEX.exec(codec);
+    assert(match);
+    let dataType;
+    if (match[1] === 'u') {
+        dataType = 'unsigned';
+    }
+    else if (match[1] === 's') {
+        dataType = 'signed';
+    }
+    else {
+        dataType = 'float';
+    }
+    const sampleSize = (Number(match[2]) / 8);
+    const littleEndian = match[3] !== 'be';
+    const silentValue = codec === 'pcm-u8' ? 2 ** 7 : 0;
+    return { dataType, sampleSize, littleEndian, silentValue };
+};
+const inferCodecFromCodecString = (codecString) => {
+    // Video codecs
+    if (codecString.startsWith('avc1') || codecString.startsWith('avc3')) {
+        return 'avc';
+    }
+    else if (codecString.startsWith('hev1') || codecString.startsWith('hvc1')) {
+        return 'hevc';
+    }
+    else if (codecString === 'vp8') {
+        return 'vp8';
+    }
+    else if (codecString.startsWith('vp09')) {
+        return 'vp9';
+    }
+    else if (codecString.startsWith('av01')) {
+        return 'av1';
+    }
+    else if (PRORES_FOURCCS.includes(codecString)) {
+        return 'prores';
+    }
+    // Audio codecs
+    if (codecString === 'mp3'
+        || codecString === 'mp4a.69'
+        || codecString === 'mp4a.6B'
+        || codecString === 'mp4a.6b'
+        || codecString === 'mp4a.40.34') {
+        return 'mp3';
+    }
+    else if (codecString.startsWith('mp4a.40.') || codecString === 'mp4a.67') {
+        return 'aac';
+    }
+    else if (codecString === 'opus' || codecString === 'Opus' /* HLS variant */) {
+        return 'opus';
+    }
+    else if (codecString === 'vorbis') {
+        return 'vorbis';
+    }
+    else if (codecString === 'flac') {
+        return 'flac';
+    }
+    else if (codecString === 'ac-3' || codecString === 'ac3') {
+        return 'ac3';
+    }
+    else if (codecString === 'ec-3' || codecString === 'eac3') {
+        return 'eac3';
+    }
+    else if (DTS_FOURCCS.includes(codecString)) {
+        return 'dts';
+    }
+    else if (codecString === 'ulaw') {
+        return 'ulaw';
+    }
+    else if (codecString === 'alaw') {
+        return 'alaw';
+    }
+    else if (PCM_CODEC_REGEX.test(codecString)) {
+        return codecString;
+    }
+    // Subtitle codecs
+    if (codecString === 'webvtt') {
+        return 'webvtt';
+    }
+    return null;
+};
+const getVideoEncoderConfigExtension = (codec) => {
+    if (codec === 'avc') {
+        return {
+            avc: {
+                format: 'avc', // Ensure the format is not Annex B
+            },
+        };
+    }
+    else if (codec === 'hevc') {
+        return {
+            hevc: {
+                format: 'hevc', // Ensure the format is not Annex B
+            },
+        };
+    }
+    return {};
+};
+const VALID_VIDEO_CODEC_STRING_PREFIXES = ['avc1', 'avc3', 'hev1', 'hvc1', 'vp8', 'vp09', 'av01', ...PRORES_FOURCCS];
+const AVC_CODEC_STRING_REGEX = /^(avc1|avc3)\.[0-9a-fA-F]{6}$/;
+const HEVC_CODEC_STRING_REGEX = /^(hev1|hvc1)\.(?:[ABC]?\d+)\.[0-9a-fA-F]{1,8}\.[LH]\d+(?:\.[0-9a-fA-F]{1,2}){0,6}$/;
+const VP9_CODEC_STRING_REGEX = /^vp09(?:\.\d{2}){3}(?:(?:\.\d{2}){5})?$/;
+const AV1_CODEC_STRING_REGEX = /^av01\.\d\.\d{2}[MH]\.\d{2}(?:\.\d\.\d{3}\.\d{2}\.\d{2}\.\d{2}\.\d)?$/;
+const validateVideoChunkMetadata = (metadata, trackCodec) => {
+    if (!metadata) {
+        throw new TypeError('Video chunk metadata must be provided.');
+    }
+    if (typeof metadata !== 'object') {
+        throw new TypeError('Video chunk metadata must be an object.');
+    }
+    if (!metadata.decoderConfig) {
+        throw new TypeError('Video chunk metadata must include a decoder configuration.');
+    }
+    if (typeof metadata.decoderConfig !== 'object') {
+        throw new TypeError('Video chunk metadata decoder configuration must be an object.');
+    }
+    if (typeof metadata.decoderConfig.codec !== 'string') {
+        throw new TypeError('Video chunk metadata decoder configuration must specify a codec string.');
+    }
+    if (!VALID_VIDEO_CODEC_STRING_PREFIXES.some(prefix => metadata.decoderConfig.codec.startsWith(prefix))) {
+        throw new TypeError('Video chunk metadata decoder configuration codec string must be a valid video codec string as specified in'
+            + ' the Mediabunny Codec Registry.');
+    }
+    if (!Number.isInteger(metadata.decoderConfig.codedWidth) || metadata.decoderConfig.codedWidth <= 0) {
+        throw new TypeError('Video chunk metadata decoder configuration must specify a valid codedWidth (positive integer).');
+    }
+    if (!Number.isInteger(metadata.decoderConfig.codedHeight) || metadata.decoderConfig.codedHeight <= 0) {
+        throw new TypeError('Video chunk metadata decoder configuration must specify a valid codedHeight (positive integer).');
+    }
+    if (metadata.decoderConfig.displayAspectWidth !== undefined
+        && (!Number.isInteger(metadata.decoderConfig.displayAspectWidth)
+            || metadata.decoderConfig.displayAspectWidth <= 0)) {
+        throw new TypeError('Video chunk metadata decoder configuration displayAspectWidth, when defined, must be a positive integer.');
+    }
+    if (metadata.decoderConfig.displayAspectHeight !== undefined
+        && (!Number.isInteger(metadata.decoderConfig.displayAspectHeight)
+            || metadata.decoderConfig.displayAspectHeight <= 0)) {
+        throw new TypeError('Video chunk metadata decoder configuration displayAspectHeight, when defined, must be a positive integer.');
+    }
+    if ((metadata.decoderConfig.displayAspectWidth !== undefined)
+        !== (metadata.decoderConfig.displayAspectHeight !== undefined)) {
+        throw new TypeError('Video chunk metadata decoder configuration must specify both displayAspectWidth and displayAspectHeight,'
+            + ' or neither.');
+    }
+    if (metadata.decoderConfig.description !== undefined) {
+        if (!isAllowSharedBufferSource(metadata.decoderConfig.description)) {
+            throw new TypeError('Video chunk metadata decoder configuration description, when defined, must be an ArrayBuffer or an'
+                + ' ArrayBuffer view.');
+        }
+    }
+    if (metadata.decoderConfig.colorSpace !== undefined) {
+        const { colorSpace } = metadata.decoderConfig;
+        if (typeof colorSpace !== 'object') {
+            throw new TypeError('Video chunk metadata decoder configuration colorSpace, when provided, must be an object.');
+        }
+        const primariesValues = Object.keys(COLOR_PRIMARIES_MAP);
+        if (colorSpace.primaries != null && !primariesValues.includes(colorSpace.primaries)) {
+            throw new TypeError(`Video chunk metadata decoder configuration colorSpace primaries, when defined, must be one of`
+                + ` ${primariesValues.join(', ')}.`);
+        }
+        const transferValues = Object.keys(TRANSFER_CHARACTERISTICS_MAP);
+        if (colorSpace.transfer != null && !transferValues.includes(colorSpace.transfer)) {
+            throw new TypeError(`Video chunk metadata decoder configuration colorSpace transfer, when defined, must be one of`
+                + ` ${transferValues.join(', ')}.`);
+        }
+        const matrixValues = Object.keys(MATRIX_COEFFICIENTS_MAP);
+        if (colorSpace.matrix != null && !matrixValues.includes(colorSpace.matrix)) {
+            throw new TypeError(`Video chunk metadata decoder configuration colorSpace matrix, when defined, must be one of`
+                + ` ${matrixValues.join(', ')}.`);
+        }
+        if (colorSpace.fullRange != null && typeof colorSpace.fullRange !== 'boolean') {
+            throw new TypeError('Video chunk metadata decoder configuration colorSpace fullRange, when defined, must be a boolean.');
+        }
+    }
+    if (metadata.decoderConfig.codec.startsWith('avc1') || metadata.decoderConfig.codec.startsWith('avc3')) {
+        // AVC-specific validation
+        if (!AVC_CODEC_STRING_REGEX.test(metadata.decoderConfig.codec)) {
+            throw new TypeError('Video chunk metadata decoder configuration codec string for AVC must be a valid AVC codec string as'
+                + ' specified in Section 3.4 of RFC 6381.');
+        }
+        // `description` may or may not be set, depending on if the format is AVCC or Annex B, so don't perform any
+        // validation for it.
+        // https://www.w3.org/TR/webcodecs-avc-codec-registration
+    }
+    else if (metadata.decoderConfig.codec.startsWith('hev1') || metadata.decoderConfig.codec.startsWith('hvc1')) {
+        // HEVC-specific validation
+        if (!HEVC_CODEC_STRING_REGEX.test(metadata.decoderConfig.codec)) {
+            throw new TypeError('Video chunk metadata decoder configuration codec string for HEVC must be a valid HEVC codec string as'
+                + ' specified in Section E.3 of ISO 14496-15.');
+        }
+        // `description` may or may not be set, depending on if the format is HEVC or Annex B, so don't perform any
+        // validation for it.
+        // https://www.w3.org/TR/webcodecs-hevc-codec-registration
+    }
+    else if (metadata.decoderConfig.codec.startsWith('vp8')) {
+        // VP8-specific validation
+        if (metadata.decoderConfig.codec !== 'vp8') {
+            throw new TypeError('Video chunk metadata decoder configuration codec string for VP8 must be "vp8".');
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('vp09')) {
+        // VP9-specific validation
+        if (!VP9_CODEC_STRING_REGEX.test(metadata.decoderConfig.codec)) {
+            throw new TypeError('Video chunk metadata decoder configuration codec string for VP9 must be a valid VP9 codec string as'
+                + ' specified in Section "Codecs Parameter String" of https://www.webmproject.org/vp9/mp4/.');
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('av01')) {
+        // AV1-specific validation
+        if (!AV1_CODEC_STRING_REGEX.test(metadata.decoderConfig.codec)) {
+            throw new TypeError('Video chunk metadata decoder configuration codec string for AV1 must be a valid AV1 codec string as'
+                + ' specified in Section "Codecs Parameter String" of https://aomediacodec.github.io/av1-isobmff/.');
+        }
+    }
+    else if (PRORES_FOURCCS.some(x => metadata.decoderConfig.codec.startsWith(x))) {
+        // ProRes-specific validation
+        if (!PRORES_FOURCCS.some(x => metadata.decoderConfig.codec === x)) {
+            throw new TypeError(`Video chunk metadata decoder configuration codec string for ProRes must be one of the valid ProRes`
+                + ` four-character codes: ${PRORES_FOURCCS.join(', ')}.`);
+        }
+    }
+    if (trackCodec !== null && inferCodecFromCodecString(metadata.decoderConfig.codec) !== trackCodec) {
+        throw new TypeError(`Video chunk metadata decoder configuration codec string '${metadata.decoderConfig.codec}' does not fit to`
+            + ` the track codec '${trackCodec}'.`);
+    }
+};
+const VALID_AUDIO_CODEC_STRING_PREFIXES = [
+    'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3', 'dts',
+];
+const validateAudioChunkMetadata = (metadata, trackCodec) => {
+    if (!metadata) {
+        throw new TypeError('Audio chunk metadata must be provided.');
+    }
+    if (typeof metadata !== 'object') {
+        throw new TypeError('Audio chunk metadata must be an object.');
+    }
+    if (!metadata.decoderConfig) {
+        throw new TypeError('Audio chunk metadata must include a decoder configuration.');
+    }
+    if (typeof metadata.decoderConfig !== 'object') {
+        throw new TypeError('Audio chunk metadata decoder configuration must be an object.');
+    }
+    if (typeof metadata.decoderConfig.codec !== 'string') {
+        throw new TypeError('Audio chunk metadata decoder configuration must specify a codec string.');
+    }
+    if (!VALID_AUDIO_CODEC_STRING_PREFIXES.some(prefix => metadata.decoderConfig.codec.startsWith(prefix))) {
+        throw new TypeError('Audio chunk metadata decoder configuration codec string must be a valid audio codec string as specified in'
+            + ' the Mediabunny Codec Registry.');
+    }
+    if (!Number.isInteger(metadata.decoderConfig.sampleRate) || metadata.decoderConfig.sampleRate <= 0) {
+        throw new TypeError('Audio chunk metadata decoder configuration must specify a valid sampleRate (positive integer).');
+    }
+    if (!Number.isInteger(metadata.decoderConfig.numberOfChannels) || metadata.decoderConfig.numberOfChannels <= 0) {
+        throw new TypeError('Audio chunk metadata decoder configuration must specify a valid numberOfChannels (positive integer).');
+    }
+    if (metadata.decoderConfig.description !== undefined) {
+        if (!isAllowSharedBufferSource(metadata.decoderConfig.description)) {
+            throw new TypeError('Audio chunk metadata decoder configuration description, when defined, must be an ArrayBuffer or an'
+                + ' ArrayBuffer view.');
+        }
+    }
+    if (metadata.decoderConfig.codec.startsWith('mp4a')
+        // These three refer to MP3:
+        && metadata.decoderConfig.codec !== 'mp4a.69'
+        && metadata.decoderConfig.codec !== 'mp4a.6B'
+        && metadata.decoderConfig.codec !== 'mp4a.6b') {
+        // AAC-specific validation
+        const validStrings = ['mp4a.40.2', 'mp4a.40.02', 'mp4a.40.5', 'mp4a.40.05', 'mp4a.40.29', 'mp4a.67'];
+        if (!validStrings.includes(metadata.decoderConfig.codec)) {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for AAC must be a valid AAC codec string as'
+                + ' specified in https://www.w3.org/TR/webcodecs-aac-codec-registration/.');
+        }
+        // `description` may or may not be set, depending on if the format is AAC or ADTS, so don't perform any
+        // validation for it.
+        // https://www.w3.org/TR/webcodecs-aac-codec-registration
+    }
+    else if (metadata.decoderConfig.codec.startsWith('mp3') || metadata.decoderConfig.codec.startsWith('mp4a')) {
+        // MP3-specific validation
+        if (metadata.decoderConfig.codec !== 'mp3'
+            && metadata.decoderConfig.codec !== 'mp4a.69'
+            && metadata.decoderConfig.codec !== 'mp4a.6B'
+            && metadata.decoderConfig.codec !== 'mp4a.6b') {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for MP3 must be "mp3", "mp4a.69" or'
+                + ' "mp4a.6B".');
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('opus')) {
+        // Opus-specific validation
+        if (metadata.decoderConfig.codec !== 'opus') {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for Opus must be "opus".');
+        }
+        if (metadata.decoderConfig.description && metadata.decoderConfig.description.byteLength < 18) {
+            // Description is optional for Opus per-spec, so we shouldn't enforce it
+            throw new TypeError('Audio chunk metadata decoder configuration description, when specified, is expected to be an'
+                + ' Identification Header as specified in Section 5.1 of RFC 7845.');
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('vorbis')) {
+        // Vorbis-specific validation
+        if (metadata.decoderConfig.codec !== 'vorbis') {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for Vorbis must be "vorbis".');
+        }
+        if (!metadata.decoderConfig.description) {
+            throw new TypeError('Audio chunk metadata decoder configuration for Vorbis must include a description, which is expected to'
+                + ' adhere to the format described in https://www.w3.org/TR/webcodecs-vorbis-codec-registration/.');
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('flac')) {
+        // FLAC-specific validation
+        if (metadata.decoderConfig.codec !== 'flac') {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for FLAC must be "flac".');
+        }
+        const minDescriptionSize = 4 + 4 + 34; // 'fLaC' + metadata block header + STREAMINFO block
+        if (!metadata.decoderConfig.description || metadata.decoderConfig.description.byteLength < minDescriptionSize) {
+            throw new TypeError('Audio chunk metadata decoder configuration for FLAC must include a description, which is expected to'
+                + ' adhere to the format described in https://www.w3.org/TR/webcodecs-flac-codec-registration/.');
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('ac-3') || metadata.decoderConfig.codec.startsWith('ac3')) {
+        // AC3-specific validation
+        if (metadata.decoderConfig.codec !== 'ac-3') {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for AC-3 must be "ac-3".');
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('ec-3') || metadata.decoderConfig.codec.startsWith('eac3')) {
+        // EAC3-specific validation
+        if (metadata.decoderConfig.codec !== 'ec-3') {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('dts')) {
+        // DTS-specific validation
+        if (!DTS_FOURCCS.includes(metadata.decoderConfig.codec)) {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for DTS must be one of the following'
+                + ` four-character codes: ${DTS_FOURCCS.join(', ')}.`);
+        }
+    }
+    else if (metadata.decoderConfig.codec.startsWith('pcm')
+        || metadata.decoderConfig.codec.startsWith('ulaw')
+        || metadata.decoderConfig.codec.startsWith('alaw')) {
+        // PCM-specific validation
+        if (!PCM_AUDIO_CODECS.includes(metadata.decoderConfig.codec)) {
+            throw new TypeError('Audio chunk metadata decoder configuration codec string for PCM must be one of the supported PCM'
+                + ` codecs (${PCM_AUDIO_CODECS.join(', ')}).`);
+        }
+    }
+    if (trackCodec !== null && inferCodecFromCodecString(metadata.decoderConfig.codec) !== trackCodec) {
+        throw new TypeError(`Audio chunk metadata decoder configuration codec string '${metadata.decoderConfig.codec}' does not fit to`
+            + ` the track codec '${trackCodec}'.`);
+    }
+};
+const validateSubtitleMetadata = (metadata) => {
+    if (!metadata) {
+        throw new TypeError('Subtitle metadata must be provided.');
+    }
+    if (typeof metadata !== 'object') {
+        throw new TypeError('Subtitle metadata must be an object.');
+    }
+    if (!metadata.config) {
+        throw new TypeError('Subtitle metadata must include a config object.');
+    }
+    if (typeof metadata.config !== 'object') {
+        throw new TypeError('Subtitle metadata config must be an object.');
+    }
+    if (typeof metadata.config.description !== 'string') {
+        throw new TypeError('Subtitle metadata config description must be a string.');
+    }
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const PLACEHOLDER_DATA = /* #__PURE__ */ new Uint8Array(0);
+/**
+ * Represents an encoded chunk of media. Mainly used as an expressive wrapper around WebCodecs API's
+ * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) and
+ * [`EncodedAudioChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedAudioChunk), but can also be used
+ * standalone.
+ * @group Packets
+ * @public
+ */
+class EncodedPacket {
+    /** Creates a new {@link EncodedPacket} from raw bytes and timing information. */
+    constructor(
+    /**
+     * The encoded data of this packet. For any given codec, this data must adhere to the format specified in the
+     * Mediabunny Codec Registry.
+     */
+    data, 
+    /** The type of this packet. */
+    type, 
+    /**
+     * The presentation timestamp of this packet in seconds. May be negative. Samples with negative end timestamps
+     * should not be presented.
+     */
+    timestamp, 
+    /** The duration of this packet in seconds. */
+    duration, 
+    /**
+     * The sequence number indicates the decode order of the packets. Packet A  must be decoded before packet B if A
+     * has a lower sequence number than B. If two packets have the same sequence number, they are the same packet.
+     * Otherwise, sequence numbers are arbitrary and are not guaranteed to have any meaning besides their relative
+     * ordering. Negative sequence numbers mean the sequence number is undefined.
+     */
+    sequenceNumber = -1, byteLength, sideData) {
+        this.data = data;
+        this.type = type;
+        this.timestamp = timestamp;
+        this.duration = duration;
+        this.sequenceNumber = sequenceNumber;
+        if (data === PLACEHOLDER_DATA && byteLength === undefined) {
+            throw new Error('Internal error: byteLength must be explicitly provided when constructing metadata-only packets.');
+        }
+        if (byteLength === undefined) {
+            byteLength = data.byteLength;
+        }
+        if (!(data instanceof Uint8Array)) {
+            throw new TypeError('data must be a Uint8Array.');
+        }
+        if (type !== 'key' && type !== 'delta') {
+            throw new TypeError('type must be either "key" or "delta".');
+        }
+        if (!Number.isFinite(timestamp)) {
+            throw new TypeError('timestamp must be a number.');
+        }
+        if (!Number.isFinite(duration) || duration < 0) {
+            throw new TypeError('duration must be a non-negative number.');
+        }
+        if (!Number.isFinite(sequenceNumber)) {
+            throw new TypeError('sequenceNumber must be a number.');
+        }
+        if (!Number.isInteger(byteLength) || byteLength < 0) {
+            throw new TypeError('byteLength must be a non-negative integer.');
+        }
+        if (sideData !== undefined && (typeof sideData !== 'object' || !sideData)) {
+            throw new TypeError('sideData, when provided, must be an object.');
+        }
+        if (sideData?.alpha !== undefined && !(sideData.alpha instanceof Uint8Array)) {
+            throw new TypeError('sideData.alpha, when provided, must be a Uint8Array.');
+        }
+        if (sideData?.alphaByteLength !== undefined
+            && (!Number.isInteger(sideData.alphaByteLength) || sideData.alphaByteLength < 0)) {
+            throw new TypeError('sideData.alphaByteLength, when provided, must be a non-negative integer.');
+        }
+        this.byteLength = byteLength;
+        this.sideData = sideData ?? {};
+        if (this.sideData.alpha && this.sideData.alphaByteLength === undefined) {
+            this.sideData.alphaByteLength = this.sideData.alpha.byteLength;
+        }
+    }
+    /**
+     * If this packet is a metadata-only packet. Metadata-only packets don't contain their packet data. They are the
+     * result of retrieving packets with {@link PacketRetrievalOptions.metadataOnly} set to `true`.
+     */
+    get isMetadataOnly() {
+        return this.data === PLACEHOLDER_DATA;
+    }
+    /** The timestamp of this packet in microseconds. */
+    get microsecondTimestamp() {
+        return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.timestamp);
+    }
+    /** The duration of this packet in microseconds. */
+    get microsecondDuration() {
+        return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.duration);
+    }
+    /** Converts this packet to an
+     * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) for use with the
+     * WebCodecs API. */
+    toEncodedVideoChunk() {
+        if (this.isMetadataOnly) {
+            throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
+        }
+        if (typeof EncodedVideoChunk === 'undefined') {
+            throw new Error('EncodedVideoChunk is not available in this environment.');
+        }
+        return new EncodedVideoChunk({
+            data: this.data,
+            type: this.type,
+            timestamp: this.microsecondTimestamp,
+            duration: this.microsecondDuration,
+        });
+    }
+    /**
+     * Converts this packet to an
+     * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) for use with the
+     * WebCodecs API, using the alpha side data instead of the color data. Throws if no alpha side data is defined.
+     */
+    alphaToEncodedVideoChunk(type = this.type) {
+        if (!this.sideData.alpha) {
+            throw new TypeError('This packet does not contain alpha side data.');
+        }
+        if (this.isMetadataOnly) {
+            throw new TypeError('Metadata-only packets cannot be converted to a video chunk.');
+        }
+        if (typeof EncodedVideoChunk === 'undefined') {
+            throw new Error('EncodedVideoChunk is not available in this environment.');
+        }
+        return new EncodedVideoChunk({
+            data: this.sideData.alpha,
+            type,
+            timestamp: this.microsecondTimestamp,
+            duration: this.microsecondDuration,
+        });
+    }
+    /** Converts this packet to an
+     * [`EncodedAudioChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedAudioChunk) for use with the
+     * WebCodecs API. */
+    toEncodedAudioChunk() {
+        if (this.isMetadataOnly) {
+            throw new TypeError('Metadata-only packets cannot be converted to an audio chunk.');
+        }
+        if (typeof EncodedAudioChunk === 'undefined') {
+            throw new Error('EncodedAudioChunk is not available in this environment.');
+        }
+        return new EncodedAudioChunk({
+            data: this.data,
+            type: this.type,
+            timestamp: this.microsecondTimestamp,
+            duration: this.microsecondDuration,
+        });
+    }
+    /**
+     * Creates an {@link EncodedPacket} from an
+     * [`EncodedVideoChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedVideoChunk) or
+     * [`EncodedAudioChunk`](https://developer.mozilla.org/en-US/docs/Web/API/EncodedAudioChunk). This method is useful
+     * for converting chunks from the WebCodecs API to `EncodedPacket` instances.
+     */
+    static fromEncodedChunk(chunk, sideData) {
+        if (!(chunk instanceof EncodedVideoChunk || chunk instanceof EncodedAudioChunk)) {
+            throw new TypeError('chunk must be an EncodedVideoChunk or EncodedAudioChunk.');
+        }
+        const data = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(data);
+        return new EncodedPacket(data, chunk.type, chunk.timestamp / 1e6, (chunk.duration ?? 0) / 1e6, undefined, undefined, sideData);
+    }
+    /** Clones this packet while optionally modifying the new packet's data. */
+    clone(options) {
+        if (options !== undefined && (typeof options !== 'object' || options === null)) {
+            throw new TypeError('options, when provided, must be an object.');
+        }
+        if (options?.data !== undefined && !(options.data instanceof Uint8Array)) {
+            throw new TypeError('options.data, when provided, must be a Uint8Array.');
+        }
+        if (options?.type !== undefined && options.type !== 'key' && options.type !== 'delta') {
+            throw new TypeError('options.type, when provided, must be either "key" or "delta".');
+        }
+        if (options?.timestamp !== undefined && !Number.isFinite(options.timestamp)) {
+            throw new TypeError('options.timestamp, when provided, must be a number.');
+        }
+        if (options?.duration !== undefined && !Number.isFinite(options.duration)) {
+            throw new TypeError('options.duration, when provided, must be a number.');
+        }
+        if (options?.sequenceNumber !== undefined && !Number.isFinite(options.sequenceNumber)) {
+            throw new TypeError('options.sequenceNumber, when provided, must be a number.');
+        }
+        if (options?.sideData !== undefined && (typeof options.sideData !== 'object' || options.sideData === null)) {
+            throw new TypeError('options.sideData, when provided, must be an object.');
+        }
+        return new EncodedPacket(options?.data ?? this.data, options?.type ?? this.type, options?.timestamp ?? this.timestamp, options?.duration ?? this.duration, options?.sequenceNumber ?? this.sequenceNumber, this.byteLength, options?.sideData ?? this.sideData);
+    }
+}
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const buildIsobmffMimeType = (info) => {
+    const base = info.hasVideo
+        ? 'video/'
+        : info.hasAudio
+            ? 'audio/'
+            : 'application/';
+    let string = base + (info.isQuickTime ? 'quicktime' : 'mp4');
+    if (info.codecStrings.length > 0) {
+        const uniqueCodecMimeTypes = [...new Set(info.codecStrings)];
+        string += `; codecs="${uniqueCodecMimeTypes.join(', ')}"`;
+    }
+    return string;
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const MIN_BOX_HEADER_SIZE = 8;
+const MAX_BOX_HEADER_SIZE = 16;
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const MIN_ADTS_FRAME_HEADER_SIZE = 7;
+const MAX_ADTS_FRAME_HEADER_SIZE = 9;
+const readAdtsFrameHeader = (slice) => {
+    // https://wiki.multimedia.cx/index.php/ADTS (last visited: 2025/08/17)
+    const startPos = slice.filePos;
+    const bytes = readBytes(slice, 9); // 9 with CRC, 7 without CRC
+    const bitstream = new Bitstream(bytes);
+    const syncword = bitstream.readBits(12);
+    if (syncword !== 0b1111_11111111) {
+        return null;
+    }
+    bitstream.skipBits(1); // MPEG version
+    const layer = bitstream.readBits(2);
+    if (layer !== 0) {
+        return null;
+    }
+    const protectionAbsence = bitstream.readBits(1);
+    const objectType = bitstream.readBits(2) + 1;
+    const samplingFrequencyIndex = bitstream.readBits(4);
+    if (samplingFrequencyIndex === 15) {
+        return null;
+    }
+    bitstream.skipBits(1); // Private bit
+    const channelConfiguration = bitstream.readBits(3);
+    if (channelConfiguration === 0) {
+        throw new Error('ADTS frames with channel configuration 0 are not supported.');
+    }
+    bitstream.skipBits(1); // Originality
+    bitstream.skipBits(1); // Home
+    bitstream.skipBits(1); // Copyright ID bit
+    bitstream.skipBits(1); // Copyright ID start
+    const frameLength = bitstream.readBits(13);
+    bitstream.skipBits(11); // Buffer fullness
+    const numberOfAacFrames = bitstream.readBits(2) + 1;
+    if (numberOfAacFrames !== 1) {
+        throw new Error('ADTS frames with more than one AAC frame are not supported.');
+    }
+    let crcCheck = null;
+    if (protectionAbsence === 1) { // No CRC
+        slice.filePos -= 2;
+    }
+    else { // CRC
+        crcCheck = bitstream.readBits(16);
+    }
+    return {
+        objectType,
+        samplingFrequencyIndex,
+        channelConfiguration,
+        frameLength,
+        numberOfAacFrames,
+        crcCheck,
+        startPos,
+    };
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+var __addDisposableResource$1 = (undefined && undefined.__addDisposableResource) || function (env, value, async) {
+    if (value !== null && value !== void 0) {
+        if (typeof value !== "object" && typeof value !== "function") throw new TypeError("Object expected.");
+        var dispose, inner;
+        if (async) {
+            if (!Symbol.asyncDispose) throw new TypeError("Symbol.asyncDispose is not defined.");
+            dispose = value[Symbol.asyncDispose];
+        }
+        if (dispose === void 0) {
+            if (!Symbol.dispose) throw new TypeError("Symbol.dispose is not defined.");
+            dispose = value[Symbol.dispose];
+            if (async) inner = dispose;
+        }
+        if (typeof dispose !== "function") throw new TypeError("Object not disposable.");
+        if (inner) dispose = function() { try { inner.call(this); } catch (e) { return Promise.reject(e); } };
+        env.stack.push({ value: value, dispose: dispose, async: async });
+    }
+    else if (async) {
+        env.stack.push({ async: true });
+    }
+    return value;
+};
+var __disposeResources$1 = (undefined && undefined.__disposeResources) || (function (SuppressedError) {
+    return function (env) {
+        function fail(e) {
+            env.error = env.hasError ? new SuppressedError(e, env.error, "An error was suppressed during disposal.") : e;
+            env.hasError = true;
+        }
+        var r, s = 0;
+        function next() {
+            while (r = env.stack.pop()) {
+                try {
+                    if (!r.async && s === 1) return s = 0, env.stack.push(r), Promise.resolve().then(next);
+                    if (r.dispose) {
+                        var result = r.dispose.call(r.value);
+                        if (r.async) return s |= 2, Promise.resolve(result).then(next, function(e) { fail(e); return next(); });
+                    }
+                    else s |= 1;
+                }
+                catch (e) {
+                    fail(e);
+                }
+            }
+            if (s === 1) return env.hasError ? Promise.reject(env.error) : Promise.resolve();
+            if (env.hasError) throw env.error;
+        }
+        return next();
+    };
+})(typeof SuppressedError === "function" ? SuppressedError : function (error, suppressed, message) {
+    var e = new Error(message);
+    return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
+});
+polyfillSymbolDispose();
+// Let's manually handle logging the garbage collection errors that are typically logged by the browser. This way, they
+// also kick for audio samples (which is normally not the case), making sure any incorrect code is quickly caught.
+let lastVideoGcErrorLog = -Infinity;
+let lastAudioGcErrorLog = -Infinity;
+let finalizationRegistry = null;
+if (typeof FinalizationRegistry !== 'undefined') {
+    finalizationRegistry = new FinalizationRegistry((value) => {
+        const now = performance.now();
+        if (value.type === 'video') {
+            if (now - lastVideoGcErrorLog >= 1000) {
+                // This error is annoying but oh so important
+                Logging._error(`A VideoSample was garbage collected without first being closed. For proper resource management,`
+                    + ` make sure to call close() on all your VideoSamples as soon as you're done using them.`);
+                lastVideoGcErrorLog = now;
+            }
+            if (typeof VideoFrame !== 'undefined' && value.data instanceof VideoFrame) {
+                value.data.close(); // Prevent the browser error since we're logging our own
+            }
+        }
+        else {
+            if (now - lastAudioGcErrorLog >= 1000) {
+                Logging._error(`An AudioSample was garbage collected without first being closed. For proper resource management,`
+                    + ` make sure to call close() on all your AudioSamples as soon as you're done using them.`);
+                lastAudioGcErrorLog = now;
+            }
+            if (typeof AudioData !== 'undefined' && value.data instanceof AudioData) {
+                value.data.close();
+            }
+        }
+    });
+}
+/**
+ * Abstract base class for custom video sample resources. Implement this class to provide custom backing
+ * for VideoSample instances.
+ * @group Samples
+ * @public
+ */
+class VideoSampleResource {
+    constructor() {
+        /** @internal */
+        this._referenceCount = 0;
+        /** @internal */
+        this._lastAllocationBuffer = null;
+    }
+}
+/**
+ * The list of {@link VideoSample} pixel formats.
+ * @group Samples
+ * @public
+ */
+const VIDEO_SAMPLE_PIXEL_FORMATS = [
+    // 4:2:0 Y, U, V
+    'I420',
+    'I420P10',
+    'I420P12',
+    // 4:2:0 Y, U, V, A
+    'I420A',
+    'I420AP10',
+    'I420AP12',
+    // 4:2:2 Y, U, V
+    'I422',
+    'I422P10',
+    'I422P12',
+    // 4:2:2 Y, U, V, A
+    'I422A',
+    'I422AP10',
+    'I422AP12',
+    // 4:4:4 Y, U, V
+    'I444',
+    'I444P10',
+    'I444P12',
+    // 4:4:4 Y, U, V, A
+    'I444A',
+    'I444AP10',
+    'I444AP12',
+    // 4:2:0 Y, UV
+    'NV12',
+    // 4:4:4 RGBA
+    'RGBA',
+    // 4:4:4 RGBX (opaque)
+    'RGBX',
+    // 4:4:4 BGRA
+    'BGRA',
+    // 4:4:4 BGRX (opaque)
+    'BGRX',
+];
+const VIDEO_SAMPLE_PIXEL_FORMATS_SET = new Set(VIDEO_SAMPLE_PIXEL_FORMATS);
+/**
+ * Represents a raw, unencoded video sample (frame). Mainly used as an expressive wrapper around WebCodecs API's
+ * [`VideoFrame`](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame), but can also be used standalone.
+ * @group Samples
+ * @public
+ */
+class VideoSample {
+    /** The width of the frame in pixels. */
+    get codedWidth() {
+        // This is wrong, but the fix is a v2 thing
+        return this.visibleRect.width;
+    }
+    /** The height of the frame in pixels. */
+    get codedHeight() {
+        // Same here
+        return this.visibleRect.height;
+    }
+    /** The display width of the frame in pixels, after aspect ratio adjustment, rotation and flip. */
+    get displayWidth() {
+        return this.rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
+    }
+    /** The display height of the frame in pixels, after aspect ratio adjustment, rotation and flip. */
+    get displayHeight() {
+        return this.rotation % 180 === 0 ? this.squarePixelHeight : this.squarePixelWidth;
+    }
+    /** The presentation timestamp of the frame in microseconds. */
+    get microsecondTimestamp() {
+        return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.timestamp);
+    }
+    /** The duration of the frame in microseconds. */
+    get microsecondDuration() {
+        return Math.trunc(SECOND_TO_MICROSECOND_FACTOR * this.duration);
+    }
+    /**
+     * Whether this sample uses a pixel format that can hold transparency data. Note that this doesn't necessarily mean
+     * that the sample is transparent.
+     */
+    get hasAlpha() {
+        return this.format && this.format.includes('A');
+    }
+    constructor(data, init) {
+        /** @internal */
+        this._closed = false;
+        if (data instanceof ArrayBuffer
+            || (typeof SharedArrayBuffer !== 'undefined' && data instanceof SharedArrayBuffer)
+            || ArrayBuffer.isView(data)) {
+            if (!init || typeof init !== 'object') {
+                throw new TypeError('init must be an object.');
+            }
+            if (init.format === undefined || !VIDEO_SAMPLE_PIXEL_FORMATS_SET.has(init.format)) {
+                throw new TypeError('init.format must be one of: ' + VIDEO_SAMPLE_PIXEL_FORMATS.join(', '));
+            }
+            if (!Number.isInteger(init.codedWidth) || init.codedWidth <= 0) {
+                throw new TypeError('init.codedWidth must be a positive integer.');
+            }
+            if (!Number.isInteger(init.codedHeight) || init.codedHeight <= 0) {
+                throw new TypeError('init.codedHeight must be a positive integer.');
+            }
+            if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
+                throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+            }
+            if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+                throw new TypeError('init.flip, when provided, must be a boolean.');
+            }
+            if (!Number.isFinite(init.timestamp)) {
+                throw new TypeError('init.timestamp must be a number.');
+            }
+            if (init.duration !== undefined && (!Number.isFinite(init.duration) || init.duration < 0)) {
+                throw new TypeError('init.duration, when provided, must be a non-negative number.');
+            }
+            if (init.layout !== undefined) {
+                if (!Array.isArray(init.layout)) {
+                    throw new TypeError('init.layout, when provided, must be an array.');
+                }
+                for (const plane of init.layout) {
+                    if (!plane || typeof plane !== 'object' || Array.isArray(plane)) {
+                        throw new TypeError('Each entry in init.layout must be an object.');
+                    }
+                    if (!Number.isInteger(plane.offset) || plane.offset < 0) {
+                        throw new TypeError('plane.offset must be a non-negative integer.');
+                    }
+                    if (!Number.isInteger(plane.stride) || plane.stride < 0) {
+                        throw new TypeError('plane.stride must be a non-negative integer.');
+                    }
+                }
+            }
+            if (init.visibleRect !== undefined) {
+                validateRectangle(init.visibleRect, 'init.visibleRect');
+            }
+            if (init.displayWidth !== undefined
+                && (!Number.isInteger(init.displayWidth) || init.displayWidth <= 0)) {
+                throw new TypeError('init.displayWidth, when provided, must be a positive integer.');
+            }
+            if (init.displayHeight !== undefined
+                && (!Number.isInteger(init.displayHeight) || init.displayHeight <= 0)) {
+                throw new TypeError('init.displayHeight, when provided, must be a positive integer.');
+            }
+            if ((init.displayWidth !== undefined) !== (init.displayHeight !== undefined)) {
+                throw new TypeError('init.displayWidth and init.displayHeight must be either both provided or both omitted.');
+            }
+            this.format = init.format;
+            this.rotation = init.rotation ?? 0;
+            this.flip = init.flip ?? false;
+            this.timestamp = init.timestamp;
+            this.duration = init.duration ?? 0;
+            const layout = init.layout ?? createDefaultPlaneLayout(init.format, init.codedWidth, init.codedHeight);
+            let colorSpaceInit = init.colorSpace ?? null;
+            if (colorSpaceInit === null) {
+                if (this.format === 'RGBA' || this.format === 'RGBX'
+                    || this.format === 'BGRA' || this.format === 'BGRX') {
+                    // sRGB Color Space
+                    colorSpaceInit = {
+                        primaries: 'bt709',
+                        transfer: 'iec61966-2-1',
+                        matrix: 'rgb',
+                        fullRange: true,
+                    };
+                }
+                else {
+                    // REC709 Color Space
+                    colorSpaceInit = {
+                        primaries: 'bt709',
+                        transfer: 'bt709',
+                        matrix: 'bt709',
+                        fullRange: false,
+                    };
+                }
+            }
+            this.visibleRect = {
+                left: init.visibleRect?.left ?? 0,
+                top: init.visibleRect?.top ?? 0,
+                width: init.visibleRect?.width ?? init.codedWidth,
+                height: init.visibleRect?.height ?? init.codedHeight,
+            };
+            if (init.displayWidth !== undefined) {
+                this.squarePixelWidth = this.rotation % 180 === 0 ? init.displayWidth : init.displayHeight;
+                this.squarePixelHeight = this.rotation % 180 === 0 ? init.displayHeight : init.displayWidth;
+            }
+            else {
+                this.squarePixelWidth = this.visibleRect.width;
+                this.squarePixelHeight = this.visibleRect.height;
+            }
+            // As an optimization, one could check if VideoFrame is defined and if it is, create a VideoFrame here from
+            // the data. Since VideoFrames are typically needed anyway, doing it this way would avoid an additional
+            // copy of the frame data. But due to https://issues.chromium.org/issues/529413114, this is currently
+            // not done.
+            this._data = init._doNotCopy
+                ? toUint8Array(data)
+                : toUint8Array(data).slice(); // Copy it
+            this._layout = layout;
+            this.colorSpace = new VideoSampleColorSpace(colorSpaceInit);
+        }
+        else if (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame) {
+            if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
+                throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+            }
+            if (init?.flip !== undefined && typeof init.flip !== 'boolean') {
+                throw new TypeError('init.flip, when provided, must be a boolean.');
+            }
+            if (init?.timestamp !== undefined && !Number.isFinite(init?.timestamp)) {
+                throw new TypeError('init.timestamp, when provided, must be a number.');
+            }
+            if (init?.duration !== undefined && (!Number.isFinite(init.duration) || init.duration < 0)) {
+                throw new TypeError('init.duration, when provided, must be a non-negative number.');
+            }
+            if (init?.visibleRect !== undefined) {
+                validateRectangle(init.visibleRect, 'init.visibleRect');
+            }
+            this._data = data;
+            this._layout = null;
+            this.format = data.format;
+            this.visibleRect = {
+                left: data.visibleRect?.x ?? 0,
+                top: data.visibleRect?.y ?? 0,
+                width: data.visibleRect?.width ?? data.codedWidth,
+                height: data.visibleRect?.height ?? data.codedHeight,
+            };
+            // The VideoFrame's rotation and flip are ignored here. They're still new fields, and I'm not sure of any
+            // application where the browser makes use of them. If a case gets found, I'll add it.
+            this.rotation = init?.rotation ?? 0;
+            this.flip = init?.flip ?? false;
+            // Assuming no innate VideoFrame rotation here
+            this.squarePixelWidth = data.displayWidth;
+            this.squarePixelHeight = data.displayHeight;
+            this.timestamp = init?.timestamp ?? data.timestamp / 1e6;
+            this.duration = init?.duration ?? (data.duration ?? 0) / 1e6;
+            // Sanitize the inputs we pass in so that out-of-spec values don't throw
+            // See https://github.com/Vanilagy/mediabunny/issues/555
+            const { primaries, transfer, matrix, fullRange } = data.colorSpace;
+            this.colorSpace = new VideoSampleColorSpace({
+                primaries: primaries !== null && primaries in COLOR_PRIMARIES_MAP ? primaries : null,
+                transfer: transfer !== null && transfer in TRANSFER_CHARACTERISTICS_MAP ? transfer : null,
+                matrix: matrix !== null && matrix in MATRIX_COEFFICIENTS_MAP ? matrix : null,
+                fullRange,
+            });
+        }
+        else if ((typeof HTMLImageElement !== 'undefined' && data instanceof HTMLImageElement)
+            || (typeof SVGImageElement !== 'undefined' && data instanceof SVGImageElement)
+            || (typeof ImageBitmap !== 'undefined' && data instanceof ImageBitmap)
+            || (typeof HTMLVideoElement !== 'undefined' && data instanceof HTMLVideoElement)
+            || (typeof HTMLCanvasElement !== 'undefined' && data instanceof HTMLCanvasElement)
+            || (typeof OffscreenCanvas !== 'undefined' && data instanceof OffscreenCanvas)) {
+            if (!init || typeof init !== 'object') {
+                throw new TypeError('init must be an object.');
+            }
+            if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
+                throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+            }
+            if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+                throw new TypeError('init.flip, when provided, must be a boolean.');
+            }
+            if (!Number.isFinite(init.timestamp)) {
+                throw new TypeError('init.timestamp must be a number.');
+            }
+            if (init.duration !== undefined && (!Number.isFinite(init.duration) || init.duration < 0)) {
+                throw new TypeError('init.duration, when provided, must be a non-negative number.');
+            }
+            if (init.visibleRect !== undefined) {
+                validateRectangle(init.visibleRect, 'init.visibleRect');
+            }
+            if (typeof VideoFrame !== 'undefined') {
+                return new VideoSample(new VideoFrame(data, {
+                    timestamp: Math.trunc(init.timestamp * SECOND_TO_MICROSECOND_FACTOR),
+                    // Drag 0 to undefined
+                    duration: Math.trunc((init.duration ?? 0) * SECOND_TO_MICROSECOND_FACTOR) || undefined,
+                    // WebCodecs wants DOMRectInit
+                    visibleRect: init.visibleRect && {
+                        x: init.visibleRect.left,
+                        y: init.visibleRect.top,
+                        width: init.visibleRect.width,
+                        height: init.visibleRect.height,
+                    },
+                }), init);
+            }
+            let width = 0;
+            let height = 0;
+            // Determine the dimensions of the thing
+            if ('naturalWidth' in data) {
+                width = data.naturalWidth;
+                height = data.naturalHeight;
+            }
+            else if ('videoWidth' in data) {
+                width = data.videoWidth;
+                height = data.videoHeight;
+            }
+            else if ('width' in data) {
+                width = Number(data.width);
+                height = Number(data.height);
+            }
+            if (!width || !height) {
+                throw new TypeError('Could not determine dimensions.');
+            }
+            const visibleRect = init.visibleRect ?? { left: 0, top: 0, width, height };
+            const canvas = new OffscreenCanvas(visibleRect.width, visibleRect.height);
+            const context = canvas.getContext('2d', {
+                alpha: isFirefox(), // Firefox has VideoFrame glitches with opaque canvases
+                willReadFrequently: true,
+            });
+            if (!context) {
+                throw new Error('OffscreenCanvas must have support for the \'2d\' context in order to create a VideoSample from'
+                    + ' this data.');
+            }
+            // Draw it to a canvas, cropped to the visible rect
+            context.drawImage(data, -visibleRect.left, -visibleRect.top);
+            this._data = canvas;
+            this._layout = null;
+            this.format = 'RGBX';
+            this.visibleRect = { left: 0, top: 0, width: visibleRect.width, height: visibleRect.height };
+            this.squarePixelWidth = visibleRect.width;
+            this.squarePixelHeight = visibleRect.height;
+            this.rotation = init.rotation ?? 0;
+            this.flip = init.flip ?? false;
+            this.timestamp = init.timestamp;
+            this.duration = init.duration ?? 0;
+            this.colorSpace = new VideoSampleColorSpace({
+                matrix: 'rgb',
+                primaries: 'bt709',
+                transfer: 'iec61966-2-1',
+                fullRange: true,
+            });
+        }
+        else if (data instanceof VideoSampleResource) {
+            if (!init || typeof init !== 'object') {
+                throw new TypeError('init must be an object.');
+            }
+            if (init.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
+                throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
+            }
+            if (init.flip !== undefined && typeof init.flip !== 'boolean') {
+                throw new TypeError('init.flip, when provided, must be a boolean.');
+            }
+            if (!Number.isFinite(init.timestamp)) {
+                throw new TypeError('init.timestamp must be a number.');
+            }
+            if (init.duration !== undefined && (!Number.isFinite(init.duration) || init.duration < 0)) {
+                throw new TypeError('init.duration, when provided, must be a non-negative number.');
+            }
+            this._data = data;
+            data._referenceCount++;
+            this.format = data.getFormat();
+            if (this.format !== null && !VIDEO_SAMPLE_PIXEL_FORMATS.includes(this.format)) {
+                throw new TypeError('getFormat() must return a VideoSamplePixelFormat or null.');
+            }
+            this.visibleRect = {
+                left: 0,
+                top: 0,
+                width: data.getCodedWidth(),
+                height: data.getCodedHeight(),
+            };
+            if (!Number.isInteger(this.visibleRect.width) || this.visibleRect.width <= 0) {
+                throw new TypeError('getCodedWidth() must return a positive integer.');
+            }
+            if (!Number.isInteger(this.visibleRect.height) || this.visibleRect.height <= 0) {
+                throw new TypeError('getCodedHeight() must return a positive integer.');
+            }
+            this.squarePixelWidth = data.getSquarePixelWidth();
+            if (!Number.isInteger(this.squarePixelWidth) || this.squarePixelWidth <= 0) {
+                throw new TypeError('getSquarePixelWidth() must return a positive integer.');
+            }
+            this.squarePixelHeight = data.getSquarePixelHeight();
+            if (!Number.isInteger(this.squarePixelHeight) || this.squarePixelHeight <= 0) {
+                throw new TypeError('getSquarePixelHeight() must return a positive integer.');
+            }
+            this.rotation = init.rotation ?? 0;
+            this.flip = init.flip ?? false;
+            this.timestamp = init.timestamp;
+            this.duration = init.duration ?? 0;
+            this.colorSpace = data.getColorSpace();
+        }
+        else {
+            throw new TypeError('Invalid data type: Must be a BufferSource, CanvasImageSource, or VideoSampleResource.');
+        }
+        this.encodeOptions = init?.encodeOptions ?? {};
+        this.pixelAspectRatio = simplifyRational({
+            num: this.squarePixelWidth * this.codedHeight,
+            den: this.squarePixelHeight * this.codedWidth,
+        });
+        finalizationRegistry?.register(this, { type: 'video', data: this._data }, this);
+    }
+    /** Clones this video sample. */
+    clone() {
+        if (this._closed) {
+            throw new Error('VideoSample is closed.');
+        }
+        assert(this._data !== null);
+        if (this._data instanceof VideoSampleResource) {
+            return new VideoSample(this._data, {
+                timestamp: this.timestamp,
+                duration: this.duration,
+                rotation: this.rotation,
+                flip: this.flip,
+                encodeOptions: this.encodeOptions,
+            });
+        }
+        else if (isVideoFrame(this._data)) {
+            return new VideoSample(this._data.clone(), {
+                timestamp: this.timestamp,
+                duration: this.duration,
+                rotation: this.rotation,
+                flip: this.flip,
+                encodeOptions: this.encodeOptions,
+            });
+        }
+        else if (this._data instanceof Uint8Array) {
+            assert(this._layout);
+            return new VideoSample(this._data, {
+                format: this.format,
+                layout: this._layout,
+                codedWidth: this.codedWidth,
+                codedHeight: this.codedHeight,
+                timestamp: this.timestamp,
+                duration: this.duration,
+                colorSpace: this.colorSpace,
+                rotation: this.rotation,
+                flip: this.flip,
+                visibleRect: this.visibleRect,
+                displayWidth: this.displayWidth,
+                displayHeight: this.displayHeight,
+                encodeOptions: this.encodeOptions,
+                // It's already been copied, if we copy it again we make the clone unnecessarily expensive
+                _doNotCopy: true,
+            });
+        }
+        else {
+            return new VideoSample(this._data, {
+                format: this.format,
+                codedWidth: this.codedWidth,
+                codedHeight: this.codedHeight,
+                timestamp: this.timestamp,
+                duration: this.duration,
+                colorSpace: this.colorSpace,
+                rotation: this.rotation,
+                flip: this.flip,
+                visibleRect: this.visibleRect,
+                displayWidth: this.displayWidth,
+                displayHeight: this.displayHeight,
+                encodeOptions: this.encodeOptions,
+            });
+        }
+    }
+    /**
+     * Closes this video sample, releasing held resources. Video samples should be closed as soon as they are not
+     * needed anymore.
+     */
+    close() {
+        if (this._closed) {
+            return;
+        }
+        finalizationRegistry?.unregister(this);
+        if (this._data instanceof VideoSampleResource) {
+            this._data._referenceCount--;
+            if (this._data._referenceCount === 0) {
+                this._data.close();
+            }
+        }
+        else if (isVideoFrame(this._data)) {
+            this._data.close();
+        }
+        else {
+            this._data = null; // GC that shit
+        }
+        this._closed = true;
+    }
+    /**
+     * Returns the number of bytes required to hold this video sample's pixel data.
+     */
+    allocationSize(options = {}) {
+        validateVideoFrameCopyToOptions(options);
+        if (this._closed) {
+            throw new Error('VideoSample is closed.');
+        }
+        if ((options.format ?? this.format) == null) {
+            // https://github.com/Vanilagy/mediabunny/issues/267
+            // https://github.com/w3c/webcodecs/issues/920
+            throw new Error('Cannot get allocation size when format is null.');
+        }
+        if (isVideoFrame(this._data)) {
+            // Call the native method purely for performance
+            return this._data.allocationSize(options);
+        }
+        const combinedLayout = ParseVideoFrameCopyToOptions(this, options);
+        return combinedLayout.allocationSize;
+    }
+    /**
+     * Copies this video sample's pixel data to an ArrayBuffer or ArrayBufferView.
+     * @returns The byte layout of the planes of the copied data.
+     */
+    async copyTo(destination, options = {}) {
+        if (!isAllowSharedBufferSource(destination)) {
+            throw new TypeError('destination must be an ArrayBuffer or an ArrayBuffer view.');
+        }
+        validateVideoFrameCopyToOptions(options);
+        if (this._closed) {
+            throw new Error('VideoSample is closed.');
+        }
+        if ((options.format ?? this.format) == null) {
+            throw new Error('Cannot copy video sample data when format is null.');
+        }
+        assert(this._data !== null);
+        if (isVideoFrame(this._data)) {
+            return this._data.copyTo(destination, options);
+        }
+        // Detect non-RGB to RGB conversion
+        if (options.format
+            && !['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(this.format)
+            && ['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(options.format)) {
+            // RGB conversion for custom VideoSampleResource
+            if (this._data instanceof VideoSampleResource) {
+                const env_1 = { stack: [], error: void 0, hasError: false };
+                try {
+                    const rgbSample = __addDisposableResource$1(env_1, await this._data.toRgbSample({
+                        timestamp: this.timestamp,
+                        duration: this.duration,
+                        rotation: this.rotation,
+                        flip: this.flip,
+                    }, options.colorSpace ?? 'srgb'), false);
+                    if (!(rgbSample instanceof VideoSample)) {
+                        throw new TypeError('toRgbSample() must return a VideoSample.');
+                    }
+                    if (!['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(rgbSample.format)) {
+                        throw new Error(`Sample returned by toRgbSample was expected to have an RGB format, got`
+                            + ` '${rgbSample.format}' instead.`);
+                    }
+                    // Note that we DON'T force the RGB format to be exactly what was requested; any RGB format will do
+                    return await rgbSample.copyTo(destination, options); // 'await' is intentional here cuz of using
+                }
+                catch (e_1) {
+                    env_1.error = e_1;
+                    env_1.hasError = true;
+                }
+                finally {
+                    __disposeResources$1(env_1);
+                }
+            }
+            else {
+                if (typeof VideoFrame === 'undefined') {
+                    throw new Error('For this sample, converting from a non-RGB to an RGB format requires VideoFrame to'
+                        + ' be defined.');
+                }
+                const tempFrame = this.toVideoFrame();
+                const result = await tempFrame.copyTo(destination, options);
+                tempFrame.close();
+                return result;
+            }
+        }
+        const combinedLayout = ParseVideoFrameCopyToOptions(this, options);
+        assert(this.format);
+        // 4. If destination.byteLength is less than combinedLayout’s allocationSize, return a promise rejected with
+        const destBytes = toUint8Array(destination);
+        if (destBytes.byteLength < combinedLayout.allocationSize) {
+            throw new TypeError(`Destination buffer too small. Required: ${combinedLayout.allocationSize},`
+                + ` Available: ${destBytes.byteLength}`);
+        }
+        const planeConfigs = getPlaneConfigs(this.format);
+        let dataPlanes;
+        if (this._data instanceof VideoSampleResource) {
+            let result = this._data.getDataPlanes();
+            if (isThenable(result))
+                result = await result;
+            if (!Array.isArray(result)
+                || result.some(x => !(x.data instanceof Uint8Array) || !Number.isInteger(x.stride) || x.stride < 0)) {
+                throw new TypeError('getDataPlanes() must return an array of objects with a Uint8Array "data" property and a'
+                    + ' non-negative integer "stride" property.');
+            }
+            dataPlanes = result;
+        }
+        else if (this._data instanceof Uint8Array) {
+            assert(this._layout);
+            assert(this._layout.length === planeConfigs.length);
+            dataPlanes = this._layout.map((planeLayout, i) => {
+                const height = Math.ceil(this.codedHeight / planeConfigs[i].heightDivisor);
+                return {
+                    data: this._data.subarray(planeLayout.offset, planeLayout.offset + planeLayout.stride * height),
+                    stride: planeLayout.stride,
+                };
+            });
+        }
+        else {
+            const canvas = this._data;
+            const context = canvas.getContext('2d');
+            assert(context); // We already got it earlier so it's definitely available
+            const imageData = context.getImageData(0, 0, this.codedWidth, this.codedHeight);
+            dataPlanes = [{
+                    data: toUint8Array(imageData.data),
+                    stride: 4 * this.codedWidth,
+                }];
+        }
+        // Algo taken from WebCodecs spec:
+        // 6. Let p be a new Promise. (Implicit)
+        // 7. Let copyStepsQueue be the result of starting a new parallel queue. (Implicit)
+        // 8. Let planeLayouts be a new list.
+        const planeLayouts = [];
+        // Enqueue the following steps to copyStepsQueue: (fuck the queuing part)
+        // Let resource be the media resource referenced by [[resource reference]].
+        // (this.data)
+        // Let numPlanes be the number of planes as defined by [[format]].
+        const numPlanes = planeConfigs.length;
+        // Let planeIndex be 0.
+        // While planeIndex is less than combinedLayout’s numPlanes:
+        for (let planeIndex = 0; planeIndex < numPlanes; planeIndex++) {
+            const computedLayout = combinedLayout.computedLayouts[planeIndex];
+            // Let sourceStride be the stride of the plane in resource as identified by planeIndex.
+            const sourceStride = dataPlanes[planeIndex].stride;
+            const sourceData = dataPlanes[planeIndex].data;
+            // Let sourceOffset be the product of multiplying computedLayout’s sourceTop by sourceStride
+            let sourceOffset = computedLayout.sourceTop * sourceStride;
+            // Add computedLayout’s sourceLeftBytes to sourceOffset.
+            sourceOffset += computedLayout.sourceLeftBytes;
+            // Let destinationOffset be computedLayout’s destinationOffset.
+            let destinationOffset = computedLayout.destinationOffset;
+            // Let rowBytes be computedLayout’s sourceWidthBytes.
+            const rowBytes = computedLayout.sourceWidthBytes;
+            // Let layout be a new PlaneLayout, with offset set to destinationOffset and stride set to rowBytes.
+            // This is a spec error actually (https://github.com/w3c/webcodecs/issues/918)
+            const layout = {
+                offset: destinationOffset,
+                stride: computedLayout.destinationStride,
+            };
+            // Let row be 0.
+            // While row is less than computedLayout’s sourceHeight:
+            for (let row = 0; row < computedLayout.sourceHeight; row++) {
+                // Copy rowBytes bytes from resource starting at sourceOffset to destination starting
+                // at destinationOffset.
+                if (sourceOffset + rowBytes > sourceData.byteLength) {
+                    throw new Error(`Source buffer OOB read.`);
+                }
+                if (destinationOffset + rowBytes > destBytes.byteLength) {
+                    throw new Error(`Destination buffer OOB write.`);
+                }
+                const srcSub = sourceData.subarray(sourceOffset, sourceOffset + rowBytes);
+                destBytes.set(srcSub, destinationOffset);
+                // Increment sourceOffset by sourceStride.
+                sourceOffset += sourceStride;
+                // Increment destinationOffset by computedLayout’s destinationStride.
+                destinationOffset += computedLayout.destinationStride;
+            }
+            // Append layout to planeLayouts.
+            planeLayouts.push(layout);
+        }
+        // Now, handle converting between different RGB formats
+        if (options.format !== undefined) {
+            const needsRgbConversion = this.format.startsWith('RGB') !== options.format.startsWith('RGB');
+            // Going X->A requires setting the alpha to 255, going the other way doesn't since the value of X is w/e
+            const needsAlphaConversion = this.format.includes('X') && options.format.includes('A');
+            if (needsRgbConversion || needsAlphaConversion) {
+                // Loop over the destination bytes
+                for (let i = 0; i < combinedLayout.allocationSize; i += 4) {
+                    if (needsRgbConversion) {
+                        // Swap R with B
+                        const r = destBytes[i];
+                        const b = destBytes[i + 2];
+                        destBytes[i] = b;
+                        destBytes[i + 2] = r;
+                    }
+                    if (needsAlphaConversion) {
+                        destBytes[i + 3] = 255;
+                    }
+                }
+            }
+        }
+        // Queue a task to resolve p with planeLayouts.
+        return planeLayouts;
+    }
+    /**
+     * Converts this video sample to a VideoFrame for use with the WebCodecs API. The VideoFrame returned by this
+     * method *must* be closed separately from this video sample.
+     */
+    toVideoFrame() {
+        if (this._closed) {
+            throw new Error('VideoSample is closed.');
+        }
+        assert(this._data !== null);
+        if (this._data instanceof VideoSampleResource) {
+            if (this.format === null) {
+                throw new Error('Cannot convert a VideoSampleResource-backed VideoSample to VideoFrame if format is null.');
+            }
+            const planes = this._data.getDataPlanes();
+            if (isThenable(planes)) {
+                throw new Error('Cannot convert a VideoSampleResource-backed VideoSample to VideoFrame if getDataPlanes() returns'
+                    + ' a promise.');
+            }
+            // We can't use allocationSize since that method assumes a tight packing
+            const size = planes.reduce((a, b) => a + b.data.byteLength, 0);
+            const buffer = new Uint8Array(size);
+            let offset = 0;
+            const offsets = [];
+            for (const plane of planes) {
+                buffer.set(plane.data, offset);
+                offsets.push(offset);
+                offset += plane.data.byteLength;
+            }
+            return new VideoFrame(buffer, {
+                format: this.format,
+                layout: planes.map((x, i) => ({
+                    offset: offsets[i],
+                    stride: x.stride,
+                })),
+                codedWidth: this.codedWidth,
+                codedHeight: this.codedHeight,
+                timestamp: this.microsecondTimestamp,
+                duration: this.microsecondDuration,
+                colorSpace: this.colorSpace,
+                visibleRect: this.visibleRect,
+                displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
+                displayHeight: this.squarePixelHeight,
+            });
+        }
+        else if (isVideoFrame(this._data)) {
+            return new VideoFrame(this._data, {
+                timestamp: this.microsecondTimestamp,
+                duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
+            });
+        }
+        else if (this._data instanceof Uint8Array) {
+            assert(this._layout);
+            return new VideoFrame(this._data, {
+                format: this.format,
+                codedWidth: this.codedWidth, // This is technically wrong! codedWidth is a lie technically. But, since
+                codedHeight: this.codedHeight, // we pass the layout (which contains the true coded width), we're good.
+                layout: this._layout,
+                timestamp: this.microsecondTimestamp,
+                duration: this.microsecondDuration || undefined,
+                colorSpace: this.colorSpace,
+                visibleRect: this.visibleRect,
+                displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
+                displayHeight: this.squarePixelHeight,
+            });
+        }
+        else {
+            return new VideoFrame(this._data, {
+                timestamp: this.microsecondTimestamp,
+                duration: this.microsecondDuration || undefined,
+            });
+        }
+    }
+    draw(context, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) {
+        let sx = 0;
+        let sy = 0;
+        let sWidth = this.displayWidth;
+        let sHeight = this.displayHeight;
+        let dx = 0;
+        let dy = 0;
+        let dWidth = this.displayWidth;
+        let dHeight = this.displayHeight;
+        if (arg5 !== undefined) {
+            sx = arg1;
+            sy = arg2;
+            sWidth = arg3;
+            sHeight = arg4;
+            dx = arg5;
+            dy = arg6;
+            if (arg7 !== undefined) {
+                dWidth = arg7;
+                dHeight = arg8;
+            }
+            else {
+                dWidth = sWidth;
+                dHeight = sHeight;
+            }
+        }
+        else {
+            dx = arg1;
+            dy = arg2;
+            if (arg3 !== undefined) {
+                dWidth = arg3;
+                dHeight = arg4;
+            }
+        }
+        if (!((typeof CanvasRenderingContext2D !== 'undefined' && context instanceof CanvasRenderingContext2D)
+            || (typeof OffscreenCanvasRenderingContext2D !== 'undefined'
+                && context instanceof OffscreenCanvasRenderingContext2D))) {
+            throw new TypeError('context must be a CanvasRenderingContext2D or OffscreenCanvasRenderingContext2D.');
+        }
+        if (!Number.isFinite(sx)) {
+            throw new TypeError('sx must be a number.');
+        }
+        if (!Number.isFinite(sy)) {
+            throw new TypeError('sy must be a number.');
+        }
+        if (!Number.isFinite(sWidth) || sWidth < 0) {
+            throw new TypeError('sWidth must be a non-negative number.');
+        }
+        if (!Number.isFinite(sHeight) || sHeight < 0) {
+            throw new TypeError('sHeight must be a non-negative number.');
+        }
+        if (!Number.isFinite(dx)) {
+            throw new TypeError('dx must be a number.');
+        }
+        if (!Number.isFinite(dy)) {
+            throw new TypeError('dy must be a number.');
+        }
+        if (!Number.isFinite(dWidth) || dWidth < 0) {
+            throw new TypeError('dWidth must be a non-negative number.');
+        }
+        if (!Number.isFinite(dHeight) || dHeight < 0) {
+            throw new TypeError('dHeight must be a non-negative number.');
+        }
+        if (this._closed) {
+            throw new Error('VideoSample is closed.');
+        }
+        ({ sx, sy, sWidth, sHeight } = this._unmapSourceRegion(sx, sy, sWidth, sHeight, this.rotation, this.flip));
+        const source = this.toCanvasImageSource();
+        context.save();
+        const centerX = dx + dWidth / 2;
+        const centerY = dy + dHeight / 2;
+        context.translate(centerX, centerY);
+        // Canvas transforms apply to the image in reverse call order, so to rotate first and then flip, the flip has
+        // to be set up before the rotation
+        if (this.flip) {
+            context.scale(-1, 1);
+        }
+        context.rotate(this.rotation * Math.PI / 180);
+        const aspectRatioChange = this.rotation % 180 === 0 ? 1 : dWidth / dHeight;
+        // Scale to compensate for aspect ratio changes when rotated
+        context.scale(1 / aspectRatioChange, aspectRatioChange);
+        context.drawImage(source, sx, sy, sWidth, sHeight, -dWidth / 2, -dHeight / 2, dWidth, dHeight);
+        context.restore();
+    }
+    /**
+     * Draws the sample in the middle of the canvas corresponding to the context with the specified fit behavior.
+     */
+    drawWithFit(context, options) {
+        if (!((typeof CanvasRenderingContext2D !== 'undefined' && context instanceof CanvasRenderingContext2D)
+            || (typeof OffscreenCanvasRenderingContext2D !== 'undefined'
+                && context instanceof OffscreenCanvasRenderingContext2D))) {
+            throw new TypeError('context must be a CanvasRenderingContext2D or OffscreenCanvasRenderingContext2D.');
+        }
+        if (!options || typeof options !== 'object') {
+            throw new TypeError('options must be an object.');
+        }
+        if (!['fill', 'contain', 'cover'].includes(options.fit)) {
+            throw new TypeError('options.fit must be \'fill\', \'contain\', or \'cover\'.');
+        }
+        if (options.rotation !== undefined && ![0, 90, 180, 270].includes(options.rotation)) {
+            throw new TypeError('options.rotation, when provided, must be 0, 90, 180, or 270.');
+        }
+        if (options.flip !== undefined && typeof options.flip !== 'boolean') {
+            throw new TypeError('options.flip, when provided, must be a boolean.');
+        }
+        if (options.crop !== undefined) {
+            validateCropRectangle(options.crop, 'options.');
+        }
+        const canvasWidth = context.canvas.width;
+        const canvasHeight = context.canvas.height;
+        const rotation = options.rotation ?? this.rotation;
+        const flip = options.flip ?? this.flip;
+        const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
+            ? [this.squarePixelWidth, this.squarePixelHeight]
+            : [this.squarePixelHeight, this.squarePixelWidth];
+        let finalCrop = options.crop;
+        if (finalCrop) {
+            finalCrop = clampCropRectangle(finalCrop, rotatedWidth, rotatedHeight);
+        }
+        // These variables specify where the final sample will be drawn on the canvas
+        let dx;
+        let dy;
+        let newWidth;
+        let newHeight;
+        const { sx, sy, sWidth, sHeight } = this._unmapSourceRegion(options.crop?.left ?? 0, options.crop?.top ?? 0, options.crop?.width ?? rotatedWidth, options.crop?.height ?? rotatedHeight, rotation, flip);
+        if (options.fit === 'fill') {
+            dx = 0;
+            dy = 0;
+            newWidth = canvasWidth;
+            newHeight = canvasHeight;
+        }
+        else {
+            const [sampleWidth, sampleHeight] = options.crop
+                ? [options.crop.width, options.crop.height]
+                : [rotatedWidth, rotatedHeight];
+            const scale = options.fit === 'contain'
+                ? Math.min(canvasWidth / sampleWidth, canvasHeight / sampleHeight)
+                : Math.max(canvasWidth / sampleWidth, canvasHeight / sampleHeight);
+            newWidth = sampleWidth * scale;
+            newHeight = sampleHeight * scale;
+            dx = (canvasWidth - newWidth) / 2;
+            dy = (canvasHeight - newHeight) / 2;
+        }
+        context.save();
+        const aspectRatioChange = rotation % 180 === 0 ? 1 : newWidth / newHeight;
+        context.translate(canvasWidth / 2, canvasHeight / 2);
+        // Canvas transforms apply to the image in reverse call order, so to rotate first and then flip, the flip has
+        // to be set up before the rotation
+        if (flip) {
+            context.scale(-1, 1);
+        }
+        context.rotate(rotation * Math.PI / 180);
+        // This aspect ratio compensation is done so that we can draw the sample with the intended dimensions and
+        // don't need to think about how those dimensions change after the rotation
+        context.scale(1 / aspectRatioChange, aspectRatioChange);
+        context.translate(-canvasWidth / 2, -canvasHeight / 2);
+        // Important that we don't use .draw() here since that would take rotation and flip into account, but we wanna
+        // handle them ourselves here
+        context.drawImage(this.toCanvasImageSource(), sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
+        context.restore();
+    }
+    /** @internal */
+    _unmapSourceRegion(sx, sy, sWidth, sHeight, rotation, flip) {
+        // The provided sx,sy,sWidth,sHeight refer to the final rotated and flipped image, but that's not actually how
+        // the image is stored. Therefore, we must map these back onto the original image. Since the flip is applied
+        // last, we undo it first, mirroring within the rotated width.
+        if (flip) {
+            const rotatedWidth = rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
+            sx = rotatedWidth - sx - sWidth;
+        }
+        if (rotation === 90) {
+            [sx, sy, sWidth, sHeight] = [
+                sy,
+                this.squarePixelHeight - sx - sWidth,
+                sHeight,
+                sWidth,
+            ];
+        }
+        else if (rotation === 180) {
+            [sx, sy] = [
+                this.squarePixelWidth - sx - sWidth,
+                this.squarePixelHeight - sy - sHeight,
+            ];
+        }
+        else if (rotation === 270) {
+            [sx, sy, sWidth, sHeight] = [
+                this.squarePixelWidth - sy - sHeight,
+                sx,
+                sHeight,
+                sWidth,
+            ];
+        }
+        return { sx, sy, sWidth, sHeight };
+    }
+    /**
+     * Draws the sample onto the target canvas with fit behavior, manually mipmapping on strong downscales for quality.
+     * @internal
+     */
+    _drawWithFitAndMipmapping(targetCanvas, targetContext, options) {
+        const targetWidth = targetCanvas.width;
+        const targetHeight = targetCanvas.height;
+        const [rotatedWidth, rotatedHeight] = options.rotation % 180 === 0
+            ? [this.squarePixelWidth, this.squarePixelHeight]
+            : [this.squarePixelHeight, this.squarePixelWidth];
+        const sourceWidth = options.crop ? options.crop.width : rotatedWidth;
+        const sourceHeight = options.crop ? options.crop.height : rotatedHeight;
+        // Once we downscale by more than 2x, bilinear filtering starts skipping pixels and the result aliases. So in
+        // that case, we do manual mipmapping: draw at a larger size first, then iteratively halve the image until we
+        // arrive at the target size. Sucks that we have to do this honestly, but imageSmoothingQuality is very flaky -
+        // some resources are just not mipmapped in the browser and thus always fall back to bilinear downsampling.
+        let mipLevels = 0;
+        if (2 * targetWidth < sourceWidth && 2 * targetHeight < sourceHeight) {
+            mipLevels = Math.floor(Math.log2(Math.min(sourceWidth / targetWidth, sourceHeight / targetHeight)));
+        }
+        const drawWidth = targetWidth * 2 ** mipLevels;
+        const drawHeight = targetHeight * 2 ** mipLevels;
+        const { canvas, context, isNew } = mipLevels > 0
+            ? getTransformationCanvas(drawWidth, drawHeight)
+            : { canvas: targetCanvas, context: targetContext, isNew: options.targetIsFresh };
+        context.imageSmoothingQuality = 'high';
+        if (options.fillBlack) {
+            context.fillStyle = 'black';
+            context.fillRect(0, 0, drawWidth, drawHeight);
+        }
+        else if (!isNew) {
+            // Reused canvases carry stale pixels from a prior draw
+            context.clearRect(0, 0, drawWidth, drawHeight);
+        }
+        this.drawWithFit(context, {
+            fit: options.fit,
+            rotation: options.rotation,
+            flip: options.flip,
+            crop: options.crop,
+        });
+        // Walk down the mip chain by repeatedly drawing the canvas onto itself at half size. The 'copy' composite
+        // operation makes sure pixels get replaced instead of blended with what's already there.
+        context.globalCompositeOperation = 'copy';
+        for (let i = mipLevels; i > 1; i--) {
+            const levelWidth = targetWidth * 2 ** i;
+            const levelHeight = targetHeight * 2 ** i;
+            context.drawImage(canvas, 0, 0, levelWidth, levelHeight, 0, 0, levelWidth / 2, levelHeight / 2);
+        }
+        context.globalCompositeOperation = 'source-over';
+        if (mipLevels > 0) {
+            // We'd love to skip this step and hand over the oversized mip canvas cropped with visibleRect, but sadly,
+            // all browsers ignore a frame's visibleRect when encoding it and consume the full coded frame instead
+            // (violating the WebCodecs spec, I think? See https://issues.chromium.org/issues/543284189). So, the result
+            // must live on a canvas of exactly the target size, which is why the last halving step draws onto the
+            // target canvas directly. 'copy' also conveniently disposes of any stale pixels there.
+            targetContext.imageSmoothingQuality = 'high';
+            targetContext.globalCompositeOperation = 'copy';
+            targetContext.drawImage(canvas, 0, 0, 2 * targetWidth, 2 * targetHeight, 0, 0, targetWidth, targetHeight);
+            targetContext.globalCompositeOperation = 'source-over';
+        }
+    }
+    /**
+     * Converts this video sample to a
+     * [`CanvasImageSource`](https://udn.realityripple.com/docs/Web/API/CanvasImageSource) for drawing to a canvas.
+     *
+     * You must use the value returned by this method immediately, as any VideoFrame created internally may
+     * automatically be closed in the next microtask.
+     */
+    toCanvasImageSource() {
+        if (this._closed) {
+            throw new Error('VideoSample is closed.');
+        }
+        assert(this._data !== null);
+        if (this._data instanceof VideoSampleResource || this._data instanceof Uint8Array) {
+            // Requires VideoFrame to be defined
+            const videoFrame = this.toVideoFrame();
+            queueMicrotask(() => videoFrame.close()); // Let's automatically close the frame in the next microtask
+            return videoFrame;
+        }
+        else {
+            return this._data;
+        }
+    }
+    /**
+     * Transform this video sample to a new video sample given the options. Can be used to resize, rotate, flip, and
+     * crop the sample.
+     *
+     * In non-browser environments, this method will not work by default. To make it work, register a custom
+     * transformer function via {@link registerVideoSampleTransformer}.
+     */
+    async transform(options) {
+        if (!options || typeof options !== 'object') {
+            throw new TypeError('options must be an object.');
+        }
+        if (options.width !== undefined && (!Number.isInteger(options.width) || options.width <= 0)) {
+            throw new TypeError('options.width, when provided, must be a positive integer.');
+        }
+        if (options.height !== undefined && (!Number.isInteger(options.height) || options.height <= 0)) {
+            throw new TypeError('options.height, when provided, must be a positive integer.');
+        }
+        if (options.roundDimensionsTo !== undefined
+            && (!Number.isInteger(options.roundDimensionsTo) || options.roundDimensionsTo <= 0)) {
+            throw new TypeError('options.roundDimensionsTo, when provided, must be a positive integer.');
+        }
+        if (options.fit !== undefined && !['fill', 'contain', 'cover'].includes(options.fit)) {
+            throw new TypeError('options.fit, when provided, must be one of "fill", "contain", or "cover".');
+        }
+        if (options.width !== undefined
+            && options.height !== undefined
+            && options.fit === undefined) {
+            throw new TypeError('When both options.width and options.height are provided, options.fit must also be provided.');
+        }
+        if (options.rotate !== undefined && ![0, 90, 180, 270].includes(options.rotate)) {
+            throw new TypeError('options.rotate, when provided, must be 0, 90, 180 or 270.');
+        }
+        if (options.flip !== undefined && typeof options.flip !== 'boolean') {
+            throw new TypeError('options.flip, when provided, must be a boolean.');
+        }
+        if (options.crop !== undefined) {
+            validateCropRectangle(options.crop, 'options.');
+        }
+        if (options.alpha !== undefined && !['keep', 'discard'].includes(options.alpha)) {
+            throw new TypeError('options.alpha, when provided, must be \'keep\' or \'discard\'.');
+        }
+        const { rotation, flip } = composeRotationAndFlip(this.rotation, this.flip, options.rotate ?? 0, options.flip ?? false);
+        const [rotatedWidth, rotatedHeight] = rotation % 180 === 0
+            ? [this.squarePixelWidth, this.squarePixelHeight]
+            : [this.squarePixelHeight, this.squarePixelWidth];
+        // Clamp crop rectangle to the rotated video dimensions
+        let finalCrop = options.crop;
+        if (finalCrop) {
+            finalCrop = clampCropRectangle(finalCrop, rotatedWidth, rotatedHeight);
+        }
+        const cropWidth = finalCrop ? finalCrop.width : rotatedWidth;
+        const cropHeight = finalCrop ? finalCrop.height : rotatedHeight;
+        const originalAspectRatio = cropWidth / cropHeight;
+        let targetWidth;
+        let targetHeight;
+        if (options.width !== undefined && options.height === undefined) {
+            targetWidth = options.width;
+            targetHeight = targetWidth / originalAspectRatio;
+        }
+        else if (options.width === undefined && options.height !== undefined) {
+            targetHeight = options.height;
+            targetWidth = targetHeight * originalAspectRatio;
+        }
+        else if (options.width !== undefined && options.height !== undefined) {
+            targetWidth = options.width;
+            targetHeight = options.height;
+        }
+        else {
+            targetWidth = cropWidth;
+            targetHeight = cropHeight;
+        }
+        targetWidth = roundToMultiple(targetWidth, options.roundDimensionsTo ?? 1);
+        targetHeight = roundToMultiple(targetHeight, options.roundDimensionsTo ?? 1);
+        const description = {
+            width: targetWidth,
+            height: targetHeight,
+            fit: options.fit ?? 'fill',
+            rotation,
+            flip,
+            crop: finalCrop ?? {
+                left: 0,
+                top: 0,
+                width: rotatedWidth,
+                height: rotatedHeight,
+            },
+            alpha: options.alpha ?? 'keep',
+        };
+        // Description's finalized; let's see if a registered transformer wants to handle it
+        for (const transformer of registeredVideoSampleTransformers) {
+            let result = transformer(this, description);
+            if (isThenable(result))
+                result = await result;
+            if (result !== null) {
+                return result;
+            }
+        }
+        // We need to handle it ourselves, and we use canvases to do it
+        const { canvas, context, isNew } = getTransformationCanvas(description.width, description.height);
+        this._drawWithFitAndMipmapping(canvas, context, {
+            fit: description.fit,
+            rotation: description.rotation,
+            flip: description.flip,
+            crop: description.crop,
+            targetIsFresh: isNew,
+            fillBlack: description.alpha === 'discard',
+        });
+        return new VideoSample(canvas, {
+            timestamp: this.timestamp,
+            duration: this.duration,
+            // Any previous rotation and flip are now baked in
+            rotation: 0,
+            flip: false,
+        });
+    }
+    /** Sets the rotation metadata of this video sample. */
+    setRotation(newRotation) {
+        if (![0, 90, 180, 270].includes(newRotation)) {
+            throw new TypeError('newRotation must be 0, 90, 180, or 270.');
+        }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+        this.rotation = newRotation;
+    }
+    /** Sets the flip metadata of this video sample. */
+    setFlip(newFlip) {
+        if (typeof newFlip !== 'boolean') {
+            throw new TypeError('newFlip must be a boolean.');
+        }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+        this.flip = newFlip;
+    }
+    /** Sets the presentation timestamp of this video sample, in seconds. */
+    setTimestamp(newTimestamp) {
+        if (!Number.isFinite(newTimestamp)) {
+            throw new TypeError('newTimestamp must be a number.');
+        }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+        this.timestamp = newTimestamp;
+    }
+    /** Sets the duration of this video sample, in seconds. */
+    setDuration(newDuration) {
+        if (!Number.isFinite(newDuration) || newDuration < 0) {
+            throw new TypeError('newDuration must be a non-negative number.');
+        }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+        this.duration = newDuration;
+    }
+    /** Sets the encode options used when this sample is passed to an encoder. */
+    setEncodeOptions(newEncodeOptions) {
+        if (!newEncodeOptions || typeof newEncodeOptions !== 'object') {
+            throw new TypeError('newEncodeOptions must be an object.');
+        }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+        this.encodeOptions = newEncodeOptions;
+    }
+    /** Calls `.close()`. */
+    [Symbol.dispose]() {
+        this.close();
+    }
+}
+const registeredVideoSampleTransformers = [];
+const TRANSFORMATION_CANVAS_CACHE_MAX_SIZE = 3;
+const transformationCanvasCache = [];
+let transformationCanvasCacheNextAge = 0;
+const getTransformationCanvas = (width, height) => {
+    for (const entry of transformationCanvasCache) {
+        if (entry.canvas.width === width && entry.canvas.height === height) {
+            entry.age = transformationCanvasCacheNextAge++;
+            return { canvas: entry.canvas, context: entry.context, isNew: false };
+        }
+    }
+    let canvas;
+    if (typeof OffscreenCanvas !== 'undefined') {
+        canvas = new OffscreenCanvas(width, height);
+    }
+    else {
+        if (typeof window === 'undefined' || typeof document === 'undefined') {
+            throw new Error('Cannot transform VideoSamples in this environment. Either run in an environment with'
+                + ' OffscreenCanvas or HTMLCanvasElement, or supply a custom VideoSample transformer using'
+                + ' registerVideoSampleTransformer().');
+        }
+        canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+    }
+    const context = canvas.getContext('2d', {
+        alpha: true,
+        willReadFrequently: false,
+    });
+    if (!context) {
+        throw new Error('The \'2d\' canvas context is required to transform VideoSamples. Register a custom transformer using'
+            + ' registerVideoSampleTransformer to work around this limitation.');
+    }
+    if (transformationCanvasCache.length >= TRANSFORMATION_CANVAS_CACHE_MAX_SIZE) {
+        transformationCanvasCache.splice(arrayArgmin(transformationCanvasCache, x => x.age), 1);
+    }
+    transformationCanvasCache.push({
+        canvas,
+        context,
+        age: transformationCanvasCacheNextAge++,
+    });
+    return { canvas, context, isNew: true };
+};
+/**
+ * Describes the color space of a {@link VideoSample}. Corresponds to the WebCodecs API's VideoColorSpace.
+ * @group Samples
+ * @public
+ */
+class VideoSampleColorSpace {
+    /** Creates a new VideoSampleColorSpace. */
+    constructor(init) {
+        if (init !== undefined) {
+            if (!init || typeof init !== 'object') {
+                throw new TypeError('init.colorSpace, when provided, must be an object.');
+            }
+            const primariesValues = Object.keys(COLOR_PRIMARIES_MAP);
+            if (init.primaries != null && !primariesValues.includes(init.primaries)) {
+                throw new TypeError(`init.colorSpace.primaries, when provided, must be one of ${primariesValues.join(', ')}.`);
+            }
+            const transferValues = Object.keys(TRANSFER_CHARACTERISTICS_MAP);
+            if (init.transfer != null && !transferValues.includes(init.transfer)) {
+                throw new TypeError(`init.colorSpace.transfer, when provided, must be one of ${transferValues.join(', ')}.`);
+            }
+            const matrixValues = Object.keys(MATRIX_COEFFICIENTS_MAP);
+            if (init.matrix != null && !matrixValues.includes(init.matrix)) {
+                throw new TypeError(`init.colorSpace.matrix, when provided, must be one of ${matrixValues.join(', ')}.`);
+            }
+            if (init.fullRange != null && typeof init.fullRange !== 'boolean') {
+                throw new TypeError('init.colorSpace.fullRange, when provided, must be a boolean.');
+            }
+        }
+        this.primaries = init?.primaries ?? null;
+        this.transfer = init?.transfer ?? null;
+        this.matrix = init?.matrix ?? null;
+        this.fullRange = init?.fullRange ?? null;
+    }
+    /** Serializes the color space to a JSON object. */
+    toJSON() {
+        return {
+            primaries: this.primaries,
+            transfer: this.transfer,
+            matrix: this.matrix,
+            fullRange: this.fullRange,
+        };
+    }
+}
+const isVideoFrame = (x) => {
+    return typeof VideoFrame !== 'undefined' && x instanceof VideoFrame;
+};
+const clampCropRectangle = (crop, outerWidth, outerHeight) => {
+    const left = Math.min(crop.left, outerWidth);
+    const top = Math.min(crop.top, outerHeight);
+    const width = Math.min(crop.width, outerWidth - left);
+    const height = Math.min(crop.height, outerHeight - top);
+    assert(width >= 0);
+    assert(height >= 0);
+    return { left, top, width, height };
+};
+const validateCropRectangle = (crop, prefix) => {
+    if (!crop || typeof crop !== 'object') {
+        throw new TypeError(prefix + 'crop, when provided, must be an object.');
+    }
+    if (!Number.isInteger(crop.left) || crop.left < 0) {
+        throw new TypeError(prefix + 'crop.left must be a non-negative integer.');
+    }
+    if (!Number.isInteger(crop.top) || crop.top < 0) {
+        throw new TypeError(prefix + 'crop.top must be a non-negative integer.');
+    }
+    if (!Number.isInteger(crop.width) || crop.width < 0) {
+        throw new TypeError(prefix + 'crop.width must be a non-negative integer.');
+    }
+    if (!Number.isInteger(crop.height) || crop.height < 0) {
+        throw new TypeError(prefix + 'crop.height must be a non-negative integer.');
+    }
+};
+const validateVideoFrameCopyToOptions = (options) => {
+    if (!options || typeof options !== 'object') {
+        throw new TypeError('options must be an object.');
+    }
+    if (options.colorSpace !== undefined && !['display-p3', 'srgb'].includes(options.colorSpace)) {
+        throw new TypeError('options.colorSpace, when provided, must be \'display-p3\' or \'srgb\'.');
+    }
+    if (options.format !== undefined && typeof options.format !== 'string') {
+        throw new TypeError('options.format, when provided, must be a string.');
+    }
+    if (options.layout !== undefined) {
+        if (!Array.isArray(options.layout)) {
+            throw new TypeError('options.layout, when provided, must be an array.');
+        }
+        for (const plane of options.layout) {
+            if (!plane || typeof plane !== 'object') {
+                throw new TypeError('Each entry in options.layout must be an object.');
+            }
+            if (!Number.isInteger(plane.offset) || plane.offset < 0) {
+                throw new TypeError('plane.offset must be a non-negative integer.');
+            }
+            if (!Number.isInteger(plane.stride) || plane.stride < 0) {
+                throw new TypeError('plane.stride must be a non-negative integer.');
+            }
+        }
+    }
+    if (options.rect !== undefined) {
+        if (!options.rect || typeof options.rect !== 'object') {
+            throw new TypeError('options.rect, when provided, must be an object.');
+        }
+        if (options.rect.x !== undefined && (!Number.isInteger(options.rect.x) || options.rect.x < 0)) {
+            throw new TypeError('options.rect.x, when provided, must be a non-negative integer.');
+        }
+        if (options.rect.y !== undefined && (!Number.isInteger(options.rect.y) || options.rect.y < 0)) {
+            throw new TypeError('options.rect.y, when provided, must be a non-negative integer.');
+        }
+        if (options.rect.width !== undefined && (!Number.isInteger(options.rect.width) || options.rect.width < 0)) {
+            throw new TypeError('options.rect.width, when provided, must be a non-negative integer.');
+        }
+        if (options.rect.height !== undefined && (!Number.isInteger(options.rect.height) || options.rect.height < 0)) {
+            throw new TypeError('options.rect.height, when provided, must be a non-negative integer.');
+        }
+    }
+};
+/** Implements logic from WebCodecs § 9.4.6 "Compute Layout and Allocation Size" */
+const createDefaultPlaneLayout = (format, codedWidth, codedHeight) => {
+    const planes = getPlaneConfigs(format);
+    const layouts = [];
+    let currentOffset = 0;
+    for (const plane of planes) {
+        // Per § 9.8, dimensions are usually "rounded up to the nearest integer".
+        const planeWidth = Math.ceil(codedWidth / plane.widthDivisor);
+        const planeHeight = Math.ceil(codedHeight / plane.heightDivisor);
+        const stride = planeWidth * plane.sampleBytes;
+        // Tight packing
+        const planeSize = stride * planeHeight;
+        layouts.push({
+            offset: currentOffset,
+            stride: stride,
+        });
+        currentOffset += planeSize;
+    }
+    return layouts;
+};
+/** Helper to retrieve plane configurations based on WebCodecs § 9.8 Pixel Format definitions. */
+const getPlaneConfigs = (format) => {
+    // Helper for standard YUV planes
+    const yuv = (yBytes, uvBytes, subX, subY, hasAlpha) => {
+        const configs = [
+            { sampleBytes: yBytes, widthDivisor: 1, heightDivisor: 1 },
+            { sampleBytes: uvBytes, widthDivisor: subX, heightDivisor: subY },
+            { sampleBytes: uvBytes, widthDivisor: subX, heightDivisor: subY },
+        ];
+        if (hasAlpha) {
+            // Match luma dimensions
+            configs.push({ sampleBytes: yBytes, widthDivisor: 1, heightDivisor: 1 });
+        }
+        return configs;
+    };
+    switch (format) {
+        case 'I420':
+            return yuv(1, 1, 2, 2, false);
+        case 'I420P10':
+        case 'I420P12':
+            return yuv(2, 2, 2, 2, false);
+        case 'I420A':
+            return yuv(1, 1, 2, 2, true);
+        case 'I420AP10':
+        case 'I420AP12':
+            return yuv(2, 2, 2, 2, true);
+        case 'I422':
+            return yuv(1, 1, 2, 1, false);
+        case 'I422P10':
+        case 'I422P12':
+            return yuv(2, 2, 2, 1, false);
+        case 'I422A':
+            return yuv(1, 1, 2, 1, true);
+        case 'I422AP10':
+        case 'I422AP12':
+            return yuv(2, 2, 2, 1, true);
+        case 'I444':
+            return yuv(1, 1, 1, 1, false);
+        case 'I444P10':
+        case 'I444P12':
+            return yuv(2, 2, 1, 1, false);
+        case 'I444A':
+            return yuv(1, 1, 1, 1, true);
+        case 'I444AP10':
+        case 'I444AP12':
+            return yuv(2, 2, 1, 1, true);
+        case 'NV12':
+            return [
+                { sampleBytes: 1, widthDivisor: 1, heightDivisor: 1 },
+                { sampleBytes: 2, widthDivisor: 2, heightDivisor: 2 }, // Interleaved U and V
+            ];
+        case 'RGBA':
+        case 'RGBX':
+        case 'BGRA':
+        case 'BGRX':
+            return [
+                { sampleBytes: 4, widthDivisor: 1, heightDivisor: 1 },
+            ];
+        default:
+            assertNever(format);
+            assert(false);
+    }
+};
+/** Taken from the WebCodecs spec. */
+const ParseVideoFrameCopyToOptions = (sample, options) => {
+    // 1. Let defaultRect be the result of performing the getter steps for visibleRect.
+    const defaultRect = {
+        left: 0,
+        top: 0,
+        width: sample.codedWidth,
+        height: sample.codedHeight,
+    };
+    // 2. Let overrideRect be undefined.
+    // 3. If options.rect exists, assign the value of options.rect to overrideRect.
+    const overrideRect = options.rect;
+    // 4. Let parsedRect be the result of running the Parse Visible Rect algorithm...
+    const parsedRect = ParseVisibleRect(defaultRect, overrideRect, sample.codedWidth, sample.codedHeight, sample.format);
+    // 5. If parsedRect is an exception, return parsedRect. (Handled by throw)
+    // 6. Let optLayout be undefined.
+    // 7. If options.layout exists, assign its value to optLayout.
+    const optLayout = options.layout;
+    // 8. Let format be undefined.
+    let format;
+    // 9. If options.format does not exist, assign [[format]] to format.
+    if (!options.format || options.format === sample.format) {
+        format = sample.format;
+    }
+    else if (['RGBA', 'RGBX', 'BGRA', 'BGRX'].includes(options.format)) {
+        // 10. Otherwise, if options.format is equal to one of RGBA, RGBX, BGRA, BGRX, then assign options.format
+        //  to format...
+        format = options.format;
+    }
+    else {
+        throw new Error('NotSupportedError: Invalid destination format.');
+    }
+    // 11. Let combinedLayout be the result of running the Compute Layout and Allocation Size algorithm...
+    return ComputeLayoutAndAllocationSize(parsedRect, format, optLayout);
+};
+/** Taken from the WebCodecs spec. */
+const ParseVisibleRect = (defaultRect, overrideRect, codedWidth, codedHeight, format) => {
+    // 1. Let sourceRect be defaultRect
+    const sourceRect = { ...defaultRect };
+    // 2. If overrideRect is not undefined:
+    if (overrideRect !== undefined) {
+        // If either of overrideRect.width or height is 0, return a TypeError.
+        if (overrideRect.width === 0 || overrideRect.height === 0) {
+            throw new TypeError('visibleRect dimensions cannot be zero.');
+        }
+        // If the sum of overrideRect.x and overrideRect.width is greater than codedWidth, return a TypeError.
+        if ((overrideRect.x || 0) + (overrideRect.width || 0) > codedWidth) {
+            throw new TypeError('visibleRect exceeds codedWidth.');
+        }
+        // If the sum of overrideRect.y and overrideRect.height is greater than codedHeight, return a TypeError.
+        if ((overrideRect.y || 0) + (overrideRect.height || 0) > codedHeight) {
+            throw new TypeError('visibleRect exceeds codedHeight.');
+        }
+        // Assign overrideRect to sourceRect.
+        sourceRect.x = overrideRect.x || 0;
+        sourceRect.y = overrideRect.y || 0;
+        sourceRect.width = overrideRect.width || 0;
+        sourceRect.height = overrideRect.height || 0;
+    }
+    // 3. Let validAlignment be the result of running the Verify Rect Offset Alignment algorithm.
+    const validAlignment = VerifyRectOffsetAlignment(format, sourceRect);
+    // 4. If validAlignment is false, throw a TypeError.
+    if (!validAlignment) {
+        throw new TypeError('visibleRect alignment is invalid for the format.');
+    }
+    // 5. Return sourceRect.
+    return sourceRect;
+};
+/** Taken from the WebCodecs spec. */
+const VerifyRectOffsetAlignment = (format, rect) => {
+    // 1. If format is null, return true.
+    if (format === null)
+        return true;
+    const planes = getPlaneConfigs(format);
+    // 2. Let planeIndex be 0.
+    // 3. Let numPlanes be the number of planes as defined by format.
+    // 4. While planeIndex is less than numPlanes:
+    for (let planeIndex = 0; planeIndex < planes.length; planeIndex++) {
+        const plane = planes[planeIndex];
+        const sampleWidth = plane.widthDivisor;
+        const sampleHeight = plane.heightDivisor;
+        // If rect.x is not a multiple of sampleWidth, return false.
+        if ((rect.x || 0) % sampleWidth !== 0)
+            return false;
+        // If rect.y is not a multiple of sampleHeight, return false.
+        if ((rect.y || 0) % sampleHeight !== 0)
+            return false;
+    }
+    return true;
+};
+/** Taken from the WebCodecs spec. */
+const ComputeLayoutAndAllocationSize = (parsedRect, format, layout) => {
+    const planes = getPlaneConfigs(format);
+    // 1. Let numPlanes be the number of planes as defined by format.
+    const numPlanes = planes.length;
+    // 2. If layout is not undefined and its length does not equal numPlanes, throw a TypeError.
+    if (layout !== undefined && layout.length !== numPlanes) {
+        throw new TypeError(`Layout must have ${numPlanes} planes.`);
+    }
+    // 3. Let minAllocationSize be 0.
+    let minAllocationSize = 0;
+    // 4. Let computedLayouts be a new list.
+    const computedLayouts = [];
+    // 5. Let endOffsets be a new list.
+    const endOffsets = [];
+    // 6. Let planeIndex be 0.
+    // 7. While planeIndex < numPlanes:
+    for (let planeIndex = 0; planeIndex < numPlanes; planeIndex++) {
+        const plane = planes[planeIndex];
+        const sampleBytes = plane.sampleBytes;
+        const sampleWidth = plane.widthDivisor;
+        const sampleHeight = plane.heightDivisor;
+        // Let computedLayout be a new computed plane layout.
+        const computedLayout = {
+            destinationOffset: 0,
+            destinationStride: 0,
+            sourceTop: 0,
+            sourceHeight: 0,
+            sourceLeftBytes: 0,
+            sourceWidthBytes: 0,
+        };
+        // Set computedLayout’s sourceTop...
+        computedLayout.sourceTop = Math.ceil(Math.trunc(parsedRect.y || 0) / sampleHeight);
+        // Set computedLayout’s sourceHeight...
+        computedLayout.sourceHeight = Math.ceil(Math.trunc(parsedRect.height || 0) / sampleHeight);
+        // Set computedLayout’s sourceLeftBytes...
+        computedLayout.sourceLeftBytes = Math.floor(Math.trunc(parsedRect.x || 0) / sampleWidth) * sampleBytes;
+        // Set computedLayout’s sourceWidthBytes...
+        computedLayout.sourceWidthBytes = Math.floor(Math.trunc(parsedRect.width || 0) / sampleWidth) * sampleBytes;
+        // If layout is not undefined:
+        if (layout !== undefined) {
+            const planeLayout = layout[planeIndex];
+            // If planeLayout.stride is less than computedLayout’s sourceWidthBytes, return a TypeError.
+            if (planeLayout.stride < computedLayout.sourceWidthBytes) {
+                throw new TypeError(`Stride for plane ${planeIndex} is too small.`);
+            }
+            // Assign planeLayout.offset to computedLayout’s destinationOffset.
+            computedLayout.destinationOffset = planeLayout.offset;
+            // Assign planeLayout.stride to computedLayout’s destinationStride.
+            computedLayout.destinationStride = planeLayout.stride;
+        }
+        else {
+            // Otherwise:
+            // Assign minAllocationSize to computedLayout’s destinationOffset.
+            computedLayout.destinationOffset = minAllocationSize;
+            // Assign computedLayout’s sourceWidthBytes to computedLayout’s destinationStride.
+            computedLayout.destinationStride = computedLayout.sourceWidthBytes;
+        }
+        // Let planeSize be the product of multiplying computedLayout’s destinationStride and sourceHeight.
+        const planeSize = computedLayout.destinationStride * computedLayout.sourceHeight;
+        // Let planeEnd be the sum of planeSize and computedLayout’s destinationOffset.
+        const planeEnd = planeSize + computedLayout.destinationOffset;
+        // If planeSize or planeEnd is greater than maximum range of unsigned long, return a TypeError.
+        if (planeEnd > 4294967295) {
+            throw new TypeError('Allocation size exceeds limit.');
+        }
+        // Append planeEnd to endOffsets.
+        endOffsets.push(planeEnd);
+        // Assign the maximum of minAllocationSize and planeEnd to minAllocationSize.
+        minAllocationSize = Math.max(minAllocationSize, planeEnd);
+        // Check for overlap
+        for (let earlierPlaneIndex = 0; earlierPlaneIndex < planeIndex; earlierPlaneIndex++) {
+            const earlierLayout = computedLayouts[earlierPlaneIndex];
+            // If plane A ends before plane B starts, they do not overlap.
+            if (endOffsets[planeIndex] <= earlierLayout.destinationOffset
+                || endOffsets[earlierPlaneIndex] <= computedLayout.destinationOffset) {
+                continue;
+            }
+            throw new TypeError('Planes overlap.');
+        }
+        computedLayouts.push(computedLayout);
+    }
+    // 12. Return combinedLayout.
+    return {
+        allocationSize: minAllocationSize,
+        computedLayouts: computedLayouts,
+    };
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const canEncodeVideoMemo = new Map();
+const validateVideoEncodingConfig = (config) => {
+    if (!config || typeof config !== 'object') {
+        throw new TypeError('Encoding config must be an object.');
+    }
+    if (!VIDEO_CODECS.includes(config.codec)) {
+        throw new TypeError(`Invalid video codec '${config.codec}'. Must be one of: ${VIDEO_CODECS.join(', ')}.`);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    const bitrate = config.bitrate;
+    if (config.quality === undefined && bitrate === undefined) {
+        throw new TypeError('config.quality must be provided.');
+    }
+    if (config.quality !== undefined && bitrate !== undefined) {
+        throw new TypeError('config.quality and config.bitrate cannot both be provided.');
+    }
+    if (config.quality !== undefined && !(config.quality instanceof Quality)) {
+        throw new TypeError('config.quality, when provided, must be a Quality.');
+    }
+    if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
+        throw new TypeError('config.bitrate, when provided, must be a positive integer or a quality.');
+    }
+    if (config.keyFrameInterval !== undefined
+        && (!Number.isFinite(config.keyFrameInterval) || config.keyFrameInterval < 0)) {
+        throw new TypeError('config.keyFrameInterval, when provided, must be a non-negative number.');
+    }
+    if (config.sizeChangeBehavior !== undefined
+        && !['deny', 'passThrough', 'fill', 'contain', 'cover'].includes(config.sizeChangeBehavior)) {
+        throw new TypeError('config.sizeChangeBehavior, when provided, must be \'deny\', \'passThrough\', \'fill\', \'contain\''
+            + ' or \'cover\'.');
+    }
+    if (config.transform !== undefined) {
+        if (typeof config.transform !== 'object' || !config.transform) {
+            throw new TypeError('config.transform, when provided, must be an object.');
+        }
+        if (config.transform.width !== undefined
+            && (!Number.isInteger(config.transform.width) || config.transform.width <= 0)) {
+            throw new TypeError('config.transform.width, when provided, must be a positive integer.');
+        }
+        if (config.transform.height !== undefined
+            && (!Number.isInteger(config.transform.height) || config.transform.height <= 0)) {
+            throw new TypeError('config.transform.height, when provided, must be a positive integer.');
+        }
+        if (config.transform.fit !== undefined && !['fill', 'contain', 'cover'].includes(config.transform.fit)) {
+            throw new TypeError('config.transform.fit, when provided, must be one of "fill", "contain", or "cover".');
+        }
+        if (config.transform.width !== undefined
+            && config.transform.height !== undefined
+            && config.transform.fit === undefined
+            && !['fill', 'contain', 'cover'].includes(config.sizeChangeBehavior)) {
+            throw new TypeError('When both config.transform.width and config.transform.height are provided, config.transform.fit'
+                + ' must also be provided.');
+        }
+        if (config.transform.fit !== undefined
+            && ['fill', 'contain', 'cover'].includes(config.sizeChangeBehavior)
+            && config.transform.fit !== config.sizeChangeBehavior) {
+            throw new TypeError('config.transform.fit, when provided, cannot differ from config.sizeChangeBehavior when'
+                + ' config.sizeChangeBehavior is \'fill\', \'contain\' or \'cover\', as sizeChangeBehavior already'
+                + ' determines the fitting algorithm.');
+        }
+        if (config.transform.rotate !== undefined && ![0, 90, 180, 270].includes(config.transform.rotate)) {
+            throw new TypeError('config.transform.rotate, when provided, must be 0, 90, 180 or 270.');
+        }
+        if (config.transform.flip !== undefined && typeof config.transform.flip !== 'boolean') {
+            throw new TypeError('config.transform.flip, when provided, must be a boolean.');
+        }
+        if (config.transform.crop !== undefined) {
+            validateCropRectangle(config.transform.crop, 'config.transform.');
+        }
+        if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
+            throw new TypeError('config.transform.process, when provided, must be a function.');
+        }
+        if (config.transform.frameRate !== undefined
+            && (!Number.isFinite(config.transform.frameRate) || config.transform.frameRate <= 0)) {
+            throw new TypeError('config.transform.frameRate, when provided, must be a finite positive number.');
+        }
+        if (config.transform.force !== undefined && typeof config.transform.force !== 'boolean') {
+            throw new TypeError('config.transform.force, when provided, must be a boolean.');
+        }
+    }
+    if (config.onEncodedPacket !== undefined && typeof config.onEncodedPacket !== 'function') {
+        throw new TypeError('config.onEncodedPacket, when provided, must be a function.');
+    }
+    if (config.onEncoderConfig !== undefined && typeof config.onEncoderConfig !== 'function') {
+        throw new TypeError('config.onEncoderConfig, when provided, must be a function.');
+    }
+    if (config.onEncodedSample !== undefined && typeof config.onEncodedSample !== 'function') {
+        throw new TypeError('config.onEncodedSample, when provided, must be a function.');
+    }
+    validateVideoEncodingAdditionalOptions(config.codec, config);
+};
+const validateVideoEncodingAdditionalOptions = (codec, options) => {
+    if (!options || typeof options !== 'object') {
+        throw new TypeError('Encoding options must be an object.');
+    }
+    if (options.alpha !== undefined && !['discard', 'keep'].includes(options.alpha)) {
+        throw new TypeError('options.alpha, when provided, must be \'discard\' or \'keep\'.');
+    }
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    const bitrateMode = options.bitrateMode;
+    if (bitrateMode !== undefined && !['constant', 'variable'].includes(bitrateMode)) {
+        throw new TypeError('bitrateMode, when provided, must be \'constant\' or \'variable\'.');
+    }
+    if (options.latencyMode !== undefined && !['quality', 'realtime'].includes(options.latencyMode)) {
+        throw new TypeError('latencyMode, when provided, must be \'quality\' or \'realtime\'.');
+    }
+    if (options.fullCodecString !== undefined && typeof options.fullCodecString !== 'string') {
+        throw new TypeError('fullCodecString, when provided, must be a string.');
+    }
+    if (options.fullCodecString !== undefined && inferCodecFromCodecString(options.fullCodecString) !== codec) {
+        throw new TypeError(`fullCodecString, when provided, must be a string that matches the specified codec (${codec}).`);
+    }
+    if (options.hardwareAcceleration !== undefined
+        && !['no-preference', 'prefer-hardware', 'prefer-software'].includes(options.hardwareAcceleration)) {
+        throw new TypeError('hardwareAcceleration, when provided, must be \'no-preference\', \'prefer-hardware\' or'
+            + ' \'prefer-software\'.');
+    }
+    if (options.scalabilityMode !== undefined && typeof options.scalabilityMode !== 'string') {
+        throw new TypeError('scalabilityMode, when provided, must be a string.');
+    }
+    if (options.contentHint !== undefined && typeof options.contentHint !== 'string') {
+        throw new TypeError('contentHint, when provided, must be a string.');
+    }
+};
+/**
+ * Builds the encoder configs to attempt, in order of preference. Multiple configs are returned when a Quality can be
+ * satisfied by multiple rate control methods (quantizer-based encoding with a bitrate-based fallback).
+ */
+const buildVideoEncoderConfigs = (options) => {
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    const fallbackBitrateMode = options.bitrateMode;
+    const rateControl = options.quality._toVideoRateControl(options.codec, options.width, options.height, fallbackBitrateMode);
+    const buildConfig = (bitrate, bitrateMode, bitrateEstimate) => ({
+        codec: options.fullCodecString ?? buildVideoCodecString(options.codec, options.width, options.height, bitrateEstimate, options.alpha === 'keep'),
+        width: options.width,
+        height: options.height,
+        displayWidth: options.squarePixelWidth,
+        displayHeight: options.squarePixelHeight,
+        bitrate,
+        bitrateMode,
+        alpha: options.alpha ?? 'discard',
+        framerate: options.framerate,
+        latencyMode: options.latencyMode,
+        hardwareAcceleration: options.hardwareAcceleration,
+        scalabilityMode: options.scalabilityMode,
+        contentHint: options.contentHint,
+        ...getVideoEncoderConfigExtension(options.codec),
+    });
+    const candidates = [];
+    if (rateControl.quantizer !== null) {
+        candidates.push({
+            config: buildConfig(undefined, 'quantizer', rateControl.bitrate),
+            quantizer: rateControl.quantizer,
+        });
+    }
+    if (rateControl.bitrateMode !== 'quantizer') {
+        candidates.push({
+            config: buildConfig(rateControl.bitrate, rateControl.bitrateMode, rateControl.bitrate),
+            quantizer: null,
+        });
+    }
+    assert(candidates.length > 0);
+    return candidates;
+};
+/**
+ * Represents a desired encoding quality. Can express a qualitative quality level, an explicit bitrate, an explicit
+ * quantizer value, or a combination thereof.
+ * @group Encoding
+ * @public
+ */
+class Quality {
+    constructor(options) {
+        if (typeof options === 'number' || typeof options === 'string') {
+            // Shorthand for directly specifying a qualitative quality level
+            options = { quality: options };
+        }
+        if (!options || typeof options !== 'object') {
+            throw new TypeError('options must be an object.');
+        }
+        if (options.bitrateMode !== undefined && !['constant', 'variable'].includes(options.bitrateMode)) {
+            throw new TypeError('options.bitrateMode, when provided, must be \'constant\' or \'variable\'.');
+        }
+        if ('quality' in options) {
+            if (typeof options.quality === 'string'
+                ? !(options.quality in QUALITY_LEVELS)
+                : (typeof options.quality !== 'number' || Number.isNaN(options.quality))) {
+                throw new TypeError('options.quality must be a number, or one of \'very-low\', \'low\', \'medium\', \'high\''
+                    + ' or \'very-high\'.');
+            }
+            if (options.preferBitrate !== undefined && typeof options.preferBitrate !== 'boolean') {
+                throw new TypeError('options.preferBitrate, when provided, must be a boolean.');
+            }
+            if ('bitrate' in options || 'quantizer' in options) {
+                throw new TypeError('options.quality cannot be combined with options.bitrate or options.quantizer.');
+            }
+            this._quality = typeof options.quality === 'string'
+                ? QUALITY_LEVELS[options.quality]
+                : options.quality;
+            this._preferBitrate = options.preferBitrate ?? false;
+            this._bitrate = undefined;
+            this._quantizer = undefined;
+        }
+        else {
+            if (options.bitrate !== undefined && (!Number.isInteger(options.bitrate) || options.bitrate <= 0)) {
+                throw new TypeError('options.bitrate, when provided, must be a positive integer.');
+            }
+            if (options.quantizer !== undefined && (!Number.isInteger(options.quantizer) || options.quantizer < 0)) {
+                throw new TypeError('options.quantizer, when provided, must be a non-negative integer.');
+            }
+            if (options.bitrate === undefined && options.quantizer === undefined) {
+                throw new TypeError('At least one of options.bitrate or options.quantizer must be set.');
+            }
+            if ('preferBitrate' in options) {
+                throw new TypeError('options.preferBitrate can only be combined with options.quality.');
+            }
+            this._quality = undefined;
+            this._preferBitrate = false;
+            this._bitrate = options.bitrate;
+            this._quantizer = options.quantizer;
+        }
+        this._bitrateMode = options.bitrateMode;
+    }
+    /**
+     * Determines the rate control methods usable for the given codec.
+     * @internal
+     */
+    _toVideoRateControl(codec, width, height, fallbackBitrateMode) {
+        const quantizerSupport = VIDEO_CODEC_QUANTIZER_SUPPORT[codec];
+        let quantizer = null;
+        let bitrateMode = this._bitrateMode ?? fallbackBitrateMode ?? 'variable';
+        if (this._quantizer !== undefined) {
+            // An explicit quantizer demands quantizer-based encoding, with an explicit bitrate (if any) being the
+            // only permitted fallback
+            if (!quantizerSupport) {
+                if (this._bitrate === undefined) {
+                    throw new Error(`Codec '${codec}' does not support quantizer-based encoding. Provide a bitrate in the Quality`
+                        + ` to define a fallback.`);
+                }
+            }
+            else if (this._quantizer < quantizerSupport.min || this._quantizer > quantizerSupport.max) {
+                if (this._bitrate === undefined) {
+                    throw new Error(`Quantizer ${this._quantizer} is out of range for codec '${codec}'; must be between`
+                        + ` ${quantizerSupport.min} and ${quantizerSupport.max}.`);
+                }
+            }
+            else {
+                quantizer = this._quantizer;
+                if (this._bitrate === undefined) {
+                    bitrateMode = 'quantizer';
+                }
+            }
+        }
+        else if (this._bitrate === undefined && quantizerSupport && !this._preferBitrate) {
+            // A qualitative quality level is set; offer quantizer-based encoding since the codec supports it. Since
+            // the quality may lie outside the 0-1 range, we clamp the result to the codec's legal quantizer range.
+            assert(this._quality !== undefined);
+            quantizer = clamp(Math.round(lerp(quantizerSupport.worst, quantizerSupport.best, this._quality)), quantizerSupport.min, quantizerSupport.max);
+        }
+        let bitrate;
+        if (this._bitrate !== undefined) {
+            bitrate = this._bitrate;
+        }
+        else {
+            let quality = this._quality;
+            if (quality === undefined) {
+                // Map the quantizer back onto the quality scale to derive a fitting bitrate estimate
+                assert(quantizer !== null && quantizerSupport);
+                quality = clamp((quantizer - quantizerSupport.worst) / (quantizerSupport.best - quantizerSupport.worst), 0, 1);
+            }
+            bitrate = computeVideoBitrate(codec, width, height, qualityToBitrateFactor(quality));
+        }
+        return { quantizer, bitrate, bitrateMode };
+    }
+    /** @internal */
+    _toVideoBitrate(codec, width, height) {
+        if (this._bitrate !== undefined) {
+            return this._bitrate;
+        }
+        assert(this._quality !== undefined);
+        return computeVideoBitrate(codec, width, height, qualityToBitrateFactor(this._quality));
+    }
+    /** @internal */
+    _toAudioBitrate(codec) {
+        if (PCM_AUDIO_CODECS.includes(codec) || codec === 'flac') {
+            return undefined;
+        }
+        if (this._bitrate !== undefined) {
+            return this._bitrate;
+        }
+        if (this._quality === undefined) {
+            throw new Error('This Quality defines neither a quality level nor a bitrate and therefore cannot be used for audio'
+                + ' encoding.');
+        }
+        const factor = qualityToBitrateFactor(this._quality);
+        const baseRates = {
+            aac: 128000, // 128kbps base for AAC
+            opus: 64000, // 64kbps base for Opus
+            mp3: 160000, // 160kbps base for MP3
+            vorbis: 64000, // 64kbps base for Vorbis
+            ac3: 384000, // 384kbps base for AC-3
+            eac3: 192000, // 192kbps base for E-AC-3
+            dts: 768000, // 768kbps base for DTS
+        };
+        const baseBitrate = baseRates[codec];
+        if (!baseBitrate) {
+            throw new Error(`Unhandled codec: ${codec}`);
+        }
+        let finalBitrate = baseBitrate * factor;
+        if (codec === 'aac') {
+            // AAC only works with specific bitrates, let's find the closest
+            const validRates = [96000, 128000, 160000, 192000];
+            finalBitrate = validRates.reduce((prev, curr) => Math.abs(curr - finalBitrate) < Math.abs(prev - finalBitrate) ? curr : prev);
+        }
+        else if (codec === 'opus' || codec === 'vorbis') {
+            finalBitrate = Math.max(6000, finalBitrate);
+        }
+        else if (codec === 'mp3') {
+            const validRates = [
+                8000, 16000, 24000, 32000, 40000, 48000, 64000, 80000,
+                96000, 112000, 128000, 160000, 192000, 224000, 256000, 320000,
+            ];
+            finalBitrate = validRates.reduce((prev, curr) => Math.abs(curr - finalBitrate) < Math.abs(prev - finalBitrate) ? curr : prev);
+        }
+        return Math.round(finalBitrate / 1000) * 1000;
+    }
+}
+const QUALITY_LEVELS = {
+    'very-low': 0,
+    'low': 0.25,
+    'medium': 0.5,
+    'high': 0.75,
+    'very-high': 1,
+};
+// best and worse define the reasonable range
+const VIDEO_CODEC_QUANTIZER_SUPPORT = {
+    avc: { min: 0, max: 51, worst: 41, best: 16 },
+    hevc: { min: 0, max: 51, worst: 41, best: 16 },
+    // Chromium used the 0-63 scale before v145, see https://github.com/Vanilagy/mediabunny/issues/566
+    vp9: (getChromiumVersion() ?? Infinity) < 145
+        ? { min: 0, max: 63, worst: 52, best: 20 }
+        : { min: 0, max: 255, worst: 208, best: 80 },
+    av1: { min: 0, max: 255, worst: 208, best: 80 },
+};
+/**
+ * Maps the qualitative 0-1 quality scale to a bitrate multiplier. The curve is a least-squares exponential fit through
+ * the multipliers historically used by the predefined quality levels (0.3, 0.6, 1, 2, 4).
+ */
+const qualityToBitrateFactor = (quality) => 0.3 * Math.exp(2.5538 * quality);
+const computeVideoBitrate = (codec, width, height, factor) => {
+    const pixels = width * height;
+    const referencePixels = 1920 * 1080;
+    const referenceBitrate = 3_000_000;
+    const scaleFactor = Math.pow(pixels / referencePixels, 0.95); // Slight non-linear scaling
+    const baseBitrate = referenceBitrate * scaleFactor;
+    const codecEfficiencyFactors = {
+        avc: 1.0, // H.264/AVC (baseline)
+        hevc: 0.6, // H.265/HEVC (~40% more efficient than AVC)
+        vp9: 0.6, // Similar to HEVC
+        av1: 0.4, // ~60% more efficient than AVC
+        vp8: 1.2, // Slightly less efficient than AVC
+        prores: 220_000_000 / referenceBitrate, // Apple ProRes white paper claims 220 Mbps for 1080p 422 HQ @30Hz
+    };
+    const codecAdjustedBitrate = baseBitrate * codecEfficiencyFactors[codec];
+    const finalBitrate = codecAdjustedBitrate * factor;
+    return Math.ceil(finalBitrate / 1000) * 1000;
+};
+/** Builds the per-frame encode options that carry the quantizer value for the given codec. */
+const buildQuantizerEncodeOptions = (codec, quantizer) => {
+    if (codec === 'avc') {
+        return { avc: { quantizer } };
+    }
+    else if (codec === 'hevc') {
+        return { hevc: { quantizer } };
+    }
+    else if (codec === 'vp9') {
+        return { vp9: { quantizer } };
+    }
+    else if (codec === 'av1') {
+        return { av1: { quantizer } };
+    }
+    assert(false);
+};
+/**
+ * Checks if the browser is able to encode the given video codec with the given parameters.
+ * @group Encoding
+ * @public
+ */
+const canEncodeVideo = async (codec, options = {}) => {
+    const { width = 1280, height = 720, quality, 
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    bitrate, frameRate, ...restOptions } = options;
+    if (!VIDEO_CODECS.includes(codec)) {
+        return false;
+    }
+    if (!Number.isInteger(width) || width <= 0) {
+        throw new TypeError('width must be a positive integer.');
+    }
+    if (!Number.isInteger(height) || height <= 0) {
+        throw new TypeError('height must be a positive integer.');
+    }
+    if (quality !== undefined && !(quality instanceof Quality)) {
+        throw new TypeError('quality, when provided, must be a Quality.');
+    }
+    if (quality !== undefined && bitrate !== undefined) {
+        throw new TypeError('quality and bitrate cannot both be provided.');
+    }
+    if (bitrate !== undefined && !(bitrate instanceof Quality) && (!Number.isInteger(bitrate) || bitrate <= 0)) {
+        throw new TypeError('bitrate must be a positive integer or a quality.');
+    }
+    if (frameRate !== undefined && (!Number.isFinite(frameRate) || frameRate <= 0)) {
+        throw new TypeError('frameRate, when provided, must be a finite positive number.');
+    }
+    validateVideoEncodingAdditionalOptions(codec, restOptions);
+    const resolvedQuality = resolveQuality(quality, bitrate) ?? new Quality('medium');
+    let candidates;
+    try {
+        candidates = buildVideoEncoderConfigs({
+            codec,
+            width,
+            height,
+            quality: resolvedQuality,
+            framerate: frameRate,
+            ...restOptions,
+            alpha: 'discard', // Since we handle alpha ourselves
+        });
+    }
+    catch {
+        // The requested rate control cannot be used with this codec (e.g. a quantizer with no fallback bitrate on a
+        // codec without quantizer support)
+        return false;
+    }
+    const key = JSON.stringify(candidates);
+    const memoized = canEncodeVideoMemo.get(key);
+    if (memoized) {
+        return memoized;
+    }
+    const promise = (async () => {
+        for (const { config } of candidates) {
+            if (customVideoEncoders.some(x => x.supports(codec, config))) {
+                // There's a custom encoder
+                return true;
+            }
+        }
+        if (typeof VideoEncoder === 'undefined') {
+            return false;
+        }
+        const hasOddDimension = width % 2 === 1 || height % 2 === 1;
+        if (hasOddDimension
+            && (codec === 'avc')) {
+            // Disallow odd dimensions for certain codecs
+            return false;
+        }
+        for (const { config, quantizer } of candidates) {
+            try {
+                const support = await VideoEncoder.isConfigSupported(config);
+                if (!support.supported) {
+                    continue;
+                }
+            }
+            catch {
+                // Can type-error when unknown config features are used
+                continue;
+            }
+            if (!isFirefox()) {
+                return true;
+            }
+            // isConfigSupported on Firefox appears to unreliably indicate if encoding will actually succeed. Therefore,
+            // we just try encoding a frame to see if it actually works.
+            // https://github.com/Vanilagy/mediabunny/issues/222
+            // eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
+            const success = await new Promise(async (resolve) => {
+                try {
+                    const encoder = new VideoEncoder({
+                        output: () => { },
+                        error: () => resolve(false),
+                    });
+                    encoder.configure(config);
+                    const frameData = new Uint8Array(width * height * 4);
+                    const frame = new VideoFrame(frameData, {
+                        format: 'RGBA',
+                        codedWidth: width,
+                        codedHeight: height,
+                        timestamp: 0,
+                    });
+                    encoder.encode(frame, quantizer !== null ? buildQuantizerEncodeOptions(codec, quantizer) : undefined);
+                    frame.close();
+                    await encoder.flush();
+                    resolve(true);
+                }
+                catch {
+                    resolve(false);
+                }
+            });
+            if (success) {
+                return true;
+            }
+        }
+        return false;
+    })();
+    canEncodeVideoMemo.set(key, promise);
+    return promise;
+};
+/**
+ * Resolves the `quality` and deprecated `bitrate` fields from the public API into a {@link Quality}, the norm used
+ * internally.
+ */
+const resolveQuality = (quality, bitrate) => {
+    if (quality !== undefined) {
+        return quality;
+    }
+    if (bitrate === undefined) {
+        return undefined;
+    }
+    return bitrate instanceof Quality ? bitrate : new Quality({ bitrate });
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const customVideoEncoders = [];
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+class FileSlice {
+    constructor(
+    /** The underlying bytes backing this slice. Avoid using this directly and prefer reader functions instead. */
+    bytes, 
+    /** A view into the bytes backing this slice. Avoid using this directly and prefer reader functions instead. */
+    view, 
+    /** The offset in "file bytes" at which `bytes` begins in the file. */
+    offset, 
+    /** The offset in "file bytes" where this slice begins. */
+    start, 
+    /** The offset in "file bytes" where this slice ends (exclusive). */
+    end) {
+        this.bytes = bytes;
+        this.view = view;
+        this.offset = offset;
+        this.start = start;
+        this.end = end;
+        this.bufferPos = start - offset;
+    }
+    static tempFromBytes(bytes) {
+        return new FileSlice(bytes, toDataView(bytes), 0, 0, bytes.length);
+    }
+    get length() {
+        return this.end - this.start;
+    }
+    get filePos() {
+        return this.offset + this.bufferPos;
+    }
+    set filePos(value) {
+        this.bufferPos = value - this.offset;
+    }
+    /** The number of bytes left from the current pos to the end of the slice. */
+    get remainingLength() {
+        return Math.max(this.end - this.filePos, 0);
+    }
+    skip(byteCount) {
+        this.bufferPos += byteCount;
+    }
+    /** Creates a new subslice of this slice whose byte range must be contained within this slice. */
+    slice(filePos, length = this.end - filePos) {
+        if (filePos < this.start || filePos + length > this.end) {
+            throw new RangeError('Slicing outside of original slice.');
+        }
+        return new FileSlice(this.bytes, this.view, this.offset, filePos, filePos + length);
+    }
+}
+const checkIsInRange = (slice, bytesToRead) => {
+    if (slice.filePos < slice.start || slice.filePos + bytesToRead > slice.end) {
+        throw new RangeError(`Tried reading [${slice.filePos}, ${slice.filePos + bytesToRead}), but slice is`
+            + ` [${slice.start}, ${slice.end}). This is likely an internal error, please report it alongside the file`
+            + ` that caused it.`);
+    }
+};
+const readBytes = (slice, length) => {
+    checkIsInRange(slice, length);
+    const bytes = slice.bytes.subarray(slice.bufferPos, slice.bufferPos + length);
+    slice.bufferPos += length;
+    return bytes;
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+class Muxer {
+    constructor(output) {
+        this.mutex = new AsyncMutex();
+        this.trackTimestampInfo = new WeakMap();
+        this.output = output;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    onTrackClose(track) { }
+    validateTimestamp(track, timestampInSeconds, isKeyPacket) {
+        let timestampInfo = this.trackTimestampInfo.get(track);
+        if (!timestampInfo) {
+            if (!isKeyPacket) {
+                throw new Error('First packet must be a key packet.');
+            }
+            timestampInfo = {
+                maxTimestamp: timestampInSeconds,
+                maxTimestampBeforeLastKeyPacket: null,
+            };
+            this.trackTimestampInfo.set(track, timestampInfo);
+        }
+        else {
+            if (isKeyPacket) {
+                timestampInfo.maxTimestampBeforeLastKeyPacket = timestampInfo.maxTimestamp;
+            }
+            if (timestampInfo.maxTimestampBeforeLastKeyPacket !== null
+                && timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyPacket) {
+                throw new Error(`Timestamps cannot be smaller than the largest timestamp of the previous GOP (a GOP begins with a`
+                    + ` key packet and ends right before the next key packet). Got ${timestampInSeconds}s, but largest`
+                    + ` timestamp is ${timestampInfo.maxTimestampBeforeLastKeyPacket}s.`);
+            }
+            timestampInfo.maxTimestamp = Math.max(timestampInfo.maxTimestamp, timestampInSeconds);
+        }
+    }
+}
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const inlineTimestampRegex = /<(?:(\d{2}):)?(\d{2}):(\d{2}).(\d{3})>/g;
+const formatSubtitleTimestamp = (timestamp) => {
+    const hours = Math.floor(timestamp / (60 * 60 * 1000));
+    const minutes = Math.floor((timestamp % (60 * 60 * 1000)) / (60 * 1000));
+    const seconds = Math.floor((timestamp % (60 * 1000)) / 1000);
+    const milliseconds = timestamp % 1000;
+    return hours.toString().padStart(2, '0') + ':'
+        + minutes.toString().padStart(2, '0') + ':'
+        + seconds.toString().padStart(2, '0') + '.'
+        + milliseconds.toString().padStart(3, '0');
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+class IsobmffBoxWriter {
+    constructor(writer) {
+        this.writer = writer;
+        this.helper = new Uint8Array(8);
+        this.helperView = new DataView(this.helper.buffer);
+        /**
+         * Stores the position from the start of the file to where boxes elements have been written. This is used to
+         * rewrite/edit elements that were already added before, and to measure sizes of things.
+         */
+        this.offsets = new WeakMap();
+    }
+    writeU32(value) {
+        this.helperView.setUint32(0, value, false);
+        this.writer.write(this.helper.subarray(0, 4));
+    }
+    writeU64(value) {
+        this.helperView.setUint32(0, Math.floor(value / 2 ** 32), false);
+        this.helperView.setUint32(4, value, false);
+        this.writer.write(this.helper.subarray(0, 8));
+    }
+    writeAscii(text) {
+        for (let i = 0; i < text.length; i++) {
+            this.helperView.setUint8(i % 8, text.charCodeAt(i));
+            if (i % 8 === 7)
+                this.writer.write(this.helper);
+        }
+        if (text.length % 8 !== 0) {
+            this.writer.write(this.helper.subarray(0, text.length % 8));
+        }
+    }
+    writeBox(box) {
+        this.offsets.set(box, this.writer.getPos());
+        if (box.contents && !box.children) {
+            this.writeBoxHeader(box, box.size ?? box.contents.byteLength + 8);
+            this.writer.write(box.contents);
+        }
+        else {
+            const startPos = this.writer.getPos();
+            this.writeBoxHeader(box, 0);
+            if (box.contents)
+                this.writer.write(box.contents);
+            if (box.children)
+                for (const child of box.children)
+                    if (child)
+                        this.writeBox(child);
+            const endPos = this.writer.getPos();
+            const size = box.size ?? endPos - startPos;
+            this.writer.seek(startPos);
+            this.writeBoxHeader(box, size);
+            this.writer.seek(endPos);
+        }
+    }
+    writeBoxHeader(box, size) {
+        this.writeU32(box.largeSize ? 1 : size);
+        this.writeAscii(box.type);
+        if (box.largeSize)
+            this.writeU64(size);
+    }
+    measureBoxHeader(box) {
+        return 8 + (box.largeSize ? 8 : 0);
+    }
+    patchBox(box) {
+        const boxOffset = this.offsets.get(box);
+        assert(boxOffset !== undefined);
+        const endPos = this.writer.getPos();
+        this.writer.seek(boxOffset);
+        this.writeBox(box);
+        this.writer.seek(endPos);
+    }
+    measureBox(box) {
+        if (box.contents && !box.children) {
+            const headerSize = this.measureBoxHeader(box);
+            return headerSize + box.contents.byteLength;
+        }
+        else {
+            let result = this.measureBoxHeader(box);
+            if (box.contents)
+                result += box.contents.byteLength;
+            if (box.children)
+                for (const child of box.children)
+                    if (child)
+                        result += this.measureBox(child);
+            return result;
+        }
+    }
+}
+const bytes = /* #__PURE__ */ new Uint8Array(8);
+const view = /* #__PURE__ */ new DataView(bytes.buffer);
+const u8 = (value) => {
+    return [(value % 0x100 + 0x100) % 0x100];
+};
+const u16 = (value) => {
+    view.setUint16(0, value, false);
+    return [bytes[0], bytes[1]];
+};
+const i16 = (value) => {
+    view.setInt16(0, value, false);
+    return [bytes[0], bytes[1]];
+};
+const u24 = (value) => {
+    view.setUint32(0, value, false);
+    return [bytes[1], bytes[2], bytes[3]];
+};
+const u32 = (value) => {
+    view.setUint32(0, value, false);
+    return [bytes[0], bytes[1], bytes[2], bytes[3]];
+};
+const i32 = (value) => {
+    view.setInt32(0, value, false);
+    return [bytes[0], bytes[1], bytes[2], bytes[3]];
+};
+const u64 = (value) => {
+    view.setUint32(0, Math.floor(value / 2 ** 32), false);
+    view.setUint32(4, value, false);
+    return [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
+};
+const i64 = (value) => {
+    view.setInt32(0, Math.floor(value / 2 ** 32), false);
+    view.setUint32(4, value, false);
+    return [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
+};
+const fixed_8_8 = (value) => {
+    view.setInt16(0, 2 ** 8 * value, false);
+    return [bytes[0], bytes[1]];
+};
+const fixed_16_16 = (value) => {
+    view.setInt32(0, 2 ** 16 * value, false);
+    return [bytes[0], bytes[1], bytes[2], bytes[3]];
+};
+const fixed_2_30 = (value) => {
+    view.setInt32(0, 2 ** 30 * value, false);
+    return [bytes[0], bytes[1], bytes[2], bytes[3]];
+};
+const variableUnsignedInt = (value, byteLength) => {
+    const bytes = [];
+    let remaining = value;
+    do {
+        let byte = remaining & 0x7f;
+        remaining >>= 7;
+        // If this isn't the first byte we're adding (meaning there will be more bytes after it
+        // when we reverse the array), set the continuation bit
+        if (bytes.length > 0) {
+            byte |= 0x80;
+        }
+        bytes.push(byte);
+    } while (remaining > 0 || byteLength);
+    // Reverse the array since we built it backwards
+    return bytes.reverse();
+};
+const ascii = (text, nullTerminated = false) => {
+    const bytes = Array(text.length).fill(null).map((_, i) => text.charCodeAt(i));
+    if (nullTerminated)
+        bytes.push(0x00);
+    return bytes;
+};
+const matrixToBytes = (matrix) => {
+    return [
+        fixed_16_16(matrix[0]), fixed_16_16(matrix[1]), fixed_2_30(matrix[2]),
+        fixed_16_16(matrix[3]), fixed_16_16(matrix[4]), fixed_2_30(matrix[5]),
+        fixed_16_16(matrix[6]), fixed_16_16(matrix[7]), fixed_2_30(matrix[8]),
+    ];
+};
+const box = (type, contents, children) => ({
+    type,
+    contents: contents && new Uint8Array(contents.flat(10)),
+    children,
+});
+/** A FullBox always starts with a version byte, followed by three flag bytes. */
+const fullBox = (type, version, flags, contents, children) => box(type, [u8(version), u24(flags), contents ?? []], children);
+/**
+ * File Type Compatibility Box: Allows the reader to determine whether this is a type of file that the
+ * reader understands.
+ */
+const ftyp = (details) => {
+    // You can find the full logic for this at
+    // https://github.com/FFmpeg/FFmpeg/blob/de2fb43e785773738c660cdafb9309b1ef1bc80d/libavformat/movenc.c#L5518
+    // Obviously, this lib only needs a small subset of that logic.
+    const minorVersion = 0x200;
+    if (details.isQuickTime) {
+        return box('ftyp', [
+            ascii('qt  '), // Major brand
+            u32(minorVersion), // Minor version
+            // Compatible brands
+            ascii('qt  '),
+        ]);
+    }
+    if (details.fragmented) {
+        if (details.cmaf) {
+            return box('ftyp', [
+                ascii('iso5'), // Major brand
+                u32(minorVersion), // Minor version
+                // Compatible brands
+                ascii('iso5'),
+                ascii('iso6'),
+                ascii('mp41'),
+                ascii('cmfc'),
+                ascii('dash'),
+            ]);
+        }
+        else {
+            return box('ftyp', [
+                ascii('iso5'), // Major brand
+                u32(minorVersion), // Minor version
+                // Compatible brands
+                ascii('iso5'),
+                ascii('iso6'),
+                ascii('mp41'),
+            ]);
+        }
+    }
+    return box('ftyp', [
+        ascii('isom'), // Major brand
+        u32(minorVersion), // Minor version
+        // Compatible brands
+        ascii('isom'),
+        details.holdsAvc ? ascii('avc1') : [],
+        ascii('mp41'),
+    ]);
+};
+/** Segment Type Box */
+const styp = () => box('styp', [
+    ascii('iso5'), // Major brand
+    u32(0), // Minor version
+    // Compatible brands
+    ascii('iso5'),
+    ascii('iso6'),
+    ascii('mp41'),
+    ascii('cmfc'),
+    ascii('dash'),
+]);
+/** Segment Index Box */
+const sidx = (muxer, referencedSize) => {
+    const earliestPresentationTime = Math.max(0, muxer.minWrittenTimestamp);
+    let duration = Math.max(0, muxer.maxWrittenEndTimestamp - earliestPresentationTime);
+    if (!Number.isFinite(duration)) {
+        duration = 0;
+    }
+    return fullBox('sidx', 1, 0, [
+        u32(1), // Reference ID
+        u32(GLOBAL_TIMESCALE), // Timescale
+        u64(intoTimescale(earliestPresentationTime, GLOBAL_TIMESCALE)), // Earliest presentation time
+        u64(0), // First offset
+        u16(0), // Reserved
+        u16(1), // Reference count
+        u32(referencedSize & 0x7fffffff), // Reference type (0) + referenced size
+        u32(intoTimescale(duration, GLOBAL_TIMESCALE)), // Subsegment duration
+        u32(0), // Starts with SAP + SAP type + SAP delta time (no information provided)
+    ]);
+};
+/** Movie Sample Data Box. Contains the actual frames/samples of the media. */
+const mdat = (reserveLargeSize) => ({ type: 'mdat', largeSize: reserveLargeSize });
+/** Free Space Box: A box that designates unused space in the movie data file. */
+const free = (size) => ({ type: 'free', size });
+/**
+ * Movie Box: Used to specify the information that defines a movie - that is, the information that allows
+ * an application to interpret the sample data that is stored elsewhere.
+ */
+const moov = (muxer) => {
+    return box('moov', undefined, [
+        mvhd(muxer.creationTime, muxer.trackDatas),
+        ...muxer.trackDatas.map(x => trak(x, muxer.creationTime)),
+        muxer.isFragmented ? mvex(muxer.trackDatas) : null,
+        udta(muxer),
+    ]);
+};
+/** Movie Header Box: Used to specify the characteristics of the entire movie, such as timescale and duration. */
+const mvhd = (creationTime, trackDatas) => {
+    const duration = Math.max(0, ...trackDatas
+        .map(trackData => (
+    // Round separately to match the edit list
+    Math.max(0, intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
+        + intoTimescale(trackData.startTimestampOffset ?? 0, GLOBAL_TIMESCALE)))));
+    const nextTrackId = Math.max(0, ...trackDatas.map(x => x.track.id)) + 1;
+    // Conditionally use u64 if u32 isn't enough
+    const needsU64 = !isU32(creationTime) || !isU32(duration);
+    const u32OrU64 = needsU64 ? u64 : u32;
+    return fullBox('mvhd', +needsU64, 0, [
+        u32OrU64(creationTime), // Creation time
+        u32OrU64(creationTime), // Modification time
+        u32(GLOBAL_TIMESCALE), // Timescale
+        u32OrU64(duration), // Duration
+        fixed_16_16(1), // Preferred rate
+        fixed_8_8(1), // Preferred volume
+        Array(10).fill(0), // Reserved
+        matrixToBytes(IDENTITY_MATRIX), // Matrix
+        Array(24).fill(0), // Pre-defined
+        u32(nextTrackId), // Next track ID
+    ]);
+};
+/**
+ * Track Box: Defines a single track of a movie. A movie may consist of one or more tracks. Each track is
+ * independent of the other tracks in the movie and carries its own temporal and spatial information. Each Track Box
+ * contains its associated Media Box.
+ */
+const trak = (trackData, creationTime) => {
+    const trackMetadata = getTrackMetadata(trackData);
+    const needsEditList = trackData.startTimestampOffset !== null && trackData.startTimestampOffset !== 0;
+    return box('trak', undefined, [
+        tkhd(trackData, creationTime),
+        needsEditList ? edts(trackData) : null,
+        mdia(trackData, creationTime),
+        trackMetadata.name !== undefined
+            ? box('udta', undefined, [
+                box('name', [
+                    ...textEncoder.encode(trackMetadata.name),
+                ]),
+            ])
+            : null,
+    ]);
+};
+/** Track Header Box: Specifies the characteristics of a single track within a movie. */
+const tkhd = (trackData, creationTime) => {
+    // Round separately to match the edit list
+    const durationInGlobalTimescale = Math.max(0, intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
+        + intoTimescale(trackData.startTimestampOffset ?? 0, GLOBAL_TIMESCALE));
+    const needsU64 = !isU32(creationTime) || !isU32(durationInGlobalTimescale);
+    const u32OrU64 = needsU64 ? u64 : u32;
+    let matrix;
+    if (trackData.type === 'video' && trackData.track.metadata.transformationMatrix) {
+        matrix = trackData.track.metadata.transformationMatrix;
+    }
+    else if (trackData.type === 'video') {
+        const { rotation, flip } = trackData.track.metadata;
+        // Rotation is applied before flipping
+        const linear = multiplyMatrices(rotationMatrix(rotation ?? 0), scaleMatrix(flip ? -1 : 1, 1));
+        matrix = centeredTransformationMatrix(linear, trackData.info.width, trackData.info.height);
+    }
+    else {
+        matrix = IDENTITY_MATRIX;
+    }
+    let flags = 0x2; // Track in movie
+    if (trackData.track.metadata.disposition?.default !== false) {
+        flags |= 0x1; // Track enabled
+    }
+    // Set the alternate group based on the track type; this mirror's how FFmpeg does it. A more advanced version would
+    // determine the alternate groups based on the actual track pairability graph. Note that it appears important that
+    // video get assigned to group 0, see https://github.com/Vanilagy/mediabunny/issues/454.
+    const alternateGroup = trackData.type === 'video'
+        ? 0
+        : trackData.type === 'audio'
+            ? 1
+            : trackData.type === 'subtitle'
+                ? 2
+                : assertNever(trackData);
+    return fullBox('tkhd', +needsU64, flags, [
+        u32OrU64(creationTime), // Creation time
+        u32OrU64(creationTime), // Modification time
+        u32(trackData.track.id), // Track ID
+        u32(0), // Reserved
+        u32OrU64(durationInGlobalTimescale), // Duration
+        Array(8).fill(0), // Reserved
+        u16(0), // Layer
+        u16(alternateGroup), // Alternate group
+        fixed_8_8(trackData.type === 'audio' ? 1 : 0), // Volume
+        u16(0), // Reserved
+        matrixToBytes(matrix), // Matrix
+        fixed_16_16(trackData.type === 'video' ? trackData.info.width : 0), // Track width
+        fixed_16_16(trackData.type === 'video' ? trackData.info.height : 0), // Track height
+    ]);
+};
+/** Edit Box: Specifies edits to the track's media. */
+const edts = (trackData) => {
+    const offset = trackData.startTimestampOffset;
+    assert(offset !== null);
+    if (offset > 0) {
+        // Positive offset: empty segment at the start, then the full media afterwards
+        const startOffset = intoTimescale(offset, GLOBAL_TIMESCALE);
+        const mediaDuration = intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE);
+        const needs64Bits = !isU32(startOffset) || !isU32(mediaDuration);
+        const u32OrU64 = needs64Bits ? u64 : u32;
+        const i32OrI64 = needs64Bits ? i64 : i32;
+        return box('edts', undefined, [
+            fullBox('elst', needs64Bits ? 1 : 0, 0, [
+                u32(2), // Entry count
+                // #1
+                u32OrU64(startOffset), // Segment duration
+                i32OrI64(-1), // Media time
+                fixed_16_16(1), // Media rate
+                // #2
+                u32OrU64(mediaDuration), // Segment duration
+                i32OrI64(0), // Media time
+                fixed_16_16(1), // Media rate
+            ]),
+        ]);
+    }
+    else {
+        // Negative offset: the negative section of the media is trimmed off
+        const mediaTime = intoTimescale(-offset, trackData.timescale);
+        // Not the entire media is visible.
+        // For fragmented files, this value is zero, which simply means "unknown duration" in this case. Spec:
+        // "the segment_duration of this edit may be zero"
+        const mediaDuration = Math.max(0, intoTimescale(presentationSpan(trackData), GLOBAL_TIMESCALE)
+            + intoTimescale(offset, GLOBAL_TIMESCALE));
+        const needs64Bits = !isI32(mediaTime) || !isU32(mediaDuration);
+        const u32OrU64 = needs64Bits ? u64 : u32;
+        const i32OrI64 = needs64Bits ? i64 : i32;
+        return box('edts', undefined, [
+            fullBox('elst', needs64Bits ? 1 : 0, 0, [
+                u32(1), // Entry count
+                // #1
+                u32OrU64(mediaDuration), // Segment duration
+                i32OrI64(mediaTime), // Media time
+                fixed_16_16(1), // Media rate
+            ]),
+        ]);
+    }
+};
+/** Media Box: Describes and define a track's media type and sample data. */
+const mdia = (trackData, creationTime) => box('mdia', undefined, [
+    mdhd(trackData, creationTime),
+    hdlr(true, TRACK_TYPE_TO_COMPONENT_SUBTYPE[trackData.type], TRACK_TYPE_TO_HANDLER_NAME[trackData.type]),
+    minf(trackData),
+]);
+/** Media Header Box: Specifies the characteristics of a media, including timescale and duration. */
+const mdhd = (trackData, creationTime) => {
+    // Since _this_ duration represents the raw media duration, edit list offsets are not taken into account here
+    const localDuration = intoTimescale(presentationSpan(trackData), trackData.timescale);
+    const needsU64 = !isU32(creationTime) || !isU32(localDuration);
+    const u32OrU64 = needsU64 ? u64 : u32;
+    return fullBox('mdhd', +needsU64, 0, [
+        u32OrU64(creationTime), // Creation time
+        u32OrU64(creationTime), // Modification time
+        u32(trackData.timescale), // Timescale
+        u32OrU64(localDuration), // Duration
+        u16(getLanguageCodeInt(trackData.track.metadata.languageCode ?? UNDETERMINED_LANGUAGE)), // Language
+        u16(0), // Quality
+    ]);
+};
+const TRACK_TYPE_TO_COMPONENT_SUBTYPE = {
+    video: 'vide',
+    audio: 'soun',
+    subtitle: 'text',
+};
+const TRACK_TYPE_TO_HANDLER_NAME = {
+    video: 'MediabunnyVideoHandler',
+    audio: 'MediabunnySoundHandler',
+    subtitle: 'MediabunnyTextHandler',
+};
+/** Handler Reference Box. */
+const hdlr = (hasComponentType, handlerType, name, manufacturer = '\0\0\0\0') => fullBox('hdlr', 0, 0, [
+    hasComponentType ? ascii('mhlr') : u32(0), // Component type
+    ascii(handlerType), // Component subtype
+    ascii(manufacturer), // Component manufacturer
+    u32(0), // Component flags
+    u32(0), // Component flags mask
+    ascii(name, true), // Component name
+]);
+/**
+ * Media Information Box: Stores handler-specific information for a track's media data. The media handler uses this
+ * information to map from media time to media data and to process the media data.
+ */
+const minf = (trackData) => box('minf', undefined, [
+    TRACK_TYPE_TO_HEADER_BOX[trackData.type](),
+    dinf(),
+    stbl(trackData),
+]);
+/** Video Media Information Header Box: Defines specific color and graphics mode information. */
+const vmhd = () => fullBox('vmhd', 0, 1, [
+    u16(0), // Graphics mode
+    u16(0), // Opcolor R
+    u16(0), // Opcolor G
+    u16(0), // Opcolor B
+]);
+/** Sound Media Information Header Box: Stores the sound media's control information, such as balance. */
+const smhd = () => fullBox('smhd', 0, 0, [
+    u16(0), // Balance
+    u16(0), // Reserved
+]);
+/** Null Media Header Box. */
+const nmhd = () => fullBox('nmhd', 0, 0);
+const TRACK_TYPE_TO_HEADER_BOX = {
+    video: vmhd,
+    audio: smhd,
+    subtitle: nmhd,
+};
+/**
+ * Data Information Box: Contains information specifying the data handler component that provides access to the
+ * media data. The data handler component uses the Data Information Box to interpret the media's data.
+ */
+const dinf = () => box('dinf', undefined, [
+    dref(),
+]);
+/**
+ * Data Reference Box: Contains tabular data that instructs the data handler component how to access the media's data.
+ */
+const dref = () => fullBox('dref', 0, 0, [
+    u32(1), // Entry count
+], [
+    url(),
+]);
+const url = () => fullBox('url ', 0, 1); // Self-reference flag enabled
+/**
+ * Sample Table Box: Contains information for converting from media time to sample number to sample location. This box
+ * also indicates how to interpret the sample (for example, whether to decompress the video data and, if so, how).
+ */
+const stbl = (trackData) => {
+    const needsCtts = trackData.compositionTimeOffsetTable.length > 1
+        || trackData.compositionTimeOffsetTable.some(x => x.sampleCompositionTimeOffset !== 0);
+    return box('stbl', undefined, [
+        stsd(trackData),
+        stts(trackData),
+        needsCtts ? ctts(trackData) : null,
+        needsCtts ? cslg(trackData) : null,
+        stsc(trackData),
+        stsz(trackData),
+        stco(trackData),
+        stss(trackData),
+    ]);
+};
+/**
+ * Sample Description Box: Stores information that allows you to decode samples in the media. The data stored in the
+ * sample description varies, depending on the media type.
+ */
+const stsd = (trackData) => {
+    let sampleDescription;
+    if (trackData.type === 'video') {
+        sampleDescription = videoSampleDescription(videoCodecToBoxName(trackData.track.source._codec, trackData.info.decoderConfig.codec), trackData);
+    }
+    else if (trackData.type === 'audio') {
+        const boxName = audioCodecToBoxName(trackData.track.source._codec, trackData.info.decoderConfig.codec, trackData.muxer.isQuickTime);
+        assert(boxName);
+        sampleDescription = soundSampleDescription(boxName, trackData);
+    }
+    else if (trackData.type === 'subtitle') {
+        sampleDescription = subtitleSampleDescription(SUBTITLE_CODEC_TO_BOX_NAME[trackData.track.source._codec], trackData);
+    }
+    assert(sampleDescription);
+    return fullBox('stsd', 0, 0, [
+        u32(1), // Entry count
+    ], [
+        sampleDescription,
+    ]);
+};
+/** Video Sample Description Box: Contains information that defines how to interpret video media data. */
+const videoSampleDescription = (compressionType, trackData) => box(compressionType, [
+    Array(6).fill(0), // Reserved
+    u16(1), // Data reference index
+    u16(0), // Pre-defined
+    u16(0), // Reserved
+    Array(12).fill(0), // Pre-defined
+    u16(trackData.info.width), // Width
+    u16(trackData.info.height), // Height
+    u32(0x00480000), // Horizontal resolution
+    u32(0x00480000), // Vertical resolution
+    u32(0), // Reserved
+    u16(1), // Frame count
+    // Compressor name
+    u8(VERSIONED_NAME.length), // Weird Pascal-style string
+    ascii(VERSIONED_NAME),
+    Array(31 - VERSIONED_NAME.length).fill(0),
+    u16(trackData.info.hasAlphaChannel ? 32 : 24), // Depth
+    i16(0xffff), // Pre-defined
+], [
+    VIDEO_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec]?.(trackData) ?? null,
+    pasp(trackData),
+    colorSpaceIsEmpty(trackData.info.decoderConfig.colorSpace)
+        ? null
+        : colr(trackData),
+    btrt(trackData),
+]);
+/** Bit Rate Box: Signals the average and peak bitrate of the track. */
+const btrt = (trackData) => {
+    if (trackData.avgBitrate === 0 && trackData.maxBitrate === 0) {
+        return null;
+    }
+    return box('btrt', [
+        u32(0), // Decoding buffer size (unknown)
+        u32(trackData.maxBitrate), // Max bitrate
+        u32(trackData.avgBitrate), // Average bitrate
+    ]);
+};
+/** Pixel Aspect Ratio Box: Specifies pixel width:height spacing for non-square pixels. */
+const pasp = (trackData) => {
+    if (trackData.info.pixelAspectRatio.num === trackData.info.pixelAspectRatio.den) {
+        return null;
+    }
+    return box('pasp', [
+        u32(trackData.info.pixelAspectRatio.num),
+        u32(trackData.info.pixelAspectRatio.den),
+    ]);
+};
+/** Colour Information Box: Specifies the color space of the video. */
+const colr = (trackData) => {
+    const colorSpace = trackData.info.decoderConfig.colorSpace;
+    return box('colr', [
+        // Colour type
+        ascii(trackData.muxer.isQuickTime ? 'nclc' : 'nclx'),
+        // Colour primaries
+        u16(colorSpace?.primaries != null ? COLOR_PRIMARIES_MAP[colorSpace.primaries] : 2),
+        // Transfer characteristics
+        u16(colorSpace?.transfer != null ? TRANSFER_CHARACTERISTICS_MAP[colorSpace.transfer] : 2),
+        // Matrix coefficients
+        u16(colorSpace?.matrix != null ? MATRIX_COEFFICIENTS_MAP[colorSpace.matrix] : 2),
+        // Full range flag
+        trackData.muxer.isQuickTime
+            ? [] // Doesn't have it
+            : u8((colorSpace?.fullRange ? 1 : 0) << 7),
+    ]);
+};
+/** AVC Configuration Box: Provides additional information to the decoder. */
+const avcC = (trackData) => trackData.info.decoderConfig && box('avcC', [
+    // For AVC, description is an AVCDecoderConfigurationRecord, so nothing else to do here
+    ...toUint8Array(trackData.info.decoderConfig.description),
+]);
+/** HEVC Configuration Box: Provides additional information to the decoder. */
+const hvcC = (trackData) => trackData.info.decoderConfig && box('hvcC', [
+    // For HEVC, description is an HEVCDecoderConfigurationRecord, so nothing else to do here
+    ...toUint8Array(trackData.info.decoderConfig.description),
+]);
+/** VP Configuration Box: Provides additional information to the decoder. */
+const vpcC = (trackData) => {
+    // Reference: https://www.webmproject.org/vp9/mp4/
+    if (!trackData.info.decoderConfig) {
+        return null;
+    }
+    const decoderConfig = trackData.info.decoderConfig;
+    const parts = decoderConfig.codec.split('.'); // We can derive the required values from the codec string
+    const profile = Number(parts[1]);
+    const level = Number(parts[2]);
+    const bitDepth = Number(parts[3]);
+    const chromaSubsampling = parts[4] ? Number(parts[4]) : 1; // 4:2:0 colocated with luma (0,0)
+    const videoFullRangeFlag = parts[8] ? Number(parts[8]) : Number(decoderConfig.colorSpace?.fullRange ?? 0);
+    const thirdByte = (bitDepth << 4) + (chromaSubsampling << 1) + videoFullRangeFlag;
+    const colourPrimaries = parts[5]
+        ? Number(parts[5])
+        : decoderConfig.colorSpace?.primaries
+            ? COLOR_PRIMARIES_MAP[decoderConfig.colorSpace.primaries]
+            : 1;
+    const transferCharacteristics = parts[6]
+        ? Number(parts[6])
+        : decoderConfig.colorSpace?.transfer
+            ? TRANSFER_CHARACTERISTICS_MAP[decoderConfig.colorSpace.transfer]
+            : 1;
+    const matrixCoefficients = parts[7]
+        ? Number(parts[7])
+        : decoderConfig.colorSpace?.matrix
+            ? MATRIX_COEFFICIENTS_MAP[decoderConfig.colorSpace.matrix]
+            : 1;
+    return fullBox('vpcC', 1, 0, [
+        u8(profile), // Profile
+        u8(level), // Level
+        u8(thirdByte), // Bit depth, chroma subsampling, full range
+        u8(colourPrimaries), // Colour primaries
+        u8(transferCharacteristics), // Transfer characteristics
+        u8(matrixCoefficients), // Matrix coefficients
+        u16(0), // Codec initialization data size
+    ]);
+};
+/** AV1 Configuration Box: Provides additional information to the decoder. */
+const av1C = (trackData) => {
+    return box('av1C', generateAv1CodecConfigurationFromCodecString(trackData.info.decoderConfig.codec));
+};
+/** Sound Sample Description Box: Contains information that defines how to interpret sound media data. */
+const soundSampleDescription = (compressionType, trackData) => {
+    let version = 0;
+    let contents;
+    let sampleSizeInBits = 16;
+    const isPcmCodec = PCM_AUDIO_CODECS.includes(trackData.track.source._codec);
+    if (isPcmCodec) {
+        const codec = trackData.track.source._codec;
+        const { sampleSize } = parsePcmCodec(codec);
+        sampleSizeInBits = 8 * sampleSize;
+        if (sampleSizeInBits > 16) {
+            version = 1;
+        }
+    }
+    if (trackData.muxer.isQuickTime) {
+        version = 1;
+    }
+    if (version === 0) {
+        contents = [
+            Array(6).fill(0), // Reserved
+            u16(1), // Data reference index
+            u16(version), // Version
+            u16(0), // Revision level
+            u32(0), // Vendor
+            u16(trackData.info.numberOfChannels), // Number of channels
+            u16(sampleSizeInBits), // Sample size (bits)
+            u16(0), // Compression ID
+            u16(0), // Packet size
+            u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
+            u16(0), // Sample rate (lower)
+        ];
+    }
+    else {
+        const compressionId = isPcmCodec ? 0 : -2;
+        contents = [
+            Array(6).fill(0), // Reserved
+            u16(1), // Data reference index
+            u16(version), // Version
+            u16(0), // Revision level
+            u32(0), // Vendor
+            u16(trackData.info.numberOfChannels), // Number of channels
+            u16(Math.min(sampleSizeInBits, 16)), // Sample size (bits)
+            i16(compressionId), // Compression ID
+            u16(0), // Packet size
+            u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
+            u16(0), // Sample rate (lower)
+            isPcmCodec
+                ? [
+                    u32(1), // Samples per packet (must be 1 for uncompressed formats)
+                    u32(sampleSizeInBits / 8), // Bytes per packet
+                    u32(trackData.info.numberOfChannels * sampleSizeInBits / 8), // Bytes per frame
+                ]
+                : [
+                    u32(0), // Samples per packet (don't bother, still works with 0)
+                    u32(0), // Bytes per packet (variable)
+                    u32(0), // Bytes per frame (variable)
+                ],
+            u32(2), // Bytes per sample (constant in FFmpeg)
+        ];
+    }
+    return box(compressionType, contents, [
+        audioCodecToConfigurationBox(trackData.track.source._codec, trackData.muxer.isQuickTime)?.(trackData) ?? null,
+        btrt(trackData),
+    ]);
+};
+/** MPEG-4 Elementary Stream Descriptor Box. */
+const esds = (trackData) => {
+    // We build up the bytes in a layered way which reflects the nested structure
+    let objectTypeIndication;
+    switch (trackData.track.source._codec) {
+        case 'aac':
+            {
+                objectTypeIndication = 0x40;
+            }
+            break;
+        case 'mp3':
+            {
+                objectTypeIndication = 0x6b;
+            }
+            break;
+        case 'vorbis':
+            {
+                objectTypeIndication = 0xdd;
+            }
+            break;
+        default: throw new Error(`Unhandled audio codec: ${trackData.track.source._codec}`);
+    }
+    let bytes = [
+        ...u8(objectTypeIndication), // Object type indication
+        ...u8(0x15), // stream type(6bits)=5 audio, flags(2bits)=1
+        ...u24(0), // 24bit buffer size
+        ...u32(trackData.maxBitrate), // max bitrate
+        ...u32(trackData.avgBitrate), // avg bitrate
+    ];
+    if (trackData.info.decoderConfig.description) {
+        const description = toUint8Array(trackData.info.decoderConfig.description);
+        // Add the decoder description to the end
+        bytes = [
+            ...bytes,
+            ...u8(0x05), // TAG(5) = DecoderSpecificInfo
+            ...variableUnsignedInt(description.byteLength),
+            ...description,
+        ];
+    }
+    bytes = [
+        ...u16(1), // ES_ID = 1
+        ...u8(0x00), // flags etc = 0
+        ...u8(0x04), // TAG(4) = ES Descriptor
+        ...variableUnsignedInt(bytes.length),
+        ...bytes,
+        ...u8(0x06), // TAG(6)
+        ...u8(0x01), // length
+        ...u8(0x02), // data
+    ];
+    bytes = [
+        ...u8(0x03), // TAG(3) = Object Descriptor
+        ...variableUnsignedInt(bytes.length),
+        ...bytes,
+    ];
+    return fullBox('esds', 0, 0, bytes);
+};
+const wave = (trackData) => {
+    return box('wave', undefined, [
+        frma(trackData),
+        enda(trackData),
+        box('\x00\x00\x00\x00'), // NULL tag at the end
+    ]);
+};
+const frma = (trackData) => {
+    return box('frma', [
+        ascii(audioCodecToBoxName(trackData.track.source._codec, trackData.info.decoderConfig.codec, trackData.muxer.isQuickTime)),
+    ]);
+};
+// This box specifies PCM endianness
+const enda = (trackData) => {
+    const { littleEndian } = parsePcmCodec(trackData.track.source._codec);
+    return box('enda', [
+        u16(+littleEndian),
+    ]);
+};
+/** Opus Specific Box. */
+const dOps = (trackData) => {
+    let outputChannelCount = trackData.info.numberOfChannels;
+    // Default PreSkip, should be at least 80 milliseconds worth of playback, measured in 48000 Hz samples
+    let preSkip = 3840;
+    let inputSampleRate = trackData.info.sampleRate;
+    let outputGain = 0;
+    let channelMappingFamily = 0;
+    let channelMappingTable = new Uint8Array(0);
+    // Read preskip and from codec private data from the encoder
+    // https://www.rfc-editor.org/rfc/rfc7845#section-5
+    const description = trackData.info.decoderConfig?.description;
+    if (description) {
+        assert(description.byteLength >= 18);
+        const bytes = toUint8Array(description);
+        const header = parseOpusIdentificationHeader(bytes);
+        outputChannelCount = header.outputChannelCount;
+        preSkip = header.preSkip;
+        inputSampleRate = header.inputSampleRate;
+        outputGain = header.outputGain;
+        channelMappingFamily = header.channelMappingFamily;
+        if (header.channelMappingTable) {
+            channelMappingTable = header.channelMappingTable;
+        }
+    }
+    // https://www.opus-codec.org/docs/opus_in_isobmff.html
+    return box('dOps', [
+        u8(0), // Version
+        u8(outputChannelCount), // OutputChannelCount
+        u16(preSkip), // PreSkip
+        u32(inputSampleRate), // InputSampleRate
+        i16(outputGain), // OutputGain
+        u8(channelMappingFamily), // ChannelMappingFamily
+        ...channelMappingTable,
+    ]);
+};
+/** FLAC specific box. */
+const dfLa = (trackData) => {
+    const description = trackData.info.decoderConfig?.description;
+    assert(description);
+    const bytes = toUint8Array(description);
+    return fullBox('dfLa', 0, 0, [
+        ...bytes.subarray(4),
+    ]);
+};
+/** PCM Configuration Box, ISO/IEC 23003-5. */
+const pcmC = (trackData) => {
+    const { littleEndian, sampleSize } = parsePcmCodec(trackData.track.source._codec);
+    const formatFlags = +littleEndian;
+    return fullBox('pcmC', 0, 0, [
+        u8(formatFlags),
+        u8(8 * sampleSize),
+    ]);
+};
+/** AC3SpecificBox */
+const dac3 = (trackData) => {
+    assert(trackData.info.primingPacket);
+    const frameInfo = parseAc3SyncFrame(trackData.info.primingPacket.data);
+    if (!frameInfo) {
+        throw new Error('Couldn\'t extract AC-3 frame info from the audio packet. '
+            + 'Ensure the packets contain valid AC-3 sync frames (as specified in ETSI TS 102 366).');
+    }
+    const bytes = new Uint8Array(3);
+    const bitstream = new Bitstream(bytes);
+    bitstream.writeBits(2, frameInfo.fscod);
+    bitstream.writeBits(5, frameInfo.bsid);
+    bitstream.writeBits(3, frameInfo.bsmod);
+    bitstream.writeBits(3, frameInfo.acmod);
+    bitstream.writeBits(1, frameInfo.lfeon);
+    bitstream.writeBits(5, frameInfo.bitRateCode);
+    bitstream.writeBits(5, 0); // reserved
+    return box('dac3', [...bytes]);
+};
+/** EC3SpecificBox */
+const dec3 = (trackData) => {
+    assert(trackData.info.primingPacket);
+    const frameInfo = parseEac3SyncFrame(trackData.info.primingPacket.data);
+    if (!frameInfo) {
+        throw new Error('Couldn\'t extract E-AC-3 frame info from the audio packet. '
+            + 'Ensure the packets contain valid E-AC-3 sync frames (as specified in ETSI TS 102 366).');
+    }
+    // Calculate size
+    let totalBits = 16; // header: data_rate (13) + num_ind_sub (3)
+    for (const sub of frameInfo.substreams) {
+        totalBits += 23; // fixed fields per substream
+        if (sub.numDepSub > 0) {
+            totalBits += 9; // chan_loc
+        }
+        else {
+            totalBits += 1; // reserved
+        }
+    }
+    const size = Math.ceil(totalBits / 8);
+    const bytes = new Uint8Array(size);
+    const bitstream = new Bitstream(bytes);
+    bitstream.writeBits(13, frameInfo.dataRate);
+    bitstream.writeBits(3, frameInfo.substreams.length - 1); // num_ind_sub
+    for (const sub of frameInfo.substreams) {
+        bitstream.writeBits(2, sub.fscod);
+        bitstream.writeBits(5, sub.bsid);
+        bitstream.writeBits(1, 0); // reserved
+        bitstream.writeBits(1, 0); // asvc = 0
+        bitstream.writeBits(3, sub.bsmod);
+        bitstream.writeBits(3, sub.acmod);
+        bitstream.writeBits(1, sub.lfeon);
+        bitstream.writeBits(3, 0); // reserved
+        bitstream.writeBits(4, sub.numDepSub);
+        if (sub.numDepSub > 0) {
+            bitstream.writeBits(9, sub.chanLoc);
+        }
+        else {
+            bitstream.writeBits(1, 0); // reserved
+        }
+    }
+    return box('dec3', [...bytes]);
+};
+/** DTSSpecificBox */
+const ddts = (trackData) => {
+    assert(trackData.info.primingPacket);
+    const frameInfo = parseDtsFrame(trackData.info.primingPacket.data);
+    if (!frameInfo) {
+        throw new Error('Couldn\'t extract DTS frame info from the audio packet. '
+            + 'Ensure the packets contain valid DTS frames as specified in ETSI TS 102 114.');
+    }
+    return box('ddts', [...buildDtsSpecificBox(frameInfo)]);
+};
+const subtitleSampleDescription = (compressionType, trackData) => box(compressionType, [
+    Array(6).fill(0), // Reserved
+    u16(1), // Data reference index
+], [
+    SUBTITLE_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec](trackData),
+    btrt(trackData),
+]);
+const vttC = (trackData) => box('vttC', [
+    ...textEncoder.encode(trackData.info.config.description),
+]);
+/**
+ * Time-To-Sample Box: Stores duration information for a media's samples, providing a mapping from a time in a media
+ * to the corresponding data sample. The table is compact, meaning that consecutive samples with the same time delta
+ * will be grouped.
+ */
+const stts = (trackData) => {
+    return fullBox('stts', 0, 0, [
+        u32(trackData.timeToSampleTable.length), // Number of entries
+        trackData.timeToSampleTable.map(x => [
+            u32(x.sampleCount), // Sample count
+            u32(x.sampleDelta), // Sample duration
+        ]),
+    ]);
+};
+/** Sync Sample Box: Identifies the key frames in the media, marking the random access points within a stream. */
+const stss = (trackData) => {
+    if (trackData.samples.every(x => x.type === 'key'))
+        return null; // No stss box -> every frame is a key frame
+    const keySamples = [...trackData.samples.entries()].filter(([, sample]) => sample.type === 'key');
+    return fullBox('stss', 0, 0, [
+        u32(keySamples.length), // Number of entries
+        keySamples.map(([index]) => u32(index + 1)), // Sync sample table
+    ]);
+};
+/**
+ * Sample-To-Chunk Box: As samples are added to a media, they are collected into chunks that allow optimized data
+ * access. A chunk contains one or more samples. Chunks in a media may have different sizes, and the samples within a
+ * chunk may have different sizes. The Sample-To-Chunk Box stores chunk information for the samples in a media, stored
+ * in a compactly-coded fashion.
+ */
+const stsc = (trackData) => {
+    return fullBox('stsc', 0, 0, [
+        u32(trackData.compactlyCodedChunkTable.length), // Number of entries
+        trackData.compactlyCodedChunkTable.map(x => [
+            u32(x.firstChunk), // First chunk
+            u32(x.samplesPerChunk), // Samples per chunk
+            u32(1), // Sample description index
+        ]),
+    ]);
+};
+/** Sample Size Box: Specifies the byte size of each sample in the media. */
+const stsz = (trackData) => {
+    if (trackData.type === 'audio' && trackData.info.requiresPcmTransformation) {
+        const { sampleSize } = parsePcmCodec(trackData.track.source._codec);
+        // With PCM, every sample has the same size
+        return fullBox('stsz', 0, 0, [
+            u32(sampleSize * trackData.info.numberOfChannels), // Sample size
+            u32(trackData.samples.reduce((acc, x) => acc + intoTimescale(x.duration, trackData.timescale), 0)),
+        ]);
+    }
+    return fullBox('stsz', 0, 0, [
+        u32(0), // Sample size (0 means non-constant size)
+        u32(trackData.samples.length), // Number of entries
+        trackData.samples.map(x => u32(x.size)), // Sample size table
+    ]);
+};
+/** Chunk Offset Box: Identifies the location of each chunk of data in the media's data stream, relative to the file. */
+const stco = (trackData) => {
+    if (trackData.finalizedChunks.length > 0 && last(trackData.finalizedChunks).offset >= 2 ** 32) {
+        // If the file is large, use the co64 box
+        return fullBox('co64', 0, 0, [
+            u32(trackData.finalizedChunks.length), // Number of entries
+            trackData.finalizedChunks.map(x => u64(x.offset)), // Chunk offset table
+        ]);
+    }
+    return fullBox('stco', 0, 0, [
+        u32(trackData.finalizedChunks.length), // Number of entries
+        trackData.finalizedChunks.map(x => u32(x.offset)), // Chunk offset table
+    ]);
+};
+/**
+ * Composition Time to Sample Box: Stores composition time offset information (PTS-DTS) for a
+ * media's samples. The table is compact, meaning that consecutive samples with the same time
+ * composition time offset will be grouped.
+ */
+const ctts = (trackData) => {
+    return fullBox('ctts', 1, 0, [
+        u32(trackData.compositionTimeOffsetTable.length), // Number of entries
+        trackData.compositionTimeOffsetTable.map(x => [
+            u32(x.sampleCount), // Sample count
+            i32(x.sampleCompositionTimeOffset), // Sample offset
+        ]),
+    ]);
+};
+/**
+ * Composition to Decode Box: Stores information about the composition and display times of the media samples.
+ */
+const cslg = (trackData) => {
+    let leastDecodeToDisplayDelta = Infinity;
+    let greatestDecodeToDisplayDelta = -Infinity;
+    let compositionStartTime = Infinity;
+    let compositionEndTime = -Infinity;
+    assert(trackData.compositionTimeOffsetTable.length > 0);
+    assert(trackData.samples.length > 0);
+    for (let i = 0; i < trackData.compositionTimeOffsetTable.length; i++) {
+        const entry = trackData.compositionTimeOffsetTable[i];
+        leastDecodeToDisplayDelta = Math.min(leastDecodeToDisplayDelta, entry.sampleCompositionTimeOffset);
+        greatestDecodeToDisplayDelta = Math.max(greatestDecodeToDisplayDelta, entry.sampleCompositionTimeOffset);
+    }
+    for (let i = 0; i < trackData.samples.length; i++) {
+        const sample = trackData.samples[i];
+        compositionStartTime = Math.min(compositionStartTime, intoTimescale(sample.timestamp, trackData.timescale));
+        compositionEndTime = Math.max(compositionEndTime, intoTimescale(sample.timestamp + sample.duration, trackData.timescale));
+    }
+    const compositionToDtsShift = Math.max(-leastDecodeToDisplayDelta, 0);
+    if (compositionEndTime >= 2 ** 31) {
+        // For very large files, the composition end time can't be represented in i32, so let's just scrap the box in
+        // that case. QuickTime fails to read the file if there's a cslg box with version 1, so that's sadly not an
+        // option.
+        return null;
+    }
+    return fullBox('cslg', 0, 0, [
+        i32(compositionToDtsShift), // Composition to DTS shift
+        i32(leastDecodeToDisplayDelta), // Least decode to display delta
+        i32(greatestDecodeToDisplayDelta), // Greatest decode to display delta
+        i32(compositionStartTime), // Composition start time
+        i32(compositionEndTime), // Composition end time
+    ]);
+};
+/**
+ * Movie Extends Box: This box signals to readers that the file is fragmented. Contains a single Track Extends Box
+ * for each track in the movie.
+ */
+const mvex = (trackDatas) => {
+    return box('mvex', undefined, trackDatas.map(trex));
+};
+/** Track Extends Box: Contains the default values used by the movie fragments. */
+const trex = (trackData) => {
+    return fullBox('trex', 0, 0, [
+        u32(trackData.track.id), // Track ID
+        u32(1), // Default sample description index
+        u32(0), // Default sample duration
+        u32(0), // Default sample size
+        u32(0), // Default sample flags
+    ]);
+};
+/**
+ * Movie Fragment Box: The movie fragments extend the presentation in time. They provide the information that would
+ * previously have been	in the Movie Box.
+ */
+const moof = (sequenceNumber, trackDatas) => {
+    return box('moof', undefined, [
+        mfhd(sequenceNumber),
+        ...trackDatas.map(traf),
+    ]);
+};
+/** Movie Fragment Header Box: Contains a sequence number as a safety check. */
+const mfhd = (sequenceNumber) => {
+    return fullBox('mfhd', 0, 0, [
+        u32(sequenceNumber), // Sequence number
+    ]);
+};
+const fragmentSampleFlags = (sample) => {
+    let byte1 = 0;
+    let byte2 = 0;
+    const byte3 = 0;
+    const byte4 = 0;
+    const sampleIsDifferenceSample = sample.type === 'delta';
+    byte2 |= +sampleIsDifferenceSample;
+    if (sampleIsDifferenceSample) {
+        byte1 |= 1; // There is redundant coding in this sample
+    }
+    else {
+        byte1 |= 2; // There is no redundant coding in this sample
+    }
+    // Note that there are a lot of other flags to potentially set here, but most are irrelevant / non-necessary
+    return byte1 << 24 | byte2 << 16 | byte3 << 8 | byte4;
+};
+/** Track Fragment Box */
+const traf = (trackData) => {
+    return box('traf', undefined, [
+        tfhd(trackData),
+        tfdt(trackData),
+        trun(trackData),
+    ]);
+};
+/** Track Fragment Header Box: Provides a reference to the extended track, and flags. */
+const tfhd = (trackData) => {
+    assert(trackData.currentChunk);
+    let tfFlags = 0;
+    tfFlags |= 0x00008; // Default sample duration present
+    tfFlags |= 0x00010; // Default sample size present
+    tfFlags |= 0x00020; // Default sample flags present
+    tfFlags |= 0x20000; // Default base is moof
+    // Prefer the second sample over the first one, as the first one is a sync sample and therefore the "odd one out"
+    const referenceSample = trackData.currentChunk.samples[1] ?? trackData.currentChunk.samples[0];
+    const referenceSampleInfo = {
+        duration: referenceSample.timescaleUnitsToNextSample,
+        size: referenceSample.size,
+        flags: fragmentSampleFlags(referenceSample),
+    };
+    return fullBox('tfhd', 0, tfFlags, [
+        u32(trackData.track.id), // Track ID
+        u32(referenceSampleInfo.duration), // Default sample duration
+        u32(referenceSampleInfo.size), // Default sample size
+        u32(referenceSampleInfo.flags), // Default sample flags
+    ]);
+};
+/**
+ * Track Fragment Decode Time Box: Provides the absolute decode time of the first sample of the fragment. This is
+ * useful for performing random access on the media file.
+ */
+const tfdt = (trackData) => {
+    assert(trackData.currentChunk);
+    return fullBox('tfdt', 1, 0, [
+        u64(intoTimescale(trackData.currentChunk.startTimestamp, trackData.timescale)), // Base Media Decode Time
+    ]);
+};
+/** Track Run Box: Specifies a run of contiguous samples for a given track. */
+const trun = (trackData) => {
+    assert(trackData.currentChunk);
+    const allSampleDurations = trackData.currentChunk.samples.map(x => x.timescaleUnitsToNextSample);
+    const allSampleSizes = trackData.currentChunk.samples.map(x => x.size);
+    const allSampleFlags = trackData.currentChunk.samples.map(fragmentSampleFlags);
+    const allSampleCompositionTimeOffsets = trackData.currentChunk.samples
+        .map(x => intoTimescale(x.timestamp - x.decodeTimestamp, trackData.timescale));
+    const uniqueSampleDurations = new Set(allSampleDurations);
+    const uniqueSampleSizes = new Set(allSampleSizes);
+    const uniqueSampleFlags = new Set(allSampleFlags);
+    const uniqueSampleCompositionTimeOffsets = new Set(allSampleCompositionTimeOffsets);
+    const firstSampleFlagsPresent = uniqueSampleFlags.size === 2 && allSampleFlags[0] !== allSampleFlags[1];
+    const sampleDurationPresent = uniqueSampleDurations.size > 1;
+    const sampleSizePresent = uniqueSampleSizes.size > 1;
+    const sampleFlagsPresent = !firstSampleFlagsPresent && uniqueSampleFlags.size > 1;
+    const sampleCompositionTimeOffsetsPresent = uniqueSampleCompositionTimeOffsets.size > 1 || [...uniqueSampleCompositionTimeOffsets].some(x => x !== 0);
+    let flags = 0;
+    flags |= 0x0001; // Data offset present
+    flags |= 0x0004 * +firstSampleFlagsPresent; // First sample flags present
+    flags |= 0x0100 * +sampleDurationPresent; // Sample duration present
+    flags |= 0x0200 * +sampleSizePresent; // Sample size present
+    flags |= 0x0400 * +sampleFlagsPresent; // Sample flags present
+    flags |= 0x0800 * +sampleCompositionTimeOffsetsPresent; // Sample composition time offsets present
+    return fullBox('trun', 1, flags, [
+        u32(trackData.currentChunk.samples.length), // Sample count
+        u32(trackData.currentChunk.offset - trackData.currentChunk.moofOffset || 0), // Data offset
+        firstSampleFlagsPresent ? u32(allSampleFlags[0]) : [],
+        trackData.currentChunk.samples.map((_, i) => [
+            sampleDurationPresent ? u32(allSampleDurations[i]) : [], // Sample duration
+            sampleSizePresent ? u32(allSampleSizes[i]) : [], // Sample size
+            sampleFlagsPresent ? u32(allSampleFlags[i]) : [], // Sample flags
+            // Sample composition time offsets
+            sampleCompositionTimeOffsetsPresent ? i32(allSampleCompositionTimeOffsets[i]) : [],
+        ]),
+    ]);
+};
+/**
+ * Movie Fragment Random Access Box: For each track, provides pointers to sync samples within the file
+ * for random access.
+ */
+const mfra = (trackDatas) => {
+    return box('mfra', undefined, [
+        ...trackDatas.map(tfra),
+        mfro(),
+    ]);
+};
+/** Track Fragment Random Access Box: Provides pointers to sync samples within the file for random access. */
+const tfra = (trackData) => {
+    const version = 1; // Using this version allows us to use 64-bit time and offset values
+    return fullBox('tfra', version, 0, [
+        u32(trackData.track.id), // Track ID
+        u32(0b111111), // This specifies that traf number, trun number and sample number are 32-bit ints
+        u32(trackData.finalizedChunks.length), // Number of entries
+        trackData.finalizedChunks.map(chunk => [
+            u64(intoTimescale(chunk.samples[0].timestamp, trackData.timescale)), // Time (in presentation time)
+            u64(chunk.moofOffset), // moof offset
+            u32(chunk.trafIndex + 1), // traf number
+            u32(1), // trun number
+            u32(1), // Sample number
+        ]),
+    ]);
+};
+/**
+ * Movie Fragment Random Access Offset Box: Provides the size of the enclosing mfra box. This box can be used by readers
+ * to quickly locate the mfra box by searching from the end of the file.
+ */
+const mfro = () => {
+    return fullBox('mfro', 0, 0, [
+        // This value needs to be overwritten manually from the outside, where the actual size of the enclosing mfra box
+        // is known
+        u32(0), // Size
+    ]);
+};
+/** VTT Empty Cue Box */
+const vtte = () => box('vtte');
+/** VTT Cue Box */
+const vttc = (payload, timestamp, identifier, settings, sourceId) => box('vttc', undefined, [
+    sourceId !== null ? box('vsid', [i32(sourceId)]) : null,
+    identifier !== null ? box('iden', [...textEncoder.encode(identifier)]) : null,
+    timestamp !== null ? box('ctim', [...textEncoder.encode(formatSubtitleTimestamp(timestamp))]) : null,
+    settings !== null ? box('sttg', [...textEncoder.encode(settings)]) : null,
+    box('payl', [...textEncoder.encode(payload)]),
+]);
+/** VTT Additional Text Box */
+const vtta = (notes) => box('vtta', [...textEncoder.encode(notes)]);
+/** User Data Box */
+const udta = (muxer) => {
+    const boxes = [];
+    const metadataFormat = muxer.format._options.metadataFormat ?? 'auto';
+    const metadataTags = muxer.output._metadataTags;
+    // Depending on the format, metadata tags are written differently
+    if (metadataFormat === 'mdir' || (metadataFormat === 'auto' && !muxer.isQuickTime)) {
+        const metaBox = metaMdir(metadataTags);
+        if (metaBox)
+            boxes.push(metaBox);
+    }
+    else if (metadataFormat === 'mdta') {
+        const metaBox = metaMdta(metadataTags);
+        if (metaBox)
+            boxes.push(metaBox);
+    }
+    else if (metadataFormat === 'udta' || (metadataFormat === 'auto' && muxer.isQuickTime)) {
+        addQuickTimeMetadataTagBoxes(boxes, muxer.output._metadataTags);
+    }
+    if (boxes.length === 0) {
+        return null;
+    }
+    return box('udta', undefined, boxes);
+};
+const addQuickTimeMetadataTagBoxes = (boxes, tags) => {
+    // https://exiftool.org/TagNames/QuickTime.html (QuickTime UserData Tags)
+    // For QuickTime files, metadata tags are dumped into the udta box
+    for (const { key, value } of keyValueIterator(tags)) {
+        switch (key) {
+            case 'title':
+                {
+                    boxes.push(metadataTagStringBoxShort('©nam', value));
+                }
+                break;
+            case 'description':
+                {
+                    boxes.push(metadataTagStringBoxShort('©des', value));
+                }
+                break;
+            case 'artist':
+                {
+                    boxes.push(metadataTagStringBoxShort('©ART', value));
+                }
+                break;
+            case 'album':
+                {
+                    boxes.push(metadataTagStringBoxShort('©alb', value));
+                }
+                break;
+            case 'albumArtist':
+                {
+                    boxes.push(metadataTagStringBoxShort('albr', value));
+                }
+                break;
+            case 'genre':
+                {
+                    boxes.push(metadataTagStringBoxShort('©gen', value));
+                }
+                break;
+            case 'date':
+                {
+                    boxes.push(metadataTagStringBoxShort('©day', value.toISOString().slice(0, 10)));
+                }
+                break;
+            case 'comment':
+                {
+                    boxes.push(metadataTagStringBoxShort('©cmt', value));
+                }
+                break;
+            case 'lyrics':
+                {
+                    boxes.push(metadataTagStringBoxShort('©lyr', value));
+                }
+                break;
+            case 'raw':
+                break;
+            case 'discNumber':
+            case 'discsTotal':
+            case 'trackNumber':
+            case 'tracksTotal':
+            case 'beatsPerMinute':
+            case 'images':
+                break;
+            default: assertNever(key);
+        }
+    }
+    if (tags.raw) {
+        for (const key in tags.raw) {
+            const value = tags.raw[key];
+            if (value == null || key.length !== 4 || boxes.some(x => x.type === key)) {
+                continue;
+            }
+            if (typeof value === 'string') {
+                boxes.push(metadataTagStringBoxShort(key, value));
+            }
+            else if (value instanceof Uint8Array) {
+                boxes.push(box(key, Array.from(value)));
+            }
+        }
+    }
+};
+const metadataTagStringBoxShort = (name, value) => {
+    const encoded = textEncoder.encode(value);
+    return box(name, [
+        u16(encoded.length),
+        u16(getLanguageCodeInt('und')),
+        Array.from(encoded),
+    ]);
+};
+const DATA_BOX_MIME_TYPE_MAP = {
+    'image/jpeg': 13,
+    'image/png': 14,
+    'image/bmp': 27,
+};
+/**
+ * Generates key-value metadata for inclusion in the "meta" box.
+ */
+const generateMetadataPairs = (tags, isMdta) => {
+    const pairs = [];
+    // https://exiftool.org/TagNames/QuickTime.html (QuickTime ItemList Tags)
+    // This is the metadata format used for MP4 files
+    for (const { key, value } of keyValueIterator(tags)) {
+        switch (key) {
+            case 'title':
+                {
+                    pairs.push({ key: isMdta ? 'title' : '©nam', value: dataStringBoxLong(value) });
+                }
+                break;
+            case 'description':
+                {
+                    pairs.push({ key: isMdta ? 'description' : '©des', value: dataStringBoxLong(value) });
+                }
+                break;
+            case 'artist':
+                {
+                    pairs.push({ key: isMdta ? 'artist' : '©ART', value: dataStringBoxLong(value) });
+                }
+                break;
+            case 'album':
+                {
+                    pairs.push({ key: isMdta ? 'album' : '©alb', value: dataStringBoxLong(value) });
+                }
+                break;
+            case 'albumArtist':
+                {
+                    pairs.push({ key: isMdta ? 'album_artist' : 'aART', value: dataStringBoxLong(value) });
+                }
+                break;
+            case 'comment':
+                {
+                    pairs.push({ key: isMdta ? 'comment' : '©cmt', value: dataStringBoxLong(value) });
+                }
+                break;
+            case 'genre':
+                {
+                    pairs.push({ key: isMdta ? 'genre' : '©gen', value: dataStringBoxLong(value) });
+                }
+                break;
+            case 'beatsPerMinute':
+                {
+                    if (!isMdta) {
+                        pairs.push({ key: 'tmpo', value: box('data', [
+                                u32(21), // Type indicator
+                                u32(0), // Locale indicator
+                                u16(value),
+                            ]) });
+                    }
+                }
+                break;
+            case 'lyrics':
+                {
+                    pairs.push({ key: isMdta ? 'lyrics' : '©lyr', value: dataStringBoxLong(value) });
+                }
+                break;
+            case 'date':
+                {
+                    pairs.push({
+                        key: isMdta ? 'date' : '©day',
+                        value: dataStringBoxLong(value.toISOString().slice(0, 10)),
+                    });
+                }
+                break;
+            case 'images':
+                {
+                    for (const image of value) {
+                        if (image.kind !== 'coverFront') {
+                            continue;
+                        }
+                        pairs.push({ key: 'covr', value: box('data', [
+                                u32(DATA_BOX_MIME_TYPE_MAP[image.mimeType] ?? 0), // Type indicator
+                                u32(0), // Locale indicator
+                                Array.from(image.data), // Kinda slow, hopefully temp
+                            ]) });
+                    }
+                }
+                break;
+            case 'trackNumber':
+                {
+                    if (isMdta) {
+                        const string = tags.tracksTotal !== undefined
+                            ? `${value}/${tags.tracksTotal}`
+                            : value.toString();
+                        pairs.push({ key: 'track', value: dataStringBoxLong(string) });
+                    }
+                    else {
+                        pairs.push({ key: 'trkn', value: box('data', [
+                                u32(0), // 8 bytes empty
+                                u32(0),
+                                u16(0), // Empty
+                                u16(value),
+                                u16(tags.tracksTotal ?? 0),
+                                u16(0), // Empty
+                            ]) });
+                    }
+                }
+                break;
+            case 'discNumber':
+                {
+                    if (!isMdta) {
+                        // Only written for mdir
+                        pairs.push({ key: 'disc', value: box('data', [
+                                u32(0), // 8 bytes empty
+                                u32(0),
+                                u16(0), // Empty
+                                u16(value),
+                                u16(tags.discsTotal ?? 0),
+                                u16(0), // Empty
+                            ]) });
+                    }
+                }
+                break;
+            case 'tracksTotal':
+            case 'discsTotal':
+                break;
+            case 'raw':
+                break;
+            default: assertNever(key);
+        }
+    }
+    if (tags.raw) {
+        for (const key in tags.raw) {
+            const value = tags.raw[key];
+            if (value == null || (!isMdta && key.length !== 4) || pairs.some(x => x.key === key)) {
+                continue;
+            }
+            if (typeof value === 'string') {
+                pairs.push({ key, value: dataStringBoxLong(value) });
+            }
+            else if (value instanceof Uint8Array) {
+                pairs.push({ key, value: box('data', [
+                        u32(0), // Type indicator
+                        u32(0), // Locale indicator
+                        Array.from(value),
+                    ]) });
+            }
+            else if (value instanceof RichImageData) {
+                pairs.push({ key, value: box('data', [
+                        u32(DATA_BOX_MIME_TYPE_MAP[value.mimeType] ?? 0), // Type indicator
+                        u32(0), // Locale indicator
+                        Array.from(value.data), // Kinda slow, hopefully temp
+                    ]) });
+            }
+        }
+    }
+    return pairs;
+};
+/** Metadata Box (mdir format) */
+const metaMdir = (tags) => {
+    const pairs = generateMetadataPairs(tags, false);
+    if (pairs.length === 0) {
+        return null;
+    }
+    // fullBox format
+    return fullBox('meta', 0, 0, undefined, [
+        hdlr(false, 'mdir', '', 'appl'), // mdir handler
+        box('ilst', undefined, pairs.map(pair => box(pair.key, undefined, [pair.value]))), // Item list without keys box
+    ]);
+};
+/** Metadata Box (mdta format with keys box) */
+const metaMdta = (tags) => {
+    const pairs = generateMetadataPairs(tags, true);
+    if (pairs.length === 0) {
+        return null;
+    }
+    // box without version and flags
+    return box('meta', undefined, [
+        hdlr(false, 'mdta', ''), // mdta handler
+        fullBox('keys', 0, 0, [
+            u32(pairs.length),
+        ], pairs.map(pair => box('mdta', [
+            ...textEncoder.encode(pair.key),
+        ]))),
+        box('ilst', undefined, pairs.map((pair, i) => {
+            const boxName = String.fromCharCode(...u32(i + 1));
+            return box(boxName, undefined, [pair.value]);
+        })),
+    ]);
+};
+const dataStringBoxLong = (value) => {
+    return box('data', [
+        u32(1), // Type indicator (UTF-8)
+        u32(0), // Locale indicator
+        ...textEncoder.encode(value),
+    ]);
+};
+const videoCodecToBoxName = (codec, fullCodecString) => {
+    switch (codec) {
+        case 'avc': return fullCodecString.startsWith('avc3') ? 'avc3' : 'avc1';
+        case 'hevc': return 'hvc1';
+        case 'vp8': return 'vp08';
+        case 'vp9': return 'vp09';
+        case 'av1': return 'av01';
+        case 'prores': return fullCodecString;
+    }
+};
+const VIDEO_CODEC_TO_CONFIGURATION_BOX = {
+    avc: avcC,
+    hevc: hvcC,
+    vp8: vpcC,
+    vp9: vpcC,
+    av1: av1C,
+    prores: null,
+};
+const audioCodecToBoxName = (codec, fullCodecString, isQuickTime) => {
+    switch (codec) {
+        case 'aac': return 'mp4a';
+        case 'mp3': return 'mp4a';
+        case 'opus': return 'Opus';
+        case 'vorbis': return 'mp4a';
+        case 'flac': return 'fLaC';
+        case 'ulaw': return 'ulaw';
+        case 'alaw': return 'alaw';
+        case 'pcm-u8': return 'raw ';
+        case 'pcm-s8': return 'sowt';
+        case 'ac3': return 'ac-3';
+        case 'eac3': return 'ec-3';
+        case 'dts': return fullCodecString;
+    }
+    // Logic diverges here
+    if (isQuickTime) {
+        switch (codec) {
+            case 'pcm-s16': return 'sowt';
+            case 'pcm-s16be': return 'twos';
+            case 'pcm-s24': return 'in24';
+            case 'pcm-s24be': return 'in24';
+            case 'pcm-s32': return 'in32';
+            case 'pcm-s32be': return 'in32';
+            case 'pcm-f32': return 'fl32';
+            case 'pcm-f32be': return 'fl32';
+            case 'pcm-f64': return 'fl64';
+            case 'pcm-f64be': return 'fl64';
+        }
+    }
+    else {
+        switch (codec) {
+            case 'pcm-s16': return 'ipcm';
+            case 'pcm-s16be': return 'ipcm';
+            case 'pcm-s24': return 'ipcm';
+            case 'pcm-s24be': return 'ipcm';
+            case 'pcm-s32': return 'ipcm';
+            case 'pcm-s32be': return 'ipcm';
+            case 'pcm-f32': return 'fpcm';
+            case 'pcm-f32be': return 'fpcm';
+            case 'pcm-f64': return 'fpcm';
+            case 'pcm-f64be': return 'fpcm';
+        }
+    }
+};
+const audioCodecToConfigurationBox = (codec, isQuickTime) => {
+    switch (codec) {
+        case 'aac': return esds;
+        case 'mp3': return esds;
+        case 'opus': return dOps;
+        case 'vorbis': return esds;
+        case 'flac': return dfLa;
+        case 'ac3': return dac3;
+        case 'eac3': return dec3;
+        case 'dts': return ddts;
+    }
+    // Logic diverges here
+    if (isQuickTime) {
+        switch (codec) {
+            case 'pcm-s24': return wave;
+            case 'pcm-s24be': return wave;
+            case 'pcm-s32': return wave;
+            case 'pcm-s32be': return wave;
+            case 'pcm-f32': return wave;
+            case 'pcm-f32be': return wave;
+            case 'pcm-f64': return wave;
+            case 'pcm-f64be': return wave;
+        }
+    }
+    else {
+        switch (codec) {
+            case 'pcm-s16': return pcmC;
+            case 'pcm-s16be': return pcmC;
+            case 'pcm-s24': return pcmC;
+            case 'pcm-s24be': return pcmC;
+            case 'pcm-s32': return pcmC;
+            case 'pcm-s32be': return pcmC;
+            case 'pcm-f32': return pcmC;
+            case 'pcm-f32be': return pcmC;
+            case 'pcm-f64': return pcmC;
+            case 'pcm-f64be': return pcmC;
+        }
+    }
+    return null;
+};
+const SUBTITLE_CODEC_TO_BOX_NAME = {
+    webvtt: 'wvtt',
+};
+const SUBTITLE_CODEC_TO_CONFIGURATION_BOX = {
+    webvtt: vttC,
+};
+const getLanguageCodeInt = (code) => {
+    assert(code.length === 3);
+    let language = 0;
+    for (let i = 0; i < 3; i++) {
+        language <<= 5;
+        language += code.charCodeAt(i) - 0x60;
+    }
+    return language;
+};
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+class Writer {
+    constructor(target, isMonotonic) {
+        this.finalized = false;
+        this.started = false;
+        this.pos = 0;
+        this.trackedWrites = null;
+        this.trackedStart = -1;
+        this.trackedEnd = -1;
+        if (target._writerAcquired) {
+            throw new Error('Can\'t have multiple Writers for the same Target.');
+        }
+        this.target = target;
+        target._setMonotonicity(isMonotonic);
+        target._writerAcquired = true;
+    }
+    start() {
+        assert(!this.started);
+        this.target._start();
+        this.started = true;
+    }
+    /** Writes the given data to the target, at the current position. */
+    write(data) {
+        assert(this.started && !this.finalized);
+        this.maybeTrackWrites(data);
+        this.target._write(data, this.pos);
+        this.pos += data.byteLength;
+    }
+    /** Sets the current position for future writes to a new one. */
+    seek(newPos) {
+        this.pos = newPos;
+    }
+    /** Returns the current position. */
+    getPos() {
+        return this.pos;
+    }
+    /** Signals to the writer that it may be time to flush. */
+    async flush() {
+        assert(this.started && !this.finalized);
+        return this.target._flush();
+    }
+    /** Called after muxing has finished. */
+    async finalize() {
+        assert(this.started && !this.finalized);
+        await this.target._finalize();
+        this.finalized = true;
+    }
+    maybeTrackWrites(data) {
+        if (!this.trackedWrites) {
+            return;
+        }
+        // Handle negative relative write positions
+        let pos = this.getPos();
+        if (pos < this.trackedStart) {
+            if (pos + data.byteLength <= this.trackedStart) {
+                return;
+            }
+            data = data.subarray(this.trackedStart - pos);
+            pos = 0;
+        }
+        const neededSize = pos + data.byteLength - this.trackedStart;
+        let newLength = this.trackedWrites.byteLength;
+        while (newLength < neededSize) {
+            newLength *= 2;
+        }
+        // Check if we need to resize the buffer
+        if (newLength !== this.trackedWrites.byteLength) {
+            const copy = new Uint8Array(newLength);
+            copy.set(this.trackedWrites, 0);
+            this.trackedWrites = copy;
+        }
+        this.trackedWrites.set(data, pos - this.trackedStart);
+        this.trackedEnd = Math.max(this.trackedEnd, pos + data.byteLength);
+    }
+    startTrackingWrites() {
+        this.trackedWrites = new Uint8Array(2 ** 10);
+        this.trackedStart = this.getPos();
+        this.trackedEnd = this.trackedStart;
+    }
+    stopTrackingWrites() {
+        if (!this.trackedWrites) {
+            throw new Error('Internal error: Can\'t get tracked writes since nothing was tracked.');
+        }
+        const slice = this.trackedWrites.subarray(0, this.trackedEnd - this.trackedStart);
+        const result = {
+            data: slice,
+            start: this.trackedStart,
+            end: this.trackedEnd,
+        };
+        this.trackedWrites = null;
+        return result;
+    }
+}
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/**
+ * Base class for targets, specifying where output files are written.
+ * @group Output targets
+ * @public
+ */
+class Target extends EventEmitter {
+    constructor() {
+        super(...arguments);
+        /** @internal */
+        this._writerAcquired = false;
+        /** @internal */
+        this._monotonicity = null; // null = unknown
+        /**
+         * Called each time data is written to the target. Will be called with the byte range into which data was written.
+         *
+         * Use this callback to track the size of the output file as it grows. But be warned, this function is chatty and
+         * gets called *extremely* often.
+         *
+         * @deprecated Use `target.on('write', ({ start, end }) => ...)` instead.
+         */
+        this.onwrite = null;
+    }
+    /** @internal */
+    _setMonotonicity(monotonicity) {
+        if (this._monotonicity !== false) {
+            this._monotonicity = monotonicity;
+        }
+    }
+    /** @internal */
+    _dispatchWrite(start, end) {
+        // eslint-disable-next-line @typescript-eslint/no-deprecated
+        this.onwrite?.(start, end);
+        this._emit('write', { start, end });
+    }
+    /**
+     * Returns a new {@link RangedTarget} that writes data to this target using the given offset.
+     *
+     * Useful for writing a file into a section of a larger file.
+     */
+    slice(offset) {
+        if (!Number.isInteger(offset) || offset < 0) {
+            throw new TypeError('offset must be a non-negative integer.');
+        }
+        return new RangedTarget(this, offset);
+    }
+}
+const ARRAY_BUFFER_INITIAL_SIZE = 2 ** 16;
+const ARRAY_BUFFER_MAX_SIZE = 2 ** 32;
+/**
+ * A target that writes data directly into an ArrayBuffer in memory. Great for performance, but not suitable for very
+ * large files. The buffer will be available once the output has been finalized.
+ * @group Output targets
+ * @public
+ */
+class BufferTarget extends Target {
+    /** Creates a new {@link BufferTarget}. The buffer holding the data will be created and managed internally. */
+    constructor(options = {}) {
+        super();
+        /** Stores the final output buffer. Until the output is finalized, this will be `null`. */
+        this.buffer = null;
+        /** @internal */
+        this._maxPos = 0;
+        if (!options || typeof options !== 'object') {
+            throw new TypeError('BufferTarget options, when provided, must be an object.');
+        }
+        if (options.onFinalize !== undefined && typeof options.onFinalize !== 'function') {
+            throw new TypeError('options.onFinalize, when provided, must be a function.');
+        }
+        this._options = options;
+        this._supportsResize = 'resize' in new ArrayBuffer(0);
+        if (this._supportsResize) {
+            try {
+                // @ts-expect-error Don't want to bump "lib" in tsconfig
+                this._buffer = new ArrayBuffer(ARRAY_BUFFER_INITIAL_SIZE, { maxByteLength: ARRAY_BUFFER_MAX_SIZE });
+            }
+            catch {
+                this._buffer = new ArrayBuffer(ARRAY_BUFFER_INITIAL_SIZE);
+                this._supportsResize = false;
+            }
+        }
+        else {
+            this._buffer = new ArrayBuffer(ARRAY_BUFFER_INITIAL_SIZE);
+        }
+        this._bytes = new Uint8Array(this._buffer);
+    }
+    /** @internal */
+    _ensureSize(size) {
+        let newLength = this._buffer.byteLength;
+        while (newLength < size)
+            newLength *= 2;
+        if (newLength === this._buffer.byteLength)
+            return;
+        if (newLength > ARRAY_BUFFER_MAX_SIZE) {
+            throw new Error(`ArrayBuffer exceeded maximum size of ${ARRAY_BUFFER_MAX_SIZE} bytes. Please consider using another`
+                + ` target.`);
+        }
+        if (this._supportsResize) {
+            // Use resize if it exists
+            // @ts-expect-error Don't want to bump "lib" in tsconfig
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            this._buffer.resize(newLength);
+            // The Uint8Array scales automatically
+        }
+        else {
+            const newBuffer = new ArrayBuffer(newLength);
+            const newBytes = new Uint8Array(newBuffer);
+            newBytes.set(this._bytes, 0);
+            this._buffer = newBuffer;
+            this._bytes = newBytes;
+        }
+    }
+    /** @internal */
+    _start() { }
+    /** @internal */
+    _write(data, pos) {
+        this._ensureSize(pos + data.byteLength);
+        this._bytes.set(data, pos);
+        this._maxPos = Math.max(this._maxPos, pos + data.byteLength);
+        this._dispatchWrite(pos, pos + data.byteLength);
+    }
+    /** @internal */
+    async _flush() { }
+    /** @internal */
+    async _finalize() {
+        this.buffer = this._buffer.slice(0, this._maxPos);
+        if (this._options.onFinalize) {
+            await this._options.onFinalize(this.buffer);
+        }
+        this._emit('finalized');
+    }
+    /** @internal */
+    async _close() { }
+    /** @internal */
+    _getSlice(start, end) {
+        return this._bytes.slice(start, end);
+    }
+}
+/**
+ * A target that writes to a subrange (defined by an offset) of another, underlying target. Useful for writing a file
+ * into a section of a larger file.
+ * @group Output targets
+ * @public
+ */
+class RangedTarget extends Target {
+    /** @internal */
+    constructor(baseTarget, offset) {
+        super();
+        this._baseTarget = baseTarget;
+        this._offset = offset;
+    }
+    /** @internal */
+    _start() { }
+    /** @internal */
+    _write(data, pos) {
+        this._baseTarget._write(data, this._offset + pos);
+        this._dispatchWrite(pos, pos + data.byteLength);
+    }
+    /** @internal */
+    _flush() {
+        return this._baseTarget._flush();
+    }
+    /** @internal */
+    async _finalize() {
+        this._emit('finalized');
+    }
+    /** @internal */
+    async _close() { }
+    /** @internal */
+    _setMonotonicity(monotonicity) {
+        super._setMonotonicity(monotonicity);
+        this._baseTarget._setMonotonicity(monotonicity);
+    }
+}
+/**
+ * A special target for writing multi-file media where each file is uniquely identified by a path.
+ * @group Output targets
+ * @public
+ */
+class PathedTarget {
+    /** Creates a new {@link PathedTarget} from a root path and a callback. */
+    constructor(
+    /** The path that points to the root file; the entry file of the media. */
+    rootPath, 
+    /** The callback that is called for each file that needs to be written; must return a {@link Target}. */
+    getTarget) {
+        this.rootPath = rootPath;
+        this.getTarget = getTarget;
+        if (typeof rootPath !== 'string') {
+            throw new TypeError('rootPath must be a string.');
+        }
+        if (typeof getTarget !== 'function') {
+            throw new TypeError('getTarget must be a function.');
+        }
+    }
+}
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+const GLOBAL_TIMESCALE = 57600; // LCM of a bunch of common frame rates (24, 25, 30, 60, 144, ...)
+const TIMESTAMP_OFFSET = 2_082_844_800; // Seconds between Jan 1 1904 and Jan 1 1970
+const getTrackMetadata = (trackData) => {
+    const metadata = {};
+    const track = trackData.track;
+    if (track.metadata.name !== undefined) {
+        metadata.name = track.metadata.name;
+    }
+    return metadata;
+};
+const intoTimescale = (timeInSeconds, timescale, round = true) => {
+    const value = timeInSeconds * timescale;
+    return round ? Math.round(value) : value;
+};
+const presentationSpan = (trackData) => {
+    if (trackData.samples.length === 0) {
+        return 0;
+    }
+    let minTimestamp = Infinity;
+    let maxEndTimestamp = -Infinity;
+    for (let i = 0; i < trackData.samples.length; i++) {
+        const sample = trackData.samples[i];
+        if (sample.timestamp < minTimestamp) {
+            minTimestamp = sample.timestamp;
+        }
+        if (sample.timestamp + sample.duration > maxEndTimestamp) {
+            maxEndTimestamp = sample.timestamp + sample.duration;
+        }
+    }
+    if (minTimestamp === Infinity) {
+        return 0;
+    }
+    return maxEndTimestamp - minTimestamp;
+};
+class IsobmffMuxer extends Muxer {
+    constructor(output, format) {
+        super(output);
+        this.writer = null;
+        this.boxWriter = null;
+        this.initWriter = null;
+        this.initBoxWriter = null;
+        this.auxTarget = new BufferTarget();
+        this.auxWriter = new Writer(this.auxTarget, false);
+        this.auxBoxWriter = new IsobmffBoxWriter(this.auxWriter);
+        this.mdat = null;
+        this.ftypSize = null;
+        this.trackDatas = [];
+        this.allTracksKnown = promiseWithResolvers();
+        this.creationTime = Math.floor(Date.now() / 1000) + TIMESTAMP_OFFSET;
+        this.finalizedChunks = [];
+        this.wroteFragmentedHeader = false;
+        this.nextFragmentNumber = 1;
+        // Only relevant for fragmented files, to make sure new fragments start with the highest timestamp seen so far
+        this.maxWrittenTimestamp = -Infinity;
+        this.minWrittenTimestamp = Infinity;
+        this.maxWrittenEndTimestamp = -Infinity;
+        this.segmentHeaderSize = null;
+        this.format = format;
+        this.formatOptions = { ...format._options };
+        this.isQuickTime = format instanceof MovOutputFormat;
+        this.isCmaf = format instanceof CmafOutputFormat;
+        this.minimumFragmentDuration = this.formatOptions.minimumFragmentDuration
+            ?? (format instanceof CmafOutputFormat ? Infinity : 1);
+        this.auxWriter.start();
+    }
+    async start() {
+        const release = await this.mutex.acquire();
+        if (!this.isCmaf) {
+            this.writer = await this.output._getRootWriter(target => (this.formatOptions.fastStart !== undefined
+                ? this.formatOptions.fastStart === 'fragmented'
+                : target instanceof BufferTarget // Since if this is the case we'll use 'in-memory'
+            ));
+            this.boxWriter = new IsobmffBoxWriter(this.writer);
+            // If the fastStart option isn't defined, enable in-memory fast start if the target is an ArrayBuffer, as
+            // the memory usage remains identical
+            this.fastStart = this.formatOptions.fastStart
+                ?? (this.writer.target instanceof BufferTarget ? 'in-memory' : false);
+            this.isFragmented = this.fastStart === 'fragmented';
+        }
+        else {
+            this.fastStart = 'fragmented';
+            this.isFragmented = true;
+        }
+        if (this.isCmaf) {
+            if (!this.output._hasInitTarget()) {
+                throw new Error(`CMAF outputs require the initTarget field in OutputOptions to be set; the init segment`
+                    + ` will be written to it.`);
+            }
+            // Set up the init writer to which we'll write the init segment
+            const initTarget = await this.output._getInitTarget();
+            const initWriter = new Writer(initTarget, true);
+            initWriter.start();
+            this.initWriter = initWriter;
+            this.initBoxWriter = new IsobmffBoxWriter(initWriter);
+        }
+        const holdsAvc = this.output.tracks.some(x => x.isVideoTrack() && x.source._codec === 'avc');
+        // Write the header
+        {
+            const boxWriter = this.initBoxWriter ?? this.boxWriter;
+            assert(boxWriter);
+            if (this.formatOptions.onFtyp) {
+                boxWriter.writer.startTrackingWrites();
+            }
+            boxWriter.writeBox(ftyp({
+                isQuickTime: this.isQuickTime,
+                holdsAvc: holdsAvc,
+                fragmented: this.isFragmented,
+                cmaf: this.isCmaf,
+            }));
+            if (this.formatOptions.onFtyp) {
+                const { data, start } = boxWriter.writer.stopTrackingWrites();
+                this.formatOptions.onFtyp(data, start);
+            }
+            this.ftypSize = boxWriter.writer.getPos();
+            if (this.isCmaf) {
+                await this.initWriter.flush();
+            }
+        }
+        if (this.fastStart === 'in-memory') ;
+        else if (this.fastStart === 'reserve') {
+            // Validate that all tracks have set maximumPacketCount
+            for (const track of this.output.tracks) {
+                if (track.metadata.maximumPacketCount === undefined) {
+                    throw new Error('All tracks must specify maximumPacketCount in their metadata when using'
+                        + ' fastStart: \'reserve\'.');
+                }
+            }
+            // We'll start writing once we know all tracks
+        }
+        else if (this.isFragmented) ;
+        else {
+            assert(this.writer);
+            assert(this.boxWriter);
+            if (this.formatOptions.onMdat) {
+                this.writer.startTrackingWrites();
+            }
+            this.mdat = mdat(true); // Reserve large size by default, can refine this when finalizing.
+            this.boxWriter.writeBox(this.mdat);
+        }
+        await this.writer?.flush();
+        for (const track of this.output.tracks) {
+            if (track.isVideoTrack() && track.metadata.decoderConfig) {
+                this.getVideoTrackData(track, track.metadata.primingPacket ?? null, { decoderConfig: track.metadata.decoderConfig });
+            }
+            else if (track.isAudioTrack() && track.metadata.decoderConfig) {
+                this.getAudioTrackData(track, track.metadata.primingPacket ?? null, { decoderConfig: track.metadata.decoderConfig });
+            }
+        }
+        release();
+    }
+    allTracksAreKnown() {
+        for (const track of this.output.tracks) {
+            if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
+                return false; // We haven't seen a sample from this open track yet
+            }
+        }
+        return true;
+    }
+    async getMimeType() {
+        await this.allTracksKnown.promise;
+        const codecStrings = this.trackDatas.map((trackData) => {
+            if (trackData.type === 'video') {
+                return trackData.info.decoderConfig.codec;
+            }
+            else if (trackData.type === 'audio') {
+                return trackData.info.decoderConfig.codec;
+            }
+            else {
+                const map = {
+                    webvtt: 'wvtt',
+                };
+                return map[trackData.track.source._codec];
+            }
+        });
+        return buildIsobmffMimeType({
+            isQuickTime: this.isQuickTime,
+            hasVideo: this.trackDatas.some(x => x.type === 'video'),
+            hasAudio: this.trackDatas.some(x => x.type === 'audio'),
+            codecStrings,
+        });
+    }
+    getVideoTrackData(track, packet, meta) {
+        const existingTrackData = this.trackDatas.find(x => x.track === track);
+        if (existingTrackData) {
+            return existingTrackData;
+        }
+        validateVideoChunkMetadata(meta, track.source._codec);
+        assert(meta);
+        assert(meta.decoderConfig);
+        const decoderConfig = { ...meta.decoderConfig };
+        assert(decoderConfig.codedWidth !== undefined);
+        assert(decoderConfig.codedHeight !== undefined);
+        let requiresAnnexBTransformation = false;
+        if (track.source._codec === 'avc' && !decoderConfig.description) {
+            // ISOBMFF can only hold AVC in the AVCC format, not in Annex B, but the missing description indicates
+            // Annex B. This means we'll need to do some converterino.
+            if (!packet) {
+                throw new Error('No AVC description provided; you must therefore provide a priming packet.');
+            }
+            const decoderConfigurationRecord = extractAvcDecoderConfigurationRecord(packet.data);
+            if (!decoderConfigurationRecord) {
+                throw new Error('Couldn\'t extract an AVCDecoderConfigurationRecord from the AVC packet. Make sure the packets are'
+                    + ' in Annex B format (as specified in ITU-T-REC-H.264) when not providing a description, or'
+                    + ' provide a description (must be an AVCDecoderConfigurationRecord as specified in ISO 14496-15)'
+                    + ' and ensure the packets are in AVCC format.');
+            }
+            decoderConfig.description = serializeAvcDecoderConfigurationRecord(decoderConfigurationRecord);
+            requiresAnnexBTransformation = true;
+        }
+        else if (track.source._codec === 'hevc' && !decoderConfig.description) {
+            // ISOBMFF can only hold HEVC in the HEVC format, not in Annex B, but the missing description indicates
+            // Annex B. This means we'll need to do some converterino.
+            if (!packet) {
+                throw new Error('No HEVC description provided; you must therefore provide a priming packet.');
+            }
+            const decoderConfigurationRecord = extractHevcDecoderConfigurationRecord(packet.data);
+            if (!decoderConfigurationRecord) {
+                throw new Error('Couldn\'t extract an HEVCDecoderConfigurationRecord from the HEVC packet. Make sure the packets'
+                    + ' are in Annex B format (as specified in ITU-T-REC-H.265) when not providing a description, or'
+                    + ' provide a description (must be an HEVCDecoderConfigurationRecord as specified in ISO 14496-15)'
+                    + ' and ensure the packets are in HEVC format.');
+            }
+            decoderConfig.description = serializeHevcDecoderConfigurationRecord(decoderConfigurationRecord);
+            requiresAnnexBTransformation = true;
+        }
+        // The frame rate set by the user may not be an integer. Since timescale is an integer, we'll approximate the
+        // frame time (inverse of frame rate) with a rational number, then use that approximation's denominator
+        // as the timescale.
+        const timescale = computeRationalApproximation(1 / (track.metadata.frameRate ?? GLOBAL_TIMESCALE), 1e6).den;
+        const displayAspectWidth = decoderConfig.displayAspectWidth;
+        const displayAspectHeight = decoderConfig.displayAspectHeight;
+        const pixelAspectRatio = displayAspectWidth === undefined || displayAspectHeight === undefined
+            ? { num: 1, den: 1 }
+            : simplifyRational({
+                num: displayAspectWidth * decoderConfig.codedHeight,
+                den: displayAspectHeight * decoderConfig.codedWidth,
+            });
+        // Kicks for ProRes 4444.
+        const hasAlphaChannel = decoderConfig.codec === 'ap4h' || decoderConfig.codec === 'ap4x';
+        const newTrackData = {
+            muxer: this,
+            track,
+            type: 'video',
+            info: {
+                width: decoderConfig.codedWidth,
+                height: decoderConfig.codedHeight,
+                pixelAspectRatio,
+                decoderConfig: decoderConfig,
+                requiresAnnexBTransformation,
+                hasAlphaChannel,
+            },
+            timescale,
+            samples: [],
+            sampleQueue: [],
+            timestampProcessingQueue: [],
+            timeToSampleTable: [],
+            compositionTimeOffsetTable: [],
+            lastTimescaleUnits: null,
+            lastSample: null,
+            startTimestampOffset: null,
+            finalizedChunks: [],
+            currentChunk: null,
+            compactlyCodedChunkTable: [],
+            closed: false,
+            avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+            maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
+        };
+        this.trackDatas.push(newTrackData);
+        this.trackDatas.sort((a, b) => a.track.id - b.track.id);
+        if (this.allTracksAreKnown()) {
+            this.allTracksKnown.resolve();
+        }
+        return newTrackData;
+    }
+    getAudioTrackData(track, packet, meta) {
+        const existingTrackData = this.trackDatas.find(x => x.track === track);
+        if (existingTrackData) {
+            return existingTrackData;
+        }
+        validateAudioChunkMetadata(meta, track.source._codec);
+        assert(meta);
+        assert(meta.decoderConfig);
+        const decoderConfig = { ...meta.decoderConfig };
+        let requiresAdtsStripping = false;
+        if (track.source._codec === 'aac' && !decoderConfig.description) {
+            // ISOBMFF can only hold AAC in raw format, not ADTS, but the missing description indicates ADTS.
+            // Parse the first packet to extract the AudioSpecificConfig.
+            if (!packet) {
+                throw new Error('No AAC description provided; you must therefore provide a priming packet.');
+            }
+            const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packet.data));
+            if (!adtsFrame) {
+                throw new Error('Couldn\'t parse ADTS header from the AAC packet. Make sure the packets are in ADTS format'
+                    + ' (as specified in ISO 13818-7) when not providing a description, or provide a description'
+                    + ' (must be an AudioSpecificConfig as specified in ISO 14496-3) and ensure the packets'
+                    + ' are raw AAC data.');
+            }
+            const sampleRate = aacFrequencyTable[adtsFrame.samplingFrequencyIndex];
+            const numberOfChannels = aacChannelMap[adtsFrame.channelConfiguration];
+            if (sampleRate === undefined || numberOfChannels === undefined) {
+                throw new Error('Invalid ADTS frame header.');
+            }
+            decoderConfig.description = buildAacAudioSpecificConfig({
+                objectType: adtsFrame.objectType,
+                outputSampleRate: sampleRate,
+                outputNumberOfChannels: numberOfChannels,
+            });
+            requiresAdtsStripping = true;
+        }
+        if (!packet) {
+            if (track.source._codec === 'ac3' || track.source._codec === 'eac3') {
+                throw new Error('AC-3/E-AC-3 require a priming packet.');
+            }
+            if (track.source._codec === 'dts') {
+                throw new Error('DTS requires a priming packet.');
+            }
+        }
+        const newTrackData = {
+            muxer: this,
+            track,
+            type: 'audio',
+            info: {
+                numberOfChannels: meta.decoderConfig.numberOfChannels,
+                sampleRate: meta.decoderConfig.sampleRate,
+                decoderConfig,
+                requiresPcmTransformation: !this.isFragmented
+                    && PCM_AUDIO_CODECS.includes(track.source._codec),
+                expectedNextPcmPacketTimestamp: null,
+                requiresAdtsStripping,
+                primingPacket: packet,
+            },
+            timescale: decoderConfig.sampleRate,
+            samples: [],
+            sampleQueue: [],
+            timestampProcessingQueue: [],
+            timeToSampleTable: [],
+            compositionTimeOffsetTable: [],
+            lastTimescaleUnits: null,
+            lastSample: null,
+            startTimestampOffset: null,
+            finalizedChunks: [],
+            currentChunk: null,
+            compactlyCodedChunkTable: [],
+            closed: false,
+            avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+            maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
+        };
+        this.trackDatas.push(newTrackData);
+        this.trackDatas.sort((a, b) => a.track.id - b.track.id);
+        if (this.allTracksAreKnown()) {
+            this.allTracksKnown.resolve();
+        }
+        return newTrackData;
+    }
+    getSubtitleTrackData(track, meta) {
+        const existingTrackData = this.trackDatas.find(x => x.track === track);
+        if (existingTrackData) {
+            return existingTrackData;
+        }
+        validateSubtitleMetadata(meta);
+        assert(meta);
+        assert(meta.config);
+        const newTrackData = {
+            muxer: this,
+            track,
+            type: 'subtitle',
+            info: {
+                config: meta.config,
+            },
+            timescale: 1000, // Reasonable
+            samples: [],
+            sampleQueue: [],
+            timestampProcessingQueue: [],
+            timeToSampleTable: [],
+            compositionTimeOffsetTable: [],
+            lastTimescaleUnits: null,
+            lastSample: null,
+            startTimestampOffset: null,
+            finalizedChunks: [],
+            currentChunk: null,
+            compactlyCodedChunkTable: [],
+            closed: false,
+            avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
+            maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
+            lastCueEndTimestamp: null,
+            cueQueue: [],
+            nextSourceId: 0,
+            cueToSourceId: new WeakMap(),
+        };
+        this.trackDatas.push(newTrackData);
+        this.trackDatas.sort((a, b) => a.track.id - b.track.id);
+        if (this.allTracksAreKnown()) {
+            this.allTracksKnown.resolve();
+        }
+        return newTrackData;
+    }
+    async addEncodedVideoPacket(track, packet, meta) {
+        const release = await this.mutex.acquire();
+        try {
+            const trackData = this.getVideoTrackData(track, packet, meta);
+            let packetData = packet.data;
+            if (trackData.info.requiresAnnexBTransformation) {
+                const nalUnits = [...iterateNalUnitsInAnnexB(packetData)]
+                    .map(loc => packetData.subarray(loc.offset, loc.offset + loc.length));
+                if (nalUnits.length === 0) {
+                    // It's not valid Annex B data
+                    throw new Error('Failed to transform packet data. Make sure all packets are provided in Annex B format, as'
+                        + ' specified in ITU-T-REC-H.264 and ITU-T-REC-H.265.');
+                }
+                // We don't strip things like SPS or PPS NALUs here, mainly because they can also appear in the middle
+                // of a stream and potentially modify the parameters of it. So, let's just leave them in to be sure.
+                packetData = concatNalUnitsInLengthPrefixed(nalUnits, 4);
+            }
+            this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
+            const internalSample = this.createSampleForTrack(trackData, packetData, packet.timestamp, packet.duration, packet.type);
+            await this.registerSample(trackData, internalSample);
+        }
+        finally {
+            release();
+        }
+    }
+    async addEncodedAudioPacket(track, packet, meta) {
+        const release = await this.mutex.acquire();
+        try {
+            const trackData = this.getAudioTrackData(track, packet, meta);
+            let packetData = packet.data;
+            if (trackData.info.requiresAdtsStripping) {
+                const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
+                if (!adtsFrame) {
+                    throw new Error('Expected ADTS frame, didn\'t get one.');
+                }
+                const headerLength = adtsFrame.crcCheck === null
+                    ? MIN_ADTS_FRAME_HEADER_SIZE
+                    : MAX_ADTS_FRAME_HEADER_SIZE;
+                packetData = packetData.subarray(headerLength);
+            }
+            this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
+            let timestamp = packet.timestamp;
+            let duration = packet.duration;
+            if (trackData.info.requiresPcmTransformation) {
+                // Packets may have only approximate timestamp/duration information, but for our PCM logic, we need it
+                // to be precise. So here, we refine the values.
+                const pcmInfo = parsePcmCodec(trackData.info.decoderConfig.codec);
+                const frameSize = pcmInfo.sampleSize * trackData.info.numberOfChannels;
+                // Compute the precise duration
+                duration = packetData.byteLength / frameSize / trackData.info.sampleRate;
+                if (trackData.info.expectedNextPcmPacketTimestamp !== null) {
+                    const diff = timestamp - trackData.info.expectedNextPcmPacketTimestamp;
+                    if (diff < 0.01) {
+                        timestamp = trackData.info.expectedNextPcmPacketTimestamp;
+                    }
+                    else {
+                        const paddedDuration = await this.padWithSilence(trackData, trackData.info.expectedNextPcmPacketTimestamp, diff);
+                        timestamp = trackData.info.expectedNextPcmPacketTimestamp + paddedDuration;
+                    }
+                }
+                trackData.info.expectedNextPcmPacketTimestamp = timestamp + duration;
+            }
+            const internalSample = this.createSampleForTrack(trackData, packetData, timestamp, duration, packet.type);
+            await this.registerSample(trackData, internalSample);
+        }
+        finally {
+            release();
+        }
+    }
+    async padWithSilence(trackData, timestamp, duration) {
+        const deltaInTimescale = intoTimescale(duration, trackData.timescale);
+        duration = deltaInTimescale / trackData.timescale;
+        if (deltaInTimescale > 0) {
+            const { sampleSize, silentValue } = parsePcmCodec(trackData.info.decoderConfig.codec);
+            const samplesNeeded = deltaInTimescale * trackData.info.numberOfChannels;
+            const data = new Uint8Array(sampleSize * samplesNeeded).fill(silentValue);
+            const paddingSample = this.createSampleForTrack(trackData, new Uint8Array(data.buffer), timestamp, duration, 'key');
+            await this.registerSample(trackData, paddingSample);
+        }
+        return duration;
+    }
+    async addSubtitleCue(track, cue, meta) {
+        const release = await this.mutex.acquire();
+        try {
+            const trackData = this.getSubtitleTrackData(track, meta);
+            this.validateTimestamp(trackData.track, cue.timestamp, true);
+            if (track.source._codec === 'webvtt') {
+                trackData.cueQueue.push(cue);
+                await this.processWebVTTCues(trackData, cue.timestamp);
+            }
+            else {
+                // TODO
+            }
+        }
+        finally {
+            release();
+        }
+    }
+    async processWebVTTCues(trackData, until) {
+        // WebVTT cues need to undergo special processing as empty sections need to be padded out with samples, and
+        // overlapping samples require special logic. The algorithm produces the format specified in ISO 14496-30.
+        while (trackData.cueQueue.length > 0) {
+            trackData.lastCueEndTimestamp ??= Math.min(0, trackData.cueQueue[0].timestamp);
+            const timestamps = new Set([]);
+            for (const cue of trackData.cueQueue) {
+                assert(cue.timestamp <= until);
+                assert(trackData.lastCueEndTimestamp <= cue.timestamp + cue.duration);
+                timestamps.add(Math.max(cue.timestamp, trackData.lastCueEndTimestamp)); // Start timestamp
+                timestamps.add(cue.timestamp + cue.duration); // End timestamp
+            }
+            const sortedTimestamps = [...timestamps].sort((a, b) => a - b);
+            // These are the timestamps of the next sample we'll create:
+            const sampleStart = sortedTimestamps[0];
+            const sampleEnd = sortedTimestamps[1] ?? sampleStart;
+            if (until < sampleEnd) {
+                break;
+            }
+            // We may need to pad out empty space with an vtte box
+            if (trackData.lastCueEndTimestamp < sampleStart) {
+                this.auxWriter.seek(0);
+                const box = vtte();
+                this.auxBoxWriter.writeBox(box);
+                const body = this.auxTarget._getSlice(0, this.auxWriter.getPos());
+                const sample = this.createSampleForTrack(trackData, body, trackData.lastCueEndTimestamp, sampleStart - trackData.lastCueEndTimestamp, 'key');
+                await this.registerSample(trackData, sample);
+                trackData.lastCueEndTimestamp = sampleStart;
+            }
+            this.auxWriter.seek(0);
+            for (let i = 0; i < trackData.cueQueue.length; i++) {
+                const cue = trackData.cueQueue[i];
+                if (cue.timestamp >= sampleEnd) {
+                    break;
+                }
+                inlineTimestampRegex.lastIndex = 0;
+                const containsTimestamp = inlineTimestampRegex.test(cue.text);
+                const endTimestamp = cue.timestamp + cue.duration;
+                let sourceId = trackData.cueToSourceId.get(cue);
+                if (sourceId === undefined && sampleEnd < endTimestamp) {
+                    // We know this cue will appear in more than one sample, therefore we need to mark it with a
+                    // unique ID
+                    sourceId = trackData.nextSourceId++;
+                    trackData.cueToSourceId.set(cue, sourceId);
+                }
+                if (cue.notes) {
+                    // Any notes/comments are included in a special vtta box
+                    const box = vtta(cue.notes);
+                    this.auxBoxWriter.writeBox(box);
+                }
+                const box = vttc(cue.text, containsTimestamp ? sampleStart : null, cue.identifier ?? null, cue.settings ?? null, sourceId ?? null);
+                this.auxBoxWriter.writeBox(box);
+                if (endTimestamp === sampleEnd) {
+                    // The cue won't appear in any future sample, so we're done with it
+                    trackData.cueQueue.splice(i--, 1);
+                }
+            }
+            const body = this.auxTarget._getSlice(0, this.auxWriter.getPos());
+            const sample = this.createSampleForTrack(trackData, body, sampleStart, sampleEnd - sampleStart, 'key');
+            await this.registerSample(trackData, sample);
+            trackData.lastCueEndTimestamp = sampleEnd;
+        }
+    }
+    createSampleForTrack(trackData, data, timestamp, duration, type) {
+        const sample = {
+            timestamp,
+            decodeTimestamp: timestamp, // This may be refined later
+            duration,
+            data,
+            size: data.byteLength,
+            type,
+            timescaleUnitsToNextSample: intoTimescale(duration, trackData.timescale), // Will be refined
+        };
+        return sample;
+    }
+    processTimestamps(trackData, nextSample) {
+        if (trackData.timestampProcessingQueue.length === 0) {
+            return;
+        }
+        if (trackData.type === 'audio' && trackData.info.requiresPcmTransformation) {
+            assert(!this.isFragmented);
+            // The first timestamp is the lowest
+            trackData.startTimestampOffset ??= trackData.timestampProcessingQueue[0].timestamp;
+            let totalDuration = 0;
+            // Compute the total duration in the track timescale (which is equal to the amount of PCM audio samples)
+            // and simply say that's how many new samples there are.
+            for (let i = 0; i < trackData.timestampProcessingQueue.length; i++) {
+                const sample = trackData.timestampProcessingQueue[i];
+                const duration = intoTimescale(sample.duration, trackData.timescale);
+                totalDuration += duration;
+            }
+            if (trackData.timeToSampleTable.length === 0) {
+                trackData.timeToSampleTable.push({
+                    sampleCount: totalDuration,
+                    sampleDelta: 1,
+                });
+            }
+            else {
+                const lastEntry = last(trackData.timeToSampleTable);
+                lastEntry.sampleCount += totalDuration;
+            }
+            trackData.timestampProcessingQueue.length = 0;
+            return;
+        }
+        const sortedTimestamps = trackData.timestampProcessingQueue.map(x => x.timestamp).sort((a, b) => a - b);
+        if (this.isFragmented) {
+            trackData.startTimestampOffset ??= Math.min(sortedTimestamps[0], 0);
+        }
+        else {
+            trackData.startTimestampOffset ??= sortedTimestamps[0];
+        }
+        for (let i = 0; i < trackData.timestampProcessingQueue.length; i++) {
+            const sample = trackData.timestampProcessingQueue[i];
+            // Since the user only supplies presentation time, but these may be out of order, we reverse-engineer from
+            // that a sensible decode timestamp. The notion of a decode timestamp doesn't really make sense
+            // (presentation timestamp & decode order are all you need), but it is a concept in ISOBMFF so we need to
+            // model it.
+            sample.decodeTimestamp = sortedTimestamps[i];
+            const sampleCompositionTimeOffset = intoTimescale(sample.timestamp - sample.decodeTimestamp, trackData.timescale);
+            const durationInTimescale = intoTimescale(sample.duration, trackData.timescale);
+            if (trackData.lastTimescaleUnits !== null) {
+                assert(trackData.lastSample);
+                const timescaleUnits = intoTimescale(sample.decodeTimestamp, trackData.timescale, false);
+                const delta = Math.round(timescaleUnits - trackData.lastTimescaleUnits);
+                assert(delta >= 0);
+                trackData.lastTimescaleUnits += delta;
+                trackData.lastSample.timescaleUnitsToNextSample = delta;
+                if (!this.isFragmented) {
+                    let lastTableEntry = last(trackData.timeToSampleTable);
+                    assert(lastTableEntry);
+                    if (lastTableEntry.sampleCount === 1) {
+                        lastTableEntry.sampleDelta = delta;
+                        const entryBefore = trackData.timeToSampleTable[trackData.timeToSampleTable.length - 2];
+                        if (entryBefore && entryBefore.sampleDelta === delta) {
+                            // If the delta is the same as the previous one, merge the two entries
+                            entryBefore.sampleCount++;
+                            trackData.timeToSampleTable.pop();
+                            lastTableEntry = entryBefore;
+                        }
+                    }
+                    else if (lastTableEntry.sampleDelta !== delta) {
+                        // The delta has changed, so we need a new entry to reach the current sample
+                        lastTableEntry.sampleCount--;
+                        trackData.timeToSampleTable.push(lastTableEntry = {
+                            sampleCount: 1,
+                            sampleDelta: delta,
+                        });
+                    }
+                    if (lastTableEntry.sampleDelta === durationInTimescale) {
+                        // The sample's duration matches the delta, so we can increment the count
+                        lastTableEntry.sampleCount++;
+                    }
+                    else {
+                        // Add a new entry in order to maintain the last sample's true duration
+                        trackData.timeToSampleTable.push({
+                            sampleCount: 1,
+                            sampleDelta: durationInTimescale,
+                        });
+                    }
+                    const lastCompositionTimeOffsetTableEntry = last(trackData.compositionTimeOffsetTable);
+                    assert(lastCompositionTimeOffsetTableEntry);
+                    if (lastCompositionTimeOffsetTableEntry.sampleCompositionTimeOffset === sampleCompositionTimeOffset) {
+                        // Simply increment the count
+                        lastCompositionTimeOffsetTableEntry.sampleCount++;
+                    }
+                    else {
+                        // The composition time offset has changed, so create a new entry with the new composition time
+                        // offset
+                        trackData.compositionTimeOffsetTable.push({
+                            sampleCount: 1,
+                            sampleCompositionTimeOffset: sampleCompositionTimeOffset,
+                        });
+                    }
+                }
+            }
+            else {
+                // Decode timestamp of the first sample
+                trackData.lastTimescaleUnits = intoTimescale(sample.decodeTimestamp, trackData.timescale, false);
+                if (!this.isFragmented) {
+                    trackData.timeToSampleTable.push({
+                        sampleCount: 1,
+                        sampleDelta: durationInTimescale,
+                    });
+                    trackData.compositionTimeOffsetTable.push({
+                        sampleCount: 1,
+                        sampleCompositionTimeOffset: sampleCompositionTimeOffset,
+                    });
+                }
+            }
+            trackData.lastSample = sample;
+        }
+        trackData.timestampProcessingQueue.length = 0;
+        assert(trackData.lastSample);
+        assert(trackData.lastTimescaleUnits !== null);
+        if (nextSample !== undefined && trackData.lastSample.timescaleUnitsToNextSample === 0) {
+            assert(nextSample.type === 'key');
+            // Given the next sample, we can make a guess about the duration of the last sample. This avoids having
+            // the last sample's duration in each fragment be "0" for fragmented files. The guess we make here is
+            // actually correct most of the time, since typically, no delta frame with a lower timestamp follows the key
+            // frame (although it can happen).
+            const timescaleUnits = intoTimescale(nextSample.timestamp, trackData.timescale, false);
+            const delta = Math.round(timescaleUnits - trackData.lastTimescaleUnits);
+            trackData.lastSample.timescaleUnitsToNextSample = delta;
+        }
+    }
+    async registerSample(trackData, sample) {
+        if (sample.type === 'key') {
+            this.processTimestamps(trackData, sample);
+        }
+        trackData.timestampProcessingQueue.push(sample);
+        if (this.isFragmented) {
+            trackData.sampleQueue.push(sample);
+            await this.interleaveSamples();
+        }
+        else if (this.fastStart === 'reserve') {
+            await this.registerSampleFastStartReserve(trackData, sample);
+        }
+        else {
+            await this.addSampleToTrack(trackData, sample);
+        }
+    }
+    async addSampleToTrack(trackData, sample) {
+        if (!this.isFragmented) {
+            trackData.samples.push(sample);
+            if (this.fastStart === 'reserve') {
+                const maximumPacketCount = trackData.track.metadata.maximumPacketCount;
+                assert(maximumPacketCount !== undefined);
+                if (trackData.samples.length > maximumPacketCount) {
+                    throw new Error(`Track #${trackData.track.id} has already reached the maximum packet count`
+                        + ` (${maximumPacketCount}). Either add less packets or increase the maximum packet count.`);
+                }
+            }
+        }
+        let beginNewChunk = false;
+        if (!trackData.currentChunk) {
+            beginNewChunk = true;
+        }
+        else {
+            // Timestamp don't need to be monotonic (think B-frames), so we may need to update the start timestamp of
+            // the chunk
+            trackData.currentChunk.startTimestamp = Math.min(trackData.currentChunk.startTimestamp, sample.timestamp);
+            const currentChunkDuration = sample.timestamp - trackData.currentChunk.startTimestamp;
+            if (this.isFragmented) {
+                // We can only finalize this fragment (and begin a new one) if we know that each track will be able to
+                // start the new one with a key frame.
+                const keyFrameQueuedEverywhere = this.trackDatas.every((otherTrackData) => {
+                    if (trackData === otherTrackData) {
+                        return sample.type === 'key';
+                    }
+                    const firstQueuedSample = otherTrackData.sampleQueue[0];
+                    if (firstQueuedSample) {
+                        return firstQueuedSample.type === 'key';
+                    }
+                    return otherTrackData.closed;
+                });
+                if (currentChunkDuration >= this.minimumFragmentDuration
+                    && keyFrameQueuedEverywhere
+                    && sample.timestamp > this.maxWrittenTimestamp) {
+                    beginNewChunk = true;
+                    await this.finalizeFragment();
+                }
+            }
+            else {
+                beginNewChunk = currentChunkDuration >= 0.5; // Chunk is long enough, we need a new one
+            }
+        }
+        if (beginNewChunk) {
+            if (trackData.currentChunk) {
+                await this.finalizeCurrentChunk(trackData);
+            }
+            trackData.currentChunk = {
+                startTimestamp: sample.timestamp,
+                samples: [],
+                offset: null,
+                moofOffset: null,
+                trafIndex: null,
+            };
+        }
+        assert(trackData.currentChunk);
+        trackData.currentChunk.samples.push(sample);
+        if (this.isFragmented) {
+            this.maxWrittenTimestamp = Math.max(this.maxWrittenTimestamp, sample.timestamp);
+            this.maxWrittenEndTimestamp = Math.max(this.maxWrittenEndTimestamp, sample.timestamp + sample.duration);
+            this.minWrittenTimestamp = Math.min(this.minWrittenTimestamp, sample.timestamp);
+        }
+    }
+    async finalizeCurrentChunk(trackData) {
+        assert(!this.isFragmented);
+        assert(this.writer);
+        if (!trackData.currentChunk)
+            return;
+        trackData.finalizedChunks.push(trackData.currentChunk);
+        this.finalizedChunks.push(trackData.currentChunk);
+        let sampleCount = trackData.currentChunk.samples.length;
+        if (trackData.type === 'audio' && trackData.info.requiresPcmTransformation) {
+            sampleCount = trackData.currentChunk.samples
+                .reduce((acc, sample) => acc + intoTimescale(sample.duration, trackData.timescale), 0);
+        }
+        if (trackData.compactlyCodedChunkTable.length === 0
+            || last(trackData.compactlyCodedChunkTable).samplesPerChunk !== sampleCount) {
+            trackData.compactlyCodedChunkTable.push({
+                firstChunk: trackData.finalizedChunks.length, // 1-indexed
+                samplesPerChunk: sampleCount,
+            });
+        }
+        if (this.fastStart === 'in-memory') {
+            trackData.currentChunk.offset = 0; // We'll compute the proper offset when finalizing
+            return;
+        }
+        // Write out the data
+        trackData.currentChunk.offset = this.writer.getPos();
+        for (const sample of trackData.currentChunk.samples) {
+            assert(sample.data);
+            this.writer.write(sample.data);
+            sample.data = null; // Can be GC'd
+        }
+        await this.writer.flush();
+    }
+    async interleaveSamples(isFinalCall = false) {
+        assert(this.isFragmented);
+        if (!isFinalCall && !this.allTracksAreKnown()) {
+            return; // We can't interleave yet as we don't yet know how many tracks we'll truly have
+        }
+        outer: while (true) {
+            let trackWithMinTimestamp = null;
+            let minTimestamp = Infinity;
+            for (const trackData of this.trackDatas) {
+                if (!isFinalCall && trackData.sampleQueue.length === 0 && !trackData.closed) {
+                    break outer;
+                }
+                if (trackData.sampleQueue.length > 0 && trackData.sampleQueue[0].timestamp < minTimestamp) {
+                    trackWithMinTimestamp = trackData;
+                    minTimestamp = trackData.sampleQueue[0].timestamp;
+                }
+            }
+            if (!trackWithMinTimestamp) {
+                break;
+            }
+            const sample = trackWithMinTimestamp.sampleQueue.shift();
+            await this.addSampleToTrack(trackWithMinTimestamp, sample);
+        }
+    }
+    async finalizeFragment(flushWriter = !this.isCmaf) {
+        assert(this.isFragmented);
+        if (!this.wroteFragmentedHeader) {
+            this.wroteFragmentedHeader = true;
+            const boxWriter = this.initBoxWriter ?? this.boxWriter;
+            assert(boxWriter);
+            if (this.formatOptions.onMoov) {
+                boxWriter.writer.startTrackingWrites();
+            }
+            this.ensureOneEnabledTrack();
+            // Write the moov box now that we have all decoder configs
+            const movieBox = moov(this);
+            boxWriter.writeBox(movieBox);
+            if (this.formatOptions.onMoov) {
+                const { data, start } = boxWriter.writer.stopTrackingWrites();
+                this.formatOptions.onMoov(data, start);
+            }
+            if (this.isCmaf) {
+                assert(this.initWriter);
+                await this.initWriter.flush();
+                await this.initWriter.finalize(); // Init segment is done
+                // Only now, init the main writer; this way the init writer is fully done before the main writer is
+                // even acquired
+                this.writer = await this.output._getRootWriter(true);
+                this.boxWriter = new IsobmffBoxWriter(this.writer);
+                const stypSize = this.boxWriter.measureBox(styp());
+                const sidxSize = this.boxWriter.measureBox(sidx(this, 0));
+                this.segmentHeaderSize = stypSize + sidxSize;
+                this.writer.seek(this.segmentHeaderSize); // Make room for the header to be written later
+            }
+        }
+        assert(this.writer);
+        assert(this.boxWriter);
+        // Not all tracks need to be present in every fragment
+        const tracksInFragment = this.trackDatas.filter(x => x.currentChunk);
+        if (tracksInFragment.length === 0) {
+            // Zero tracks in this fragment and thus no fragment data
+            if (flushWriter) {
+                await this.writer.flush();
+            }
+            return;
+        }
+        const fragmentNumber = this.nextFragmentNumber++;
+        // Create an initial moof box and measure it; we need this to know where the following mdat box will begin
+        const moofBox = moof(fragmentNumber, tracksInFragment);
+        const moofOffset = this.writer.getPos();
+        const mdatStartPos = moofOffset + this.boxWriter.measureBox(moofBox);
+        let currentPos = mdatStartPos + MIN_BOX_HEADER_SIZE;
+        let fragmentStartTimestamp = Infinity;
+        for (let i = 0; i < tracksInFragment.length; i++) {
+            const trackData = tracksInFragment[i];
+            assert(trackData.currentChunk);
+            assert(trackData.startTimestampOffset !== null);
+            trackData.currentChunk.offset = currentPos;
+            trackData.currentChunk.moofOffset = moofOffset;
+            trackData.currentChunk.trafIndex = i;
+            trackData.currentChunk.startTimestamp -= trackData.startTimestampOffset;
+            for (const sample of trackData.currentChunk.samples) {
+                currentPos += sample.size;
+                sample.timestamp -= trackData.startTimestampOffset;
+                sample.decodeTimestamp -= trackData.startTimestampOffset;
+            }
+            fragmentStartTimestamp = Math.min(fragmentStartTimestamp, trackData.currentChunk.startTimestamp);
+        }
+        const mdatSize = currentPos - mdatStartPos;
+        const needsLargeMdatSize = mdatSize >= 2 ** 32;
+        if (needsLargeMdatSize) {
+            // Shift all offsets by 8. Previously, all chunks were shifted assuming the large box size, but due to what
+            // I suspect is a bug in WebKit, it failed in Safari (when livestreaming with MSE, not for static playback).
+            for (const trackData of tracksInFragment) {
+                trackData.currentChunk.offset += MAX_BOX_HEADER_SIZE - MIN_BOX_HEADER_SIZE;
+            }
+        }
+        if (this.formatOptions.onMoof) {
+            this.writer.startTrackingWrites();
+        }
+        const newMoofBox = moof(fragmentNumber, tracksInFragment);
+        this.boxWriter.writeBox(newMoofBox);
+        if (this.formatOptions.onMoof) {
+            const { data, start } = this.writer.stopTrackingWrites();
+            this.formatOptions.onMoof(data, start, fragmentStartTimestamp);
+        }
+        assert(this.writer.getPos() === mdatStartPos);
+        if (this.formatOptions.onMdat) {
+            this.writer.startTrackingWrites();
+        }
+        const mdatBox = mdat(needsLargeMdatSize);
+        mdatBox.size = mdatSize;
+        this.boxWriter.writeBox(mdatBox);
+        this.writer.seek(mdatStartPos + (needsLargeMdatSize ? MAX_BOX_HEADER_SIZE : MIN_BOX_HEADER_SIZE));
+        // Write sample data
+        for (const trackData of tracksInFragment) {
+            for (const sample of trackData.currentChunk.samples) {
+                this.writer.write(sample.data);
+                sample.data = null; // Can be GC'd
+            }
+        }
+        if (this.formatOptions.onMdat) {
+            const { data, start } = this.writer.stopTrackingWrites();
+            this.formatOptions.onMdat(data, start);
+        }
+        for (const trackData of tracksInFragment) {
+            trackData.finalizedChunks.push(trackData.currentChunk);
+            this.finalizedChunks.push(trackData.currentChunk);
+            trackData.currentChunk = null;
+        }
+        if (flushWriter) {
+            await this.writer.flush();
+        }
+    }
+    async registerSampleFastStartReserve(trackData, sample) {
+        if (this.allTracksAreKnown()) {
+            if (!this.mdat) {
+                await this.createFastStartReserveMdat();
+            }
+            await this.addSampleToTrack(trackData, sample);
+        }
+        else {
+            // Queue it for when we know all tracks
+            trackData.sampleQueue.push(sample);
+        }
+    }
+    async createFastStartReserveMdat() {
+        assert(this.writer);
+        assert(this.boxWriter);
+        this.ensureOneEnabledTrack();
+        // We finally know all tracks, let's reserve space for the moov box
+        const moovBox = moov(this);
+        const moovSize = this.boxWriter.measureBox(moovBox);
+        const reservedSize = moovSize
+            + this.computeSampleTableSizeUpperBound()
+            + 4096; // Just a little extra headroom
+        assert(this.ftypSize !== null);
+        this.writer.seek(this.ftypSize + reservedSize);
+        if (this.formatOptions.onMdat) {
+            this.writer.startTrackingWrites();
+        }
+        this.mdat = mdat(true);
+        this.boxWriter.writeBox(this.mdat);
+        // Now write everything that was queued
+        for (const trackData of this.trackDatas) {
+            for (const sample of trackData.sampleQueue) {
+                await this.addSampleToTrack(trackData, sample);
+            }
+            trackData.sampleQueue.length = 0;
+        }
+    }
+    computeSampleTableSizeUpperBound() {
+        assert(this.fastStart === 'reserve');
+        let upperBound = 0;
+        for (const trackData of this.trackDatas) {
+            const n = trackData.track.metadata.maximumPacketCount;
+            assert(n !== undefined); // We validated this earlier
+            // Given the max allowed packet count, compute the space they'll take up in the Sample Table Box, assuming
+            // the worst case for each individual box:
+            // stts box - since it is compactly coded, the maximum length of this table will be 2/3n
+            upperBound += (4 + 4) * Math.ceil(2 / 3 * n);
+            // stss box - 1 entry per sample
+            upperBound += 4 * n;
+            // ctts box - since it is compactly coded, the maximum length of this table will be 2/3n
+            upperBound += (4 + 4) * Math.ceil(2 / 3 * n);
+            // stsc box - since it is compactly coded, the maximum length of this table will be 2/3n
+            upperBound += (4 + 4 + 4) * Math.ceil(2 / 3 * n);
+            // stsz box - 1 entry per sample
+            upperBound += 4 * n;
+            // co64 box - we assume 1 sample per chunk and 64-bit chunk offsets (co64 instead of stco)
+            upperBound += 8 * n;
+        }
+        return upperBound;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    async onTrackClose(track) {
+        const release = await this.mutex.acquire();
+        const trackData = this.trackDatas.find(x => x.track === track);
+        if (trackData) {
+            trackData.closed = true;
+            if (trackData.type === 'subtitle' && track.source._codec === 'webvtt') {
+                await this.processWebVTTCues(trackData, Infinity);
+            }
+            this.processTimestamps(trackData);
+        }
+        if (this.allTracksAreKnown()) {
+            this.allTracksKnown.resolve();
+        }
+        if (this.isFragmented) {
+            // Since a track is now closed, we may be able to write out chunks that were previously waiting
+            await this.interleaveSamples();
+        }
+        release();
+    }
+    ensureOneEnabledTrack() {
+        // If no track of a given type is enabled, force the first one to be enabled. Otherwise the video won't play in
+        // players like QuickTime.
+        // https://github.com/Vanilagy/mediabunny/pull/391
+        for (const type of ['video', 'audio', 'subtitle']) {
+            const tracks = this.trackDatas.filter(t => t.type === type);
+            if (tracks.length === 0) {
+                continue;
+            }
+            const hasEnabled = tracks.some(t => t.track.metadata.disposition?.default !== false);
+            if (!hasEnabled) {
+                const firstTrack = tracks[0];
+                firstTrack.track.metadata.disposition = {
+                    ...firstTrack.track.metadata.disposition,
+                    default: true,
+                };
+            }
+        }
+    }
+    /** Internal function for external callers who want to full control fragment boundaries. */
+    async forceFragmentFinalization() {
+        assert(this.isFragmented);
+        const release = await this.mutex.acquire();
+        try {
+            for (const trackData of this.trackDatas) {
+                if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
+                    await this.processWebVTTCues(trackData, Infinity);
+                }
+                this.processTimestamps(trackData);
+            }
+            await this.interleaveSamples(true);
+            await this.finalizeFragment();
+        }
+        finally {
+            release();
+        }
+    }
+    /** Finalizes the file, making it ready for use. Must be called after all video and audio chunks have been added. */
+    async finalize() {
+        const release = await this.mutex.acquire();
+        this.allTracksKnown.resolve();
+        this.ensureOneEnabledTrack();
+        if (!this.mdat && this.fastStart === 'reserve') {
+            await this.createFastStartReserveMdat();
+        }
+        for (const trackData of this.trackDatas) {
+            trackData.closed = true;
+            if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
+                await this.processWebVTTCues(trackData, Infinity);
+            }
+            this.processTimestamps(trackData);
+        }
+        if (this.isFragmented) {
+            await this.interleaveSamples(true);
+            await this.finalizeFragment(false); // Don't flush the last fragment as we will flush it with the mfra box
+        }
+        else {
+            for (const trackData of this.trackDatas) {
+                await this.finalizeCurrentChunk(trackData);
+                // Now that we have all samples, we can replace the nominal bitrates with measured ones
+                const span = presentationSpan(trackData);
+                if (span > 0) {
+                    let totalBytes = 0;
+                    for (const sample of trackData.samples) {
+                        totalBytes += sample.size;
+                    }
+                    trackData.avgBitrate = Math.round(8 * totalBytes / span);
+                }
+                else {
+                    trackData.avgBitrate = 0;
+                }
+                // Sliding one-second window over the samples in decode order
+                let windowStart = 0;
+                let windowBytes = 0;
+                let maxWindowBytes = 0;
+                for (let i = 0; i < trackData.samples.length; i++) {
+                    const sample = trackData.samples[i];
+                    windowBytes += sample.size;
+                    while (sample.decodeTimestamp - trackData.samples[windowStart].decodeTimestamp >= 1) {
+                        windowBytes -= trackData.samples[windowStart].size;
+                        windowStart++;
+                    }
+                    maxWindowBytes = Math.max(maxWindowBytes, windowBytes);
+                }
+                trackData.maxBitrate = 8 * maxWindowBytes;
+                if (trackData.startTimestampOffset !== null) {
+                    // Shift all of the samples by the start offset. We'll then write out an edit list that will shift
+                    // them back to their proper spot in the composition.
+                    for (let i = 0; i < trackData.samples.length; i++) {
+                        const sample = trackData.samples[i];
+                        sample.timestamp -= trackData.startTimestampOffset;
+                        sample.decodeTimestamp -= trackData.startTimestampOffset;
+                    }
+                }
+            }
+        }
+        assert(this.writer);
+        assert(this.boxWriter);
+        if (this.fastStart === 'in-memory') {
+            this.mdat = mdat(false);
+            let mdatSize;
+            // We know how many chunks there are, but computing the chunk positions requires an iterative approach:
+            // In order to know where the first chunk should go, we first need to know the size of the moov box. But we
+            // cannot write a proper moov box without first knowing all chunk positions. So, we generate a tentative
+            // moov box with placeholder values (0) for the chunk offsets to be able to compute its size. If it then
+            // turns out that appending all chunks exceeds 4 GiB, we need to repeat this process, now with the co64 box
+            // being used in the moov box instead, which will make it larger. After that, we definitely know the final
+            // size of the moov box and can compute the proper chunk positions.
+            for (let i = 0; i < 2; i++) {
+                const movieBox = moov(this);
+                const movieBoxSize = this.boxWriter.measureBox(movieBox);
+                mdatSize = this.boxWriter.measureBox(this.mdat);
+                let currentChunkPos = this.writer.getPos() + movieBoxSize + mdatSize;
+                for (const chunk of this.finalizedChunks) {
+                    chunk.offset = currentChunkPos;
+                    for (const { data } of chunk.samples) {
+                        assert(data);
+                        currentChunkPos += data.byteLength;
+                        mdatSize += data.byteLength;
+                    }
+                }
+                if (currentChunkPos < 2 ** 32)
+                    break;
+                if (mdatSize >= 2 ** 32)
+                    this.mdat.largeSize = true;
+            }
+            if (this.formatOptions.onMoov) {
+                this.writer.startTrackingWrites();
+            }
+            const movieBox = moov(this);
+            this.boxWriter.writeBox(movieBox);
+            if (this.formatOptions.onMoov) {
+                const { data, start } = this.writer.stopTrackingWrites();
+                this.formatOptions.onMoov(data, start);
+            }
+            if (this.formatOptions.onMdat) {
+                this.writer.startTrackingWrites();
+            }
+            this.mdat.size = mdatSize;
+            this.boxWriter.writeBox(this.mdat);
+            for (const chunk of this.finalizedChunks) {
+                for (const sample of chunk.samples) {
+                    assert(sample.data);
+                    this.writer.write(sample.data);
+                    sample.data = null;
+                }
+            }
+            if (this.formatOptions.onMdat) {
+                const { data, start } = this.writer.stopTrackingWrites();
+                this.formatOptions.onMdat(data, start);
+            }
+        }
+        else if (this.isFragmented) {
+            if (this.isCmaf) {
+                const contentSize = this.segmentHeaderSize !== null
+                    ? this.writer.getPos() - this.segmentHeaderSize
+                    : 0;
+                this.writer.seek(0);
+                // Write styp and sidx to the start; we recently made space for these
+                this.boxWriter.writeBox(styp());
+                this.boxWriter.writeBox(sidx(this, contentSize));
+            }
+            else {
+                // Append the mfra box to the end of the file for better random access
+                const startPos = this.writer.getPos();
+                const mfraBox = mfra(this.trackDatas);
+                this.boxWriter.writeBox(mfraBox);
+                // Patch the 'size' field of the mfro box at the end of the mfra box now that we know its actual size
+                const mfraBoxSize = this.writer.getPos() - startPos;
+                this.writer.seek(this.writer.getPos() - 4);
+                this.boxWriter.writeU32(mfraBoxSize);
+            }
+        }
+        else {
+            assert(this.mdat);
+            const mdatPos = this.boxWriter.offsets.get(this.mdat);
+            assert(mdatPos !== undefined);
+            const mdatSize = this.writer.getPos() - mdatPos;
+            this.mdat.size = mdatSize;
+            this.mdat.largeSize = mdatSize >= 2 ** 32; // Only use the large size if we need it
+            this.boxWriter.patchBox(this.mdat);
+            if (this.formatOptions.onMdat) {
+                const { data, start } = this.writer.stopTrackingWrites();
+                this.formatOptions.onMdat(data, start);
+            }
+            const movieBox = moov(this);
+            if (this.fastStart === 'reserve') {
+                assert(this.ftypSize !== null);
+                this.writer.seek(this.ftypSize);
+                if (this.formatOptions.onMoov) {
+                    this.writer.startTrackingWrites();
+                }
+                this.boxWriter.writeBox(movieBox);
+                // Fill the remaining space with a free box. If there are less than 8 bytes left, sucks I guess
+                const remainingSpace = this.boxWriter.offsets.get(this.mdat) - this.writer.getPos();
+                this.boxWriter.writeBox(free(remainingSpace));
+            }
+            else {
+                if (this.formatOptions.onMoov) {
+                    this.writer.startTrackingWrites();
+                }
+                this.boxWriter.writeBox(movieBox);
+            }
+            if (this.formatOptions.onMoov) {
+                const { data, start } = this.writer.stopTrackingWrites();
+                this.formatOptions.onMoov(data, start);
+            }
+        }
+        release();
+    }
+}
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+var __addDisposableResource = (undefined && undefined.__addDisposableResource) || function (env, value, async) {
+    if (value !== null && value !== void 0) {
+        if (typeof value !== "object" && typeof value !== "function") throw new TypeError("Object expected.");
+        var dispose, inner;
+        if (async) {
+            if (!Symbol.asyncDispose) throw new TypeError("Symbol.asyncDispose is not defined.");
+            dispose = value[Symbol.asyncDispose];
+        }
+        if (dispose === void 0) {
+            if (!Symbol.dispose) throw new TypeError("Symbol.dispose is not defined.");
+            dispose = value[Symbol.dispose];
+            if (async) inner = dispose;
+        }
+        if (typeof dispose !== "function") throw new TypeError("Object not disposable.");
+        if (inner) dispose = function() { try { inner.call(this); } catch (e) { return Promise.reject(e); } };
+        env.stack.push({ value: value, dispose: dispose, async: async });
+    }
+    else if (async) {
+        env.stack.push({ async: true });
+    }
+    return value;
+};
+var __disposeResources = (undefined && undefined.__disposeResources) || (function (SuppressedError) {
+    return function (env) {
+        function fail(e) {
+            env.error = env.hasError ? new SuppressedError(e, env.error, "An error was suppressed during disposal.") : e;
+            env.hasError = true;
+        }
+        var r, s = 0;
+        function next() {
+            while (r = env.stack.pop()) {
+                try {
+                    if (!r.async && s === 1) return s = 0, env.stack.push(r), Promise.resolve().then(next);
+                    if (r.dispose) {
+                        var result = r.dispose.call(r.value);
+                        if (r.async) return s |= 2, Promise.resolve(result).then(next, function(e) { fail(e); return next(); });
+                    }
+                    else s |= 1;
+                }
+                catch (e) {
+                    fail(e);
+                }
+            }
+            if (s === 1) return env.hasError ? Promise.reject(env.error) : Promise.resolve();
+            if (env.hasError) throw env.error;
+        }
+        return next();
+    };
+})(typeof SuppressedError === "function" ? SuppressedError : function (error, suppressed, message) {
+    var e = new Error(message);
+    return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
+});
+/**
+ * Base class for media sources. Media sources are used to add media samples to an output file.
+ * @group Media sources
+ * @public
+ */
+class MediaSource {
+    constructor() {
+        /** @internal */
+        this._connectedTrack = null;
+        /** @internal */
+        this._closingPromise = null;
+        /** @internal */
+        this._closed = false;
+        /**
+         * Set when the encoder is configured with a bitrate.
+         * @internal
+         */
+        this._nominalBitrate = null;
+    }
+    /** @internal */
+    _ensureValidAdd() {
+        if (!this._connectedTrack) {
+            throw new Error('Source is not connected to an output track.');
+        }
+        if (this._connectedTrack.output.state === 'canceled') {
+            throw new Error('Output has been canceled.');
+        }
+        if (this._connectedTrack.output.state === 'finalizing' || this._connectedTrack.output.state === 'finalized') {
+            throw new Error('Output has been finalized.');
+        }
+        if (this._connectedTrack.output.state === 'pending') {
+            throw new Error('Output has not started.');
+        }
+        if (this._closed) {
+            throw new Error('Source is closed.');
+        }
+    }
+    /** @internal */
+    async _start() { }
+    /** @internal */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async _flushAndClose(forceClose) { }
+    /**
+     * Closes this source. This prevents future samples from being added and signals to the output file that no further
+     * samples will come in for this track. Calling `.close()` is optional but recommended after adding the
+     * last sample - for improved performance and reduced memory usage.
+     */
+    close() {
+        if (this._closingPromise) {
+            return;
+        }
+        const connectedTrack = this._connectedTrack;
+        if (!connectedTrack) {
+            throw new Error('Cannot call close without connecting the source to an output track.');
+        }
+        if (connectedTrack.output.state === 'pending') {
+            throw new Error('Cannot call close before output has been started.');
+        }
+        this._closingPromise = (async () => {
+            await this._flushAndClose(false);
+            this._closed = true;
+            if (connectedTrack.output.state === 'finalizing' || connectedTrack.output.state === 'finalized') {
+                return;
+            }
+            connectedTrack.output._muxer.onTrackClose(connectedTrack);
+        })();
+    }
+    /** @internal */
+    async _flushOrWaitForOngoingClose(forceClose) {
+        return this._closingPromise ??= (async () => {
+            await this._flushAndClose(forceClose);
+            this._closed = true;
+        })();
+    }
+}
+/**
+ * Base class for video sources - sources for video tracks.
+ * @group Media sources
+ * @public
+ */
+class VideoSource extends MediaSource {
+    /** Internal constructor. */
+    constructor(codec) {
+        super();
+        if (!VIDEO_CODECS.includes(codec)) {
+            throw new TypeError(`Invalid video codec '${codec}'. Must be one of: ${VIDEO_CODECS.join(', ')}.`);
+        }
+        this._codec = codec;
+    }
+}
+const maybeEnsureIsKeyPacket = (track, packet) => {
+    if (track.metadata.hasOnlyKeyPackets && packet.type !== 'key') {
+        throw new Error('Cannot add non-key packets to a hasOnlyKeyPackets video track.');
+    }
+};
+class VideoEncoderWrapper {
+    setError(error) {
+        if (!this.errorSet) {
+            this.error = error;
+            this.errorSet = true;
+        }
+    }
+    constructor(source, encodingConfig) {
+        this.source = source;
+        this.encodingConfig = encodingConfig;
+        this.ensureEncoderPromise = null;
+        this.encoderInitialized = false;
+        this.encoder = null;
+        this.encoderConfig = null;
+        // Set when the browser closed our encoders due to inactivity; they'll be recreated on the next encode
+        this.encodersReclaimed = false;
+        this.muxer = null;
+        this.lastMultipleOfKeyFrameInterval = -1;
+        this.emittedEncoderPackets = 0;
+        // Tracks the input dimensions of the first frame
+        this.codedWidth = null;
+        this.codedHeight = null;
+        // Tracks the output dimensions of the first frame (used to lock dimensions for fill/contain/cover)
+        this.outputWidth = null;
+        this.outputHeight = null;
+        // Frame rate normalization state
+        this.frameRateLastSample = null;
+        this.frameRateLastTimestamp = null;
+        this.frameRateLastEndTimestamp = null;
+        // VideoEncoder converts everything to microseconds, so we need to do some bookkeeping to restore the original
+        // timing information
+        this.preciseTimings = [];
+        this.customEncoder = null;
+        this.customEncoderCallSerializer = new CallSerializer();
+        this.customEncoderQueueSize = 0;
+        // Set when the encoder uses quantizer-based rate control; carries the quantizer value applied to each frame
+        this.defaultEncodeOptions = {};
+        // Alpha stuff
+        this.alphaEncoder = null;
+        this.splitter = null;
+        this.splitterCreationFailed = false;
+        this.alphaFrameQueue = [];
+        /**
+         * Encoders typically throw their errors "out of band", meaning asynchronously in some other execution context.
+         * However, we want to surface these errors to the user within the normal control flow, so they don't go uncaught.
+         * So, we keep track of the encoder error and throw it as soon as we get the chance.
+         */
+        this.error = null;
+        this.errorSet = false;
+        this.lastMuxerPromise = Promise.resolve();
+        this.closed = false;
+    }
+    async add(videoSample, shouldClose, encodeOptions) {
+        const originalSample = videoSample;
+        try {
+            this.checkForEncoderError();
+            this.source._ensureValidAdd();
+            const config = this.encodingConfig;
+            const sizeChangeBehavior = config.sizeChangeBehavior ?? 'deny';
+            let isSizeChange = false;
+            // Ensure video sample size remains constant or handle the change
+            if (this.codedWidth !== null && this.codedHeight !== null) {
+                if (videoSample.codedWidth !== this.codedWidth || videoSample.codedHeight !== this.codedHeight) {
+                    isSizeChange = true;
+                    if (sizeChangeBehavior === 'deny') {
+                        throw new Error(`Video sample size must remain constant. Expected ${this.codedWidth}x${this.codedHeight},`
+                            + ` got ${videoSample.codedWidth}x${videoSample.codedHeight}. To allow the sample size to`
+                            + ` change over time, set \`sizeChangeBehavior\` to a value other than 'deny' in the`
+                            + ` encoding options.`);
+                    }
+                }
+            }
+            else {
+                this.codedWidth = videoSample.codedWidth;
+                this.codedHeight = videoSample.codedHeight;
+            }
+            // Determine if we need to apply transformations via canvas
+            const hasTransformConfig = config.transform?.width !== undefined
+                || config.transform?.height !== undefined
+                || config.transform?.rotate !== undefined
+                || config.transform?.flip !== undefined
+                || config.transform?.crop !== undefined
+                || config.transform?.force === true;
+            const needsTransform = hasTransformConfig || (isSizeChange && sizeChangeBehavior !== 'passThrough');
+            if (needsTransform) {
+                let targetWidth = config.transform?.width;
+                let targetHeight = config.transform?.height;
+                let appliedFit = config.transform?.fit ?? 'fill';
+                // If the size changed and behavior is fill/contain/cover, lock to the original output dimensions
+                if (isSizeChange && sizeChangeBehavior !== 'passThrough') {
+                    assert(this.outputWidth);
+                    assert(this.outputHeight);
+                    assert(sizeChangeBehavior !== 'deny');
+                    targetWidth = this.outputWidth;
+                    targetHeight = this.outputHeight;
+                    appliedFit = sizeChangeBehavior;
+                }
+                const transformed = await videoSample.transform({
+                    width: targetWidth,
+                    height: targetHeight,
+                    roundDimensionsTo: 2,
+                    crop: config.transform?.crop,
+                    rotate: config.transform?.rotate,
+                    flip: config.transform?.flip,
+                    fit: appliedFit,
+                    alpha: config.alpha,
+                });
+                // Save the output dimensions of the first frame
+                if (this.outputWidth === null || this.outputHeight === null) {
+                    this.outputWidth = transformed.displayWidth;
+                    this.outputHeight = transformed.displayHeight;
+                }
+                if (shouldClose) {
+                    videoSample.close();
+                }
+                videoSample = transformed;
+                shouldClose = true;
+            }
+            else {
+                // If no canvas is needed, we still need to record the output dimensions for the first frame
+                if (this.outputWidth === null || this.outputHeight === null) {
+                    this.outputWidth = videoSample.codedWidth;
+                    this.outputHeight = videoSample.codedHeight;
+                }
+            }
+            const frameRate = config.transform?.frameRate;
+            if (frameRate !== undefined) {
+                // Apply frame rate normalization
+                const originalEndTimestamp = videoSample.timestamp + videoSample.duration;
+                const alignedTimestamp = floorToDivisor(videoSample.timestamp, frameRate);
+                if (this.frameRateLastSample !== null) {
+                    if (alignedTimestamp <= this.frameRateLastTimestamp) {
+                        // Same frame rate slot, replace stored sample with the newer one
+                        this.frameRateLastSample.close();
+                        this.frameRateLastSample = videoSample.clone();
+                        this.frameRateLastEndTimestamp = originalEndTimestamp;
+                        return;
+                    }
+                    else {
+                        // Pad the gap by repeating the previous frame
+                        await this.padFrameRate(alignedTimestamp, encodeOptions);
+                    }
+                }
+                // Clone if the sample is still the user's, to avoid mutating externally-owned data
+                if (videoSample === originalSample) {
+                    videoSample = videoSample.clone();
+                    shouldClose = true;
+                }
+                videoSample.setTimestamp(alignedTimestamp);
+                videoSample.setDuration(1 / frameRate);
+                this.frameRateLastSample?.close();
+                this.frameRateLastSample = videoSample.clone();
+                this.frameRateLastTimestamp = alignedTimestamp;
+                this.frameRateLastEndTimestamp = originalEndTimestamp;
+            }
+            await this.processAndEncode(videoSample, encodeOptions);
+        }
+        finally {
+            if (shouldClose) {
+                videoSample.close();
+            }
+        }
+    }
+    /**
+     * Runs the process function (if any) and encodes the resulting samples.
+     */
+    async processAndEncode(videoSample, encodeOptions) {
+        const config = this.encodingConfig;
+        let samplesToEncode;
+        // Apply the user-defined process function, if any
+        if (config.transform?.process) {
+            let processed = config.transform.process(videoSample);
+            if (isThenable(processed)) {
+                processed = await processed;
+            }
+            if (processed === null) {
+                return;
+            }
+            if (!Array.isArray(processed)) {
+                processed = [processed];
+            }
+            const mappedSamples = [];
+            try {
+                for (const x of processed) {
+                    if (x instanceof VideoSample) {
+                        mappedSamples.push(x);
+                    }
+                    else if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
+                        mappedSamples.push(new VideoSample(x));
+                    }
+                    else {
+                        // Calling the VideoSample constructor here will automatically handle input validation for us
+                        // (it throws for any non-legal argument).
+                        mappedSamples.push(new VideoSample(x, {
+                            timestamp: videoSample.timestamp,
+                            duration: videoSample.duration,
+                        }));
+                    }
+                }
+            }
+            catch (error) {
+                // One of the returned elements was invalid; close everything closable so no resource is leaked
+                for (const sample of mappedSamples) {
+                    if (sample !== videoSample) {
+                        sample.close();
+                    }
+                }
+                for (const x of processed) {
+                    if (x instanceof VideoSample && x !== videoSample) {
+                        x.close();
+                    }
+                    else if (typeof VideoFrame !== 'undefined' && x instanceof VideoFrame) {
+                        x.close();
+                    }
+                }
+                throw error;
+            }
+            samplesToEncode = mappedSamples;
+        }
+        else {
+            samplesToEncode = [videoSample];
+        }
+        try {
+            for (const sampleToEncode of samplesToEncode) {
+                if (!this.encoderInitialized) {
+                    if (!this.ensureEncoderPromise) {
+                        this.ensureEncoder(sampleToEncode);
+                    }
+                    // No, this "if" statement is not useless. Sometimes, the above call to
+                    // `ensureEncoder` might have synchronously completed and the encoder is
+                    // already initialized. In this case, we don't need to await the promise
+                    // anymore. This also fixes nasty async race condition bugs when multiple
+                    // code paths are calling this method: It's important that the call that
+                    // initialized the encoder go through this code first.
+                    if (!this.encoderInitialized) {
+                        await this.ensureEncoderPromise;
+                    }
+                }
+                assert(this.encoderInitialized);
+                if (this.closed) {
+                    break;
+                }
+                if (this.encodersReclaimed) {
+                    this.recreateWebCodecsEncoders();
+                }
+                const keyFrameInterval = this.encodingConfig.keyFrameInterval ?? 2;
+                const multipleOfKeyFrameInterval = Math.floor(sampleToEncode.timestamp / keyFrameInterval);
+                const mergedEncodeOptions = {
+                    ...this.defaultEncodeOptions,
+                    ...sampleToEncode.encodeOptions,
+                    ...encodeOptions,
+                };
+                const finalEncodeOptions = {
+                    ...mergedEncodeOptions,
+                    keyFrame: mergedEncodeOptions.keyFrame !== undefined
+                        ? mergedEncodeOptions.keyFrame
+                        // Ensure a key frame every keyFrameInterval seconds. It is important that all video tracks
+                        // follow the same "key frame" rhythm, because aligned key frames are required to start new
+                        // fragments in ISOBMFF or clusters in Matroska (or at least desirable).
+                        : keyFrameInterval === 0
+                            || multipleOfKeyFrameInterval !== this.lastMultipleOfKeyFrameInterval,
+                };
+                this.lastMultipleOfKeyFrameInterval = multipleOfKeyFrameInterval;
+                this.encodingConfig.onEncodedSample?.(sampleToEncode);
+                if (this.customEncoder) {
+                    this.customEncoderQueueSize++;
+                    // We clone the sample so it cannot be closed on us from the outside before it reaches the encoder
+                    const clonedSample = sampleToEncode.clone();
+                    const promise = this.customEncoderCallSerializer
+                        .call(() => this.customEncoder.encode(clonedSample, finalEncodeOptions))
+                        .catch((error) => this.setError(error))
+                        .finally(() => {
+                        this.customEncoderQueueSize--;
+                        clonedSample.close();
+                    });
+                    if (this.customEncoderQueueSize >= 4) {
+                        await promise;
+                    }
+                }
+                else {
+                    assert(this.encoder);
+                    const videoFrame = sampleToEncode.toVideoFrame();
+                    const preciseTimingIndex = binarySearchLessOrEqual(this.preciseTimings, videoFrame.timestamp, x => x.microsecondTimestamp);
+                    const existingEntry = preciseTimingIndex !== -1
+                        ? this.preciseTimings[preciseTimingIndex]
+                        : null;
+                    if (existingEntry && existingEntry.microsecondTimestamp === videoFrame.timestamp) {
+                        if (existingEntry.timestamp !== sampleToEncode.timestamp) {
+                            // Mapping isn't unique, can't use the timestamp
+                            existingEntry.timestampIsValid = false;
+                        }
+                        if (existingEntry.duration !== sampleToEncode.duration) {
+                            // Mapping isn't unique, can't use the duration
+                            existingEntry.durationIsValid = false;
+                        }
+                    }
+                    else {
+                        this.preciseTimings.splice(preciseTimingIndex + 1, 0, {
+                            microsecondTimestamp: videoFrame.timestamp,
+                            timestamp: sampleToEncode.timestamp,
+                            duration: sampleToEncode.duration,
+                            timestampIsValid: true,
+                            durationIsValid: true,
+                        });
+                        // Make sure it doesn't grow indefinitely
+                        if (this.preciseTimings.length > 128) {
+                            this.preciseTimings.shift();
+                        }
+                    }
+                    if (!this.alphaEncoder) {
+                        // No alpha encoder, simple case
+                        try {
+                            this.encoder.encode(videoFrame, finalEncodeOptions);
+                        }
+                        finally {
+                            videoFrame.close();
+                        }
+                    }
+                    else {
+                        // We're expected to encode alpha as well
+                        const frameDefinitelyHasNoAlpha = !!videoFrame.format && !videoFrame.format.includes('A');
+                        if (frameDefinitelyHasNoAlpha || this.splitterCreationFailed) {
+                            this.alphaFrameQueue.push(null);
+                            try {
+                                this.encoder.encode(videoFrame, finalEncodeOptions);
+                            }
+                            finally {
+                                videoFrame.close();
+                            }
+                        }
+                        else {
+                            if (!this.splitter) {
+                                this.splitter = new ColorAlphaSplitter();
+                            }
+                            // The splitter takes ownership, so no need to close the frames ourselves
+                            const { colorFrame, alphaFrame } = await this.splitter.split(videoFrame);
+                            this.alphaFrameQueue.push(alphaFrame);
+                            try {
+                                this.encoder.encode(colorFrame, finalEncodeOptions);
+                            }
+                            finally {
+                                colorFrame.close();
+                            }
+                        }
+                    }
+                    // We need to do this after sending the frame to the encoder as the frame otherwise might be closed
+                    if (this.encoder.encodeQueueSize >= 4) {
+                        await new Promise(resolve => this.encoder.addEventListener('dequeue', resolve, { once: true }));
+                    }
+                }
+                await this.lastMuxerPromise; // Allow the writer to apply backpressure
+            }
+        }
+        finally {
+            for (const sample of samplesToEncode) {
+                if (sample !== videoSample) {
+                    sample.close();
+                }
+            }
+        }
+    }
+    /** Repeats the last frame rate sample to fill the gap up to the given timestamp. */
+    async padFrameRate(until, encodeOptions) {
+        const frameRate = this.encodingConfig.transform.frameRate;
+        assert(this.frameRateLastSample);
+        const frameDifference = Math.round((until - this.frameRateLastTimestamp) * frameRate);
+        for (let i = 1; i < frameDifference; i++) {
+            const env_1 = { stack: [], error: void 0, hasError: false };
+            try {
+                const sample = __addDisposableResource(env_1, this.frameRateLastSample.clone(), false);
+                sample.setTimestamp(this.frameRateLastTimestamp + i / frameRate);
+                sample.setDuration(1 / frameRate);
+                await this.processAndEncode(sample, encodeOptions);
+            }
+            catch (e_1) {
+                env_1.error = e_1;
+                env_1.hasError = true;
+            }
+            finally {
+                __disposeResources(env_1);
+            }
+        }
+    }
+    ensureEncoder(videoSample) {
+        this.ensureEncoderPromise = (async () => {
+            // eslint-disable-next-line @typescript-eslint/no-deprecated
+            const quality = resolveQuality(this.encodingConfig.quality, this.encodingConfig.bitrate);
+            assert(quality !== undefined);
+            const candidates = buildVideoEncoderConfigs({
+                ...this.encodingConfig,
+                quality,
+                width: videoSample.codedWidth,
+                height: videoSample.codedHeight,
+                squarePixelWidth: videoSample.squarePixelWidth,
+                squarePixelHeight: videoSample.squarePixelHeight,
+                framerate: this.source._connectedTrack?.metadata.frameRate,
+            });
+            // Try the candidate configs in order of preference until we find one that is supported
+            let selected = null;
+            let MatchingCustomEncoder;
+            for (const candidate of candidates) {
+                const candidateConfig = candidate.config;
+                this.encodingConfig.onEncoderConfig?.(candidateConfig);
+                MatchingCustomEncoder = customVideoEncoders.find(x => x.supports(this.encodingConfig.codec, candidateConfig));
+                if (MatchingCustomEncoder) {
+                    selected = candidate;
+                    break;
+                }
+                if (typeof VideoEncoder === 'undefined') {
+                    continue;
+                }
+                candidateConfig.alpha = 'discard'; // Since we handle alpha ourselves
+                if (this.encodingConfig.alpha === 'keep') {
+                    // Encoding alpha requires using two parallel encoders, so we need to make sure they stay in sync
+                    // and that neither of them drops frames. Setting latencyMode to 'quality' achieves this, because
+                    // "User Agents MUST not drop frames to achieve the target bitrate and/or framerate."
+                    candidateConfig.latencyMode = 'quality';
+                }
+                const hasOddDimension = candidateConfig.width % 2 === 1 || candidateConfig.height % 2 === 1;
+                if (hasOddDimension
+                    && (this.encodingConfig.codec === 'avc' || this.encodingConfig.codec === 'hevc')) {
+                    // Throw a special error for this case as it gets hit often
+                    throw new Error(`The dimensions ${candidateConfig.width}x${candidateConfig.height} are not supported for codec`
+                        + ` '${this.encodingConfig.codec}'; both width and height must be even numbers. Make sure to`
+                        + ` round your dimensions to the nearest even number.`);
+                }
+                try {
+                    const support = await VideoEncoder.isConfigSupported(candidateConfig);
+                    if (support.supported) {
+                        selected = candidate;
+                        break;
+                    }
+                }
+                catch {
+                    // Not supported
+                }
+            }
+            if (!selected) {
+                if (typeof VideoEncoder === 'undefined') {
+                    throw new Error(missingWebCodecsClassMessage('VideoEncoder'));
+                }
+                // The candidates only differ in their rate control, so we describe them as one config with a
+                // slash-separated list of the attempted rate control methods
+                const firstConfig = candidates[0].config;
+                const rateControls = candidates.map(({ config, quantizer }) => quantizer !== null ? `quantizer ${quantizer}` : `${config.bitrate} bps`);
+                throw new Error(`This specific encoder configuration (${firstConfig.codec}, ${rateControls.join(' / ')},`
+                    + ` ${firstConfig.width}x${firstConfig.height}, hardware acceleration:`
+                    + ` ${firstConfig.hardwareAcceleration ?? 'no-preference'}) is not supported in this environment.`
+                    + ` Consider using another codec or changing your video parameters.`);
+            }
+            const encoderConfig = selected.config;
+            if (selected.quantizer !== null) {
+                // The chosen config uses quantizer-based rate control, so each frame must carry the quantizer value
+                this.defaultEncodeOptions = buildQuantizerEncodeOptions(this.encodingConfig.codec, selected.quantizer);
+            }
+            else {
+                this.source._nominalBitrate = encoderConfig.bitrate ?? null;
+            }
+            if (MatchingCustomEncoder) {
+                // @ts-expect-error "Can't create instance of abstract class 🤓"
+                this.customEncoder = new MatchingCustomEncoder();
+                // @ts-expect-error It's technically readonly
+                this.customEncoder.codec = this.encodingConfig.codec;
+                // @ts-expect-error It's technically readonly
+                this.customEncoder.config = encoderConfig;
+                // @ts-expect-error It's technically readonly
+                this.customEncoder.onPacket = (packet, meta) => {
+                    if (!(packet instanceof EncodedPacket)) {
+                        throw new TypeError('The first argument passed to onPacket must be an EncodedPacket.');
+                    }
+                    if (meta !== undefined && (!meta || typeof meta !== 'object')) {
+                        throw new TypeError('The second argument passed to onPacket must be an object or undefined.');
+                    }
+                    maybeEnsureIsKeyPacket(this.source._connectedTrack, packet);
+                    this.encodingConfig.onEncodedPacket?.(packet, meta);
+                    this.lastMuxerPromise
+                        = this.muxer.addEncodedVideoPacket(this.source._connectedTrack, packet, meta)
+                            .catch((error) => {
+                            this.setError(error);
+                        });
+                };
+                // @ts-expect-error It's technically readonly
+                this.customEncoder.onError = (error) => {
+                    this.setError(error);
+                };
+                await this.customEncoder.init();
+            }
+            else {
+                this.encoderConfig = encoderConfig;
+                this.createWebCodecsEncoders();
+            }
+            assert(this.source._connectedTrack);
+            this.muxer = this.source._connectedTrack.output._muxer;
+            this.encoderInitialized = true;
+        })();
+    }
+    createWebCodecsEncoders() {
+        const encoderConfig = this.encoderConfig;
+        assert(encoderConfig);
+        /** Queue of color chunks waiting for their alpha counterpart. */
+        const colorChunkQueue = [];
+        /** Each value is the number of encoded alpha chunks at which a null alpha chunk should be added. */
+        const nullAlphaChunkQueue = [];
+        let encodedAlphaChunkCount = 0;
+        let alphaEncoderQueue = 0;
+        const handleError = (error, stack) => {
+            if (isCodecReclaimedError(error)) {
+                this.encodersReclaimed = true;
+                return;
+            }
+            error.stack = stack; // Provide a more useful stack trace, the default one sucks
+            this.setError(error);
+        };
+        const stack = new Error('Encoding error').stack;
+        this.encoder = new VideoEncoder({
+            output: (chunk, meta) => {
+                if (!this.alphaEncoder) {
+                    // We're done
+                    this.addPacket(chunk, null, meta);
+                    return;
+                }
+                const alphaFrame = this.alphaFrameQueue.shift();
+                assert(alphaFrame !== undefined);
+                if (alphaFrame) {
+                    this.alphaEncoder.encode(alphaFrame, {
+                        ...this.defaultEncodeOptions,
+                        // Crucial: The alpha frame is forced to be a key frame whenever the color frame
+                        // also is. Without this, playback can glitch and even crash in some browsers.
+                        // This is the reason why the two encoders are wired in series and not in parallel.
+                        keyFrame: chunk.type === 'key',
+                    });
+                    alphaEncoderQueue++;
+                    alphaFrame.close();
+                    colorChunkQueue.push({ chunk, meta });
+                }
+                else {
+                    // There was no alpha component for this frame
+                    if (alphaEncoderQueue === 0) {
+                        // No pending alpha encodes either, so we're done
+                        this.addPacket(chunk, null, meta);
+                    }
+                    else {
+                        // There are still alpha encodes pending, so we can't add the packet immediately since
+                        // we'd end up with out-of-order packets. Instead, let's queue a null alpha chunk to be
+                        // added in the future, after the current encoder workload has completed:
+                        nullAlphaChunkQueue.push(encodedAlphaChunkCount + alphaEncoderQueue);
+                        colorChunkQueue.push({ chunk, meta });
+                    }
+                }
+            },
+            error: error => handleError(error, stack),
+        });
+        this.encoder.configure(encoderConfig);
+        if (this.encodingConfig.alpha === 'keep') {
+            const stack = new Error('Encoding error').stack;
+            // We need to encode alpha as well, which we do with a separate encoder
+            this.alphaEncoder = new VideoEncoder({
+                // We ignore the alpha chunk's metadata
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                output: (chunk, meta) => {
+                    alphaEncoderQueue--;
+                    // There has to be a color chunk because the encoders are wired in series
+                    const colorChunk = colorChunkQueue.shift();
+                    assert(colorChunk !== undefined);
+                    this.addPacket(colorChunk.chunk, chunk, colorChunk.meta);
+                    // See if there are any null alpha chunks queued up
+                    encodedAlphaChunkCount++;
+                    while (nullAlphaChunkQueue.length > 0
+                        && nullAlphaChunkQueue[0] === encodedAlphaChunkCount) {
+                        nullAlphaChunkQueue.shift();
+                        const colorChunk = colorChunkQueue.shift();
+                        assert(colorChunk !== undefined);
+                        this.addPacket(colorChunk.chunk, null, colorChunk.meta);
+                    }
+                },
+                error: error => handleError(error, stack),
+            });
+            this.alphaEncoder.configure(encoderConfig);
+        }
+    }
+    addPacket(colorChunk, alphaChunk, meta) {
+        const sideData = {};
+        if (alphaChunk) {
+            const alphaData = new Uint8Array(alphaChunk.byteLength);
+            alphaChunk.copyTo(alphaData);
+            sideData.alpha = alphaData;
+        }
+        let packet = EncodedPacket.fromEncodedChunk(colorChunk, sideData);
+        const encoderConfig = this.encoderConfig;
+        assert(encoderConfig);
+        if (meta?.decoderConfig) {
+            // Let's correct the codec string based on the actual bitstream data, rather than leaving it on the default
+            // value (which is just what was in the encoder config). This provides better consistency.
+            meta.decoderConfig.codec = extractVideoCodecString({
+                width: encoderConfig.width,
+                height: encoderConfig.height,
+                codec: this.encodingConfig.codec,
+                codecDescription: meta.decoderConfig.description
+                    ? toUint8Array(meta.decoderConfig.description)
+                    : null,
+                colorSpace: meta.decoderConfig.colorSpace ?? null,
+                avcType: encoderConfig.codec.includes('avc1.')
+                    ? 1
+                    : encoderConfig.codec.includes('avc3.')
+                        ? 3
+                        : null,
+                avcCodecInfo: this.encodingConfig.codec === 'avc' && !meta.decoderConfig.description
+                    ? extractAvcDecoderConfigurationRecord(packet.data)
+                    : null,
+                hevcCodecInfo: this.encodingConfig.codec === 'hevc' && !meta.decoderConfig.description
+                    ? extractHevcDecoderConfigurationRecord(packet.data)
+                    : null,
+                vp9CodecInfo: this.encodingConfig.codec === 'vp9'
+                    ? extractVp9CodecInfoFromPacket(packet.data)
+                    : null,
+                av1CodecInfo: this.encodingConfig.codec === 'av1'
+                    ? extractAv1CodecInfoFromPacket(packet.data)
+                    : null,
+                proresFormat: null, // Can't be encoded by WebCodecs
+            });
+        }
+        // See if there's a relevant timing entry to refine the packet's timing data
+        const preciseTimingIndex = binarySearchLessOrEqual(this.preciseTimings, colorChunk.timestamp, x => x.microsecondTimestamp);
+        const entry = preciseTimingIndex !== -1
+            ? this.preciseTimings[preciseTimingIndex]
+            : null;
+        let actualType = null;
+        if (this.emittedEncoderPackets === 0 && packet.type === 'delta' && meta?.decoderConfig) {
+            // https://github.com/Vanilagy/mediabunny/issues/365
+            // We expect the first packet to be a key packet. If it's not, let's actually verify that it's
+            // not by getting the actual type.
+            actualType = determineVideoPacketType(this.encodingConfig.codec, meta.decoderConfig, packet.data);
+        }
+        // Define the packet
+        if ((entry && entry.microsecondTimestamp === colorChunk.timestamp) || actualType !== null) {
+            packet = packet.clone({
+                timestamp: entry?.timestampIsValid ? entry.timestamp : undefined,
+                duration: entry?.durationIsValid ? entry.duration : undefined,
+                type: actualType ?? undefined,
+            });
+        }
+        maybeEnsureIsKeyPacket(this.source._connectedTrack, packet);
+        this.encodingConfig.onEncodedPacket?.(packet, meta);
+        this.lastMuxerPromise
+            = this.muxer.addEncodedVideoPacket(this.source._connectedTrack, packet, meta)
+                .catch((error) => {
+                this.setError(error);
+            });
+        this.emittedEncoderPackets++;
+    }
+    // Browsers may reclaim codecs that have been inactive for a while (see
+    // https://github.com/Vanilagy/mediabunny/issues/531), closing them and reporting a QuotaExceededError. Since a
+    // reclaimed encoder was idle, no frames are lost, so we transparently replace the encoders with fresh ones.
+    recreateWebCodecsEncoders() {
+        assert(this.encoder);
+        if (this.encoder.state !== 'closed') {
+            this.encoder.close();
+        }
+        if (this.alphaEncoder && this.alphaEncoder.state !== 'closed') {
+            this.alphaEncoder.close();
+        }
+        this.alphaFrameQueue.forEach(x => x?.close());
+        this.alphaFrameQueue.length = 0;
+        this.encodersReclaimed = false;
+        this.lastMultipleOfKeyFrameInterval = -1; // The fresh encoder must start with a key frame
+        this.createWebCodecsEncoders();
+    }
+    async flushAndClose(forceClose) {
+        try {
+            if (!forceClose) {
+                this.checkForEncoderError();
+                // Final frame rate padding: fill remaining frames up to the last sample's original end timestamp
+                if (this.frameRateLastSample) {
+                    const frameRate = this.encodingConfig.transform.frameRate;
+                    const alignedEnd = floorToDivisor(this.frameRateLastEndTimestamp, frameRate);
+                    await this.padFrameRate(alignedEnd);
+                }
+            }
+            this.closed = true;
+            if (!forceClose) {
+                if (this.customEncoder) {
+                    void this.customEncoderCallSerializer.call(() => this.customEncoder.flush());
+                }
+                else if (this.encoder && !this.encodersReclaimed) {
+                    // These are wired in series, therefore they must also be flushed in series
+                    await this.encoder.flush();
+                    await this.alphaEncoder?.flush();
+                    // Workaround for https://issues.chromium.org/issues/529852980 to give it time for errors to
+                    // surface
+                    await wait(25);
+                }
+            }
+        }
+        finally {
+            // This cleanup must also run when padding or flushing threw (e.g. due to an encoder error), otherwise
+            // samples, frames and encoders would be left dangling
+            this.closed = true;
+            this.frameRateLastSample?.close();
+            this.frameRateLastSample = null;
+            if (this.customEncoder) {
+                await this.customEncoderCallSerializer.call(() => this.customEncoder.close())
+                    .catch((error) => this.setError(error));
+            }
+            else if (this.encoder) {
+                if (this.encoder.state !== 'closed') {
+                    this.encoder.close();
+                }
+                if (this.alphaEncoder && this.alphaEncoder.state !== 'closed') {
+                    this.alphaEncoder.close();
+                }
+                this.alphaFrameQueue.forEach(x => x?.close());
+                this.alphaFrameQueue.length = 0;
+                this.splitter?.close();
+            }
+        }
+        if (!forceClose) {
+            this.checkForEncoderError();
+        }
+    }
+    getQueueSize() {
+        if (this.customEncoder) {
+            return this.customEncoderQueueSize;
+        }
+        else {
+            // Because the color and alpha encoders are wired in series, there's no need to also include the alpha
+            // encoder's queue size here
+            return this.encoder?.encodeQueueSize ?? 0;
+        }
+    }
+    checkForEncoderError() {
+        if (this.errorSet) {
+            throw this.error;
+        }
+    }
+}
+let splitterWorkerUrl = null;
+/** Utility class for splitting a composite frame into separate color and alpha parts on the CPU in a worker. */
+class ColorAlphaSplitter {
+    constructor() {
+        this.worker = null;
+        this.pendingRequests = new Map();
+        this.nextRequestId = 0;
+    }
+    split(sourceFrame) {
+        if (!this.worker) {
+            if (!splitterWorkerUrl) {
+                const blob = new Blob([`(${colorAlphaSplitterWorkerCode.toString()})()`], { type: 'application/javascript' });
+                splitterWorkerUrl = URL.createObjectURL(blob);
+            }
+            this.worker = new Worker(splitterWorkerUrl);
+            this.worker.addEventListener('message', (event) => {
+                const data = event.data;
+                const pending = this.pendingRequests.get(data.id);
+                if (!pending) {
+                    return;
+                }
+                this.pendingRequests.delete(data.id);
+                if ('error' in data) {
+                    pending.reject(new Error(data.error));
+                }
+                else {
+                    pending.resolve({ colorFrame: data.colorFrame, alphaFrame: data.alphaFrame });
+                }
+            });
+            this.worker.addEventListener('error', (event) => {
+                const error = new Error(event.message || 'Color/alpha splitter worker error.');
+                for (const pending of this.pendingRequests.values()) {
+                    pending.reject(error);
+                }
+                this.pendingRequests.clear();
+            });
+        }
+        const id = this.nextRequestId++;
+        const pending = promiseWithResolvers();
+        this.pendingRequests.set(id, pending);
+        this.worker.postMessage({ id, sourceFrame }, { transfer: [sourceFrame] });
+        return pending.promise;
+    }
+    close() {
+        this.worker?.terminate();
+        this.worker = null;
+        const error = new Error('Color/alpha splitter closed.');
+        for (const pending of this.pendingRequests.values()) {
+            pending.reject(error);
+        }
+        this.pendingRequests.clear();
+    }
+}
+const colorAlphaSplitterWorkerCode = () => {
+    // Reused across frames as long as the size matches, since consecutive frames usually share dimensions.
+    let cpuSourceBuffer = null;
+    // Serialize execution internally so concurrent requests don't race on the shared cpuSourceBuffer.
+    let chain = Promise.resolve();
+    self.addEventListener('message', (event) => {
+        const { id, sourceFrame } = event.data;
+        chain = chain.then(async () => {
+            try {
+                const { colorFrame, alphaFrame } = await split(sourceFrame);
+                self.postMessage({ id, colorFrame, alphaFrame }, { transfer: [colorFrame, alphaFrame] });
+            }
+            catch (error) {
+                self.postMessage({ id, error: error.message });
+            }
+            finally {
+                sourceFrame.close();
+            }
+        });
+    });
+    const split = async (sourceFrame) => {
+        const format = sourceFrame.format;
+        if (!format) {
+            throw new Error('CPU color/alpha splitting requires a known VideoFrame format.');
+        }
+        const sourceSize = sourceFrame.allocationSize();
+        if (!cpuSourceBuffer || cpuSourceBuffer.byteLength !== sourceSize) {
+            cpuSourceBuffer = new Uint8Array(sourceSize);
+        }
+        await sourceFrame.copyTo(cpuSourceBuffer);
+        if (format === 'RGBA' || format === 'BGRA') {
+            return splitInterleavedRgba(cpuSourceBuffer, format, sourceFrame);
+        }
+        else if (format === 'I420A' || format === 'I420AP10' || format === 'I420AP12'
+            || format === 'I422A' || format === 'I422AP10' || format === 'I422AP12'
+            || format === 'I444A' || format === 'I444AP10' || format === 'I444AP12') {
+            return splitPlanarYuvA(cpuSourceBuffer, format, sourceFrame);
+        }
+        throw new Error(`CPU color/alpha splitting does not support format '${format}'.`);
+    };
+    const splitInterleavedRgba = (source, format, sourceFrame) => {
+        const width = sourceFrame.visibleRect?.width ?? sourceFrame.codedWidth;
+        const height = sourceFrame.visibleRect?.height ?? sourceFrame.codedHeight;
+        const pixelCount = width * height;
+        const chromaW = Math.ceil(width / 2);
+        const chromaH = Math.ceil(height / 2);
+        const alphaSize = pixelCount + chromaW * chromaH * 2;
+        // Encode alpha as I420: Y = source A bytes, UV = 128
+        const alphaBuffer = new Uint8Array(alphaSize);
+        for (let i = 0, j = 3; i < pixelCount; i++, j += 4) {
+            alphaBuffer[i] = source[j];
+        }
+        alphaBuffer.fill(128, pixelCount);
+        // Hand the source buffer straight to VideoFrame as RGBX/BGRX so the A bytes are ignored
+        const colorFrame = new VideoFrame(source, {
+            format: format === 'RGBA' ? 'RGBX' : 'BGRX',
+            codedWidth: width,
+            codedHeight: height,
+            timestamp: sourceFrame.timestamp,
+            duration: sourceFrame.duration ?? undefined,
+            // No transfer!
+        });
+        const alphaInit = {
+            format: 'I420',
+            codedWidth: width,
+            codedHeight: height,
+            timestamp: sourceFrame.timestamp,
+            duration: sourceFrame.duration ?? undefined,
+            colorSpace: {
+                fullRange: true,
+                matrix: 'bt709',
+                primaries: 'bt709',
+                transfer: 'bt709',
+            },
+            transfer: [alphaBuffer.buffer],
+        };
+        const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
+        return { colorFrame, alphaFrame };
+    };
+    const splitPlanarYuvA = (source, format, sourceFrame) => {
+        const width = sourceFrame.visibleRect?.width ?? sourceFrame.codedWidth;
+        const height = sourceFrame.visibleRect?.height ?? sourceFrame.codedHeight;
+        const is10 = format.includes('P10');
+        const is12 = format.includes('P12');
+        const bytesPerSample = (is10 || is12) ? 2 : 1;
+        let chromaW;
+        let chromaH;
+        if (format.startsWith('I420')) {
+            chromaW = Math.ceil(width / 2);
+            chromaH = Math.ceil(height / 2);
+        }
+        else if (format.startsWith('I422')) {
+            chromaW = Math.ceil(width / 2);
+            chromaH = height;
+        }
+        else {
+            chromaW = width;
+            chromaH = height;
+        }
+        const ySamples = width * height;
+        const uvSamples = chromaW * chromaH;
+        const yBytes = ySamples * bytesPerSample;
+        const uvBytes = uvSamples * bytesPerSample;
+        const aBytes = ySamples * bytesPerSample;
+        const colorBytes = yBytes + uvBytes * 2;
+        const colorFormat = format.replace('A', '');
+        const alphaChromaW = Math.ceil(width / 2);
+        const alphaChromaH = Math.ceil(height / 2);
+        const alphaUvSamples = alphaChromaW * alphaChromaH;
+        const alphaUvBytes = alphaUvSamples * bytesPerSample;
+        const alphaSize = aBytes + 2 * alphaUvBytes;
+        const alphaBuffer = new Uint8Array(alphaSize);
+        const aPlaneStart = colorBytes;
+        alphaBuffer.set(source.subarray(aPlaneStart, aPlaneStart + aBytes), 0);
+        // Fill UV planes with the neutral chroma value
+        const uvOffset = aBytes;
+        const neutralChroma = is10 ? 512 : (is12 ? 2048 : 128);
+        if (bytesPerSample === 1) {
+            alphaBuffer.fill(neutralChroma, uvOffset);
+        }
+        else {
+            const uvView = new Uint16Array(alphaBuffer.buffer, uvOffset, 2 * alphaUvSamples);
+            uvView.fill(neutralChroma);
+        }
+        const alphaFormat = (is10 ? 'I420P10' : (is12 ? 'I420P12' : 'I420'));
+        // Color frame is simply a prefix of the combined bytes
+        const colorFrame = new VideoFrame(source.subarray(0, colorBytes), {
+            format: colorFormat,
+            codedWidth: width,
+            codedHeight: height,
+            timestamp: sourceFrame.timestamp,
+            duration: sourceFrame.duration ?? undefined,
+        });
+        const alphaInit = {
+            format: alphaFormat,
+            codedWidth: width,
+            codedHeight: height,
+            timestamp: sourceFrame.timestamp,
+            duration: sourceFrame.duration ?? undefined,
+            colorSpace: {
+                fullRange: true,
+                matrix: 'bt709',
+                primaries: 'bt709',
+                transfer: 'bt709',
+            },
+            transfer: [alphaBuffer.buffer],
+        };
+        const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
+        return { colorFrame, alphaFrame };
+    };
+};
+/**
+ * This source can be used to add video frames to the output track from a fixed canvas element. Since canvases are often
+ * used for rendering, this source provides a convenient wrapper around {@link VideoSampleSource}.
+ * @group Media sources
+ * @public
+ */
+class CanvasSource extends VideoSource {
+    /**
+     * Creates a new {@link CanvasSource} from a canvas element or `OffscreenCanvas` whose samples are encoded
+     * according to the specified {@link VideoEncodingConfig}.
+     */
+    constructor(canvas, encodingConfig) {
+        if (!(typeof HTMLCanvasElement !== 'undefined' && canvas instanceof HTMLCanvasElement)
+            && !(typeof OffscreenCanvas !== 'undefined' && canvas instanceof OffscreenCanvas)) {
+            throw new TypeError('canvas must be an HTMLCanvasElement or OffscreenCanvas.');
+        }
+        validateVideoEncodingConfig(encodingConfig);
+        super(encodingConfig.codec);
+        this._encoder = new VideoEncoderWrapper(this, encodingConfig);
+        this._canvas = canvas;
+    }
+    /**
+     * Captures the current canvas state as a video sample (frame), encodes it and adds it to the output.
+     *
+     * @param timestamp - The timestamp of the sample, in seconds.
+     * @param duration - The duration of the sample, in seconds.
+     *
+     * @returns A Promise that resolves once the output is ready to receive more samples. You should await this Promise
+     * to respect writer and encoder backpressure.
+     */
+    add(timestamp, duration = 0, encodeOptions) {
+        if (!Number.isFinite(timestamp)) {
+            throw new TypeError('timestamp must be a finite number.');
+        }
+        if (!Number.isFinite(duration) || duration < 0) {
+            throw new TypeError('duration must be a non-negative number.');
+        }
+        const sample = new VideoSample(this._canvas, { timestamp, duration });
+        return this._encoder.add(sample, true, encodeOptions);
+    }
+    /** @internal */
+    _flushAndClose(forceClose) {
+        return this._encoder.flushAndClose(forceClose);
+    }
+}
+/**
+ * Base class for audio sources - sources for audio tracks.
+ * @group Media sources
+ * @public
+ */
+class AudioSource extends MediaSource {
+    /** Internal constructor. */
+    constructor(codec) {
+        super();
+        if (!AUDIO_CODECS.includes(codec)) {
+            throw new TypeError(`Invalid audio codec '${codec}'. Must be one of: ${AUDIO_CODECS.join(', ')}.`);
+        }
+        this._codec = codec;
+    }
+}
+/**
+ * Base class for subtitle sources - sources for subtitle tracks.
+ * @group Media sources
+ * @public
+ */
+class SubtitleSource extends MediaSource {
+    /** Internal constructor. */
+    constructor(codec) {
+        super();
+        if (!SUBTITLE_CODECS.includes(codec)) {
+            throw new TypeError(`Invalid subtitle codec '${codec}'. Must be one of: ${SUBTITLE_CODECS.join(', ')}.`);
+        }
+        this._codec = codec;
+    }
+}
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/**
+ * Base class representing an output media file format.
+ * @group Output formats
+ * @public
+ */
+class OutputFormat {
+    /**
+     * Whether this output format supports video rotation metadata.
+     * @deprecated Use {@link OutputFormat.supportsVideoTransformationMetadata} instead.
+     */
+    get supportsVideoRotationMetadata() {
+        return this.supportsVideoTransformationMetadata;
+    }
+    /** Returns a list of video codecs that this output format can contain. */
+    getSupportedVideoCodecs() {
+        return this.getSupportedCodecs()
+            .filter(codec => VIDEO_CODECS.includes(codec));
+    }
+    /** Returns a list of audio codecs that this output format can contain. */
+    getSupportedAudioCodecs() {
+        return this.getSupportedCodecs()
+            .filter(codec => AUDIO_CODECS.includes(codec));
+    }
+    /** Returns a list of subtitle codecs that this output format can contain. */
+    getSupportedSubtitleCodecs() {
+        return this.getSupportedCodecs()
+            .filter(codec => SUBTITLE_CODECS.includes(codec));
+    }
+    /** @internal */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _codecUnsupportedHint(codec) {
+        return '';
+    }
+    /** @internal */
+    _isFragmentedIsobmff() {
+        return false;
+    }
+}
+/**
+ * Format representing files compatible with the ISO base media file format (ISOBMFF), like MP4 or MOV files.
+ * @group Output formats
+ * @public
+ */
+class IsobmffOutputFormat extends OutputFormat {
+    /** Internal constructor. */
+    constructor(options = {}) {
+        if (!options || typeof options !== 'object') {
+            throw new TypeError('options must be an object.');
+        }
+        if (options.fastStart !== undefined
+            && ![false, 'in-memory', 'reserve', 'fragmented'].includes(options.fastStart)) {
+            throw new TypeError('options.fastStart, when provided, must be false, \'in-memory\', \'reserve\', or \'fragmented\'.');
+        }
+        if (options.minimumFragmentDuration !== undefined
+            && (!isNumber(options.minimumFragmentDuration) || options.minimumFragmentDuration < 0)) {
+            throw new TypeError('options.minimumFragmentDuration, when provided, must be a non-negative number.');
+        }
+        if (options.onFtyp !== undefined && typeof options.onFtyp !== 'function') {
+            throw new TypeError('options.onFtyp, when provided, must be a function.');
+        }
+        if (options.onMoov !== undefined && typeof options.onMoov !== 'function') {
+            throw new TypeError('options.onMoov, when provided, must be a function.');
+        }
+        if (options.onMdat !== undefined && typeof options.onMdat !== 'function') {
+            throw new TypeError('options.onMdat, when provided, must be a function.');
+        }
+        if (options.onMoof !== undefined && typeof options.onMoof !== 'function') {
+            throw new TypeError('options.onMoof, when provided, must be a function.');
+        }
+        if (options.metadataFormat !== undefined
+            && !['mdir', 'mdta', 'udta', 'auto'].includes(options.metadataFormat)) {
+            throw new TypeError('options.metadataFormat, when provided, must be either \'auto\', \'mdir\', \'mdta\', or \'udta\'.');
+        }
+        super();
+        this._options = options;
+    }
+    getSupportedTrackCounts() {
+        const max = 2 ** 32 - 1; // Have fun reaching this one
+        return {
+            video: { min: 0, max },
+            audio: { min: 0, max },
+            subtitle: { min: 0, max },
+            total: { min: 0, max },
+        };
+    }
+    get supportsVideoTransformationMetadata() {
+        return true;
+    }
+    get supportsTimestampedMediaData() {
+        return true;
+    }
+    get negativeTimestampSupport() {
+        return 'full';
+    }
+    /** @internal */
+    _createMuxer(output) {
+        return new IsobmffMuxer(output, this);
+    }
+    /** @internal */
+    _isFragmentedIsobmff() {
+        return this._options.fastStart === 'fragmented';
+    }
+}
+/**
+ * MPEG-4 Part 14 (MP4) file format. Supports most codecs.
+ * @group Output formats
+ * @public
+ */
+class Mp4OutputFormat extends IsobmffOutputFormat {
+    /** Creates a new {@link Mp4OutputFormat} configured with the specified `options`. */
+    constructor(options) {
+        super(options);
+    }
+    /** @internal */
+    get _name() {
+        return 'MP4';
+    }
+    get fileExtension() {
+        return '.mp4';
+    }
+    get mimeType() {
+        return 'video/mp4';
+    }
+    getSupportedCodecs() {
+        return [
+            ...VIDEO_CODECS,
+            ...NON_PCM_AUDIO_CODECS,
+            // These are supported via ISO/IEC 23003-5:
+            'pcm-s16',
+            'pcm-s16be',
+            'pcm-s24',
+            'pcm-s24be',
+            'pcm-s32',
+            'pcm-s32be',
+            'pcm-f32',
+            'pcm-f32be',
+            'pcm-f64',
+            'pcm-f64be',
+            ...SUBTITLE_CODECS,
+        ];
+    }
+    /** @internal */
+    _codecUnsupportedHint(codec) {
+        if (new MovOutputFormat().getSupportedCodecs().includes(codec)) {
+            return ' Switching to MOV will grant support for this codec.';
+        }
+        return '';
+    }
+}
+/**
+ * Creates a single Common Media Application Format (CMAF) segment. An init segment will be written to the
+ * {@link Target} specified in {@link OutputOptions.initTarget}. Supports most codecs.
+ * @group Output formats
+ * @public
+ */
+class CmafOutputFormat extends IsobmffOutputFormat {
+    /** Creates a new {@link CmafOutputFormat} configured with the specified `options`. */
+    constructor(options) {
+        super(options);
+    }
+    /** @internal */
+    get _name() {
+        return 'CMAF';
+    }
+    get fileExtension() {
+        return '.m4s';
+    }
+    get mimeType() {
+        return 'video/mp4';
+    }
+    getSupportedCodecs() {
+        return [
+            ...VIDEO_CODECS,
+            ...NON_PCM_AUDIO_CODECS,
+            // These are supported via ISO/IEC 23003-5:
+            'pcm-s16',
+            'pcm-s16be',
+            'pcm-s24',
+            'pcm-s24be',
+            'pcm-s32',
+            'pcm-s32be',
+            'pcm-f32',
+            'pcm-f32be',
+            'pcm-f64',
+            'pcm-f64be',
+            ...SUBTITLE_CODECS,
+        ];
+    }
+}
+/**
+ * QuickTime File Format (QTFF), often called MOV. Supports all video and audio codecs, but not subtitle codecs.
+ * @group Output formats
+ * @public
+ */
+class MovOutputFormat extends IsobmffOutputFormat {
+    /** Creates a new {@link MovOutputFormat} configured with the specified `options`. */
+    constructor(options) {
+        super(options);
+    }
+    /** @internal */
+    get _name() {
+        return 'MOV';
+    }
+    get fileExtension() {
+        return '.mov';
+    }
+    get mimeType() {
+        return 'video/quicktime';
+    }
+    getSupportedCodecs() {
+        return [
+            ...VIDEO_CODECS,
+            ...AUDIO_CODECS,
+        ];
+    }
+    /** @internal */
+    _codecUnsupportedHint(codec) {
+        if (new Mp4OutputFormat().getSupportedCodecs().includes(codec)) {
+            return ' Switching to MP4 will grant support for this codec.';
+        }
+        return '';
+    }
+}
+
+/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/**
+ * List of all track types.
+ * @group Miscellaneous
+ * @public
+ */
+const ALL_TRACK_TYPES = ['video', 'audio', 'subtitle'];
+/**
+ * Represents a track added to an {@link Output}.
+ * @group Output files
+ * @public
+ */
+class OutputTrack {
+    /** @internal */
+    constructor(id, output, type, source, metadata) {
+        this.id = id;
+        this.output = output;
+        this.type = type;
+        this.source = source;
+        this.metadata = metadata;
+    }
+    /** Returns true if and only if this track is a video track. */
+    isVideoTrack() {
+        return this.type === 'video';
+    }
+    /** Returns true if and only if this track is an audio track. */
+    isAudioTrack() {
+        return this.type === 'audio';
+    }
+    /** Returns true if and only if this track is a subtitle track. */
+    isSubtitleTrack() {
+        return this.type === 'subtitle';
+    }
+    /**
+     * Returns true if and only if this track can be paired with the given other track. Pairability can be set using
+     * the {@link BaseTrackMetadata.group} option.
+     */
+    canBePairedWith(other) {
+        if (!(other instanceof OutputTrack)) {
+            throw new TypeError('other must be an OutputTrack.');
+        }
+        if (this === other) {
+            return false;
+        }
+        const thisGroups = toArray(this.metadata.group);
+        const otherGroups = toArray(other.metadata.group);
+        for (const aGroup of thisGroups) {
+            const pairableInSameGroup = this.type !== other.type && otherGroups.some(bGroup => aGroup === bGroup);
+            if (pairableInSameGroup) {
+                return true;
+            }
+            const pairableAcrossGroups = otherGroups.some(bGroup => aGroup._pairedGroups.has(bGroup));
+            if (pairableAcrossGroups) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+/**
+ * An {@link OutputTrack} providing video data, created using {@link Output.addVideoTrack}.
+ * @group Output files
+ * @public
+ */
+class OutputVideoTrack extends OutputTrack {
+    /** @internal */
+    constructor(id, output, source, metadata) {
+        super(id, output, 'video', source, metadata);
+    }
+}
+/**
+ * An {@link OutputTrack} providing audio data, created using {@link Output.addAudioTrack}.
+ * @group Output files
+ * @public
+ */
+class OutputAudioTrack extends OutputTrack {
+    /** @internal */
+    constructor(id, output, source, metadata) {
+        super(id, output, 'audio', source, metadata);
+    }
+}
+/**
+ * An {@link OutputTrack} providing subtitle data, created using {@link Output.addSubtitleTrack}.
+ * @group Output files
+ * @public
+ */
+class OutputSubtitleTrack extends OutputTrack {
+    /** @internal */
+    constructor(id, output, source, metadata) {
+        super(id, output, 'subtitle', source, metadata);
+    }
+}
+/**
+ * Used to define pairability between {@link OutputTrack} instances. First create the group, then assign tracks to it
+ * via {@link BaseTrackMetadata.group}.
+ *
+ * Two tracks are considered _pairable_ if they are in the same group but have a different {@link TrackType}, or if they
+ * are in different groups that are paired with each other. Groups can be paired with each other using the
+ * {@link OutputTrackGroup.pairWith} method.
+ *
+ * @group Output files
+ * @public
+ */
+class OutputTrackGroup {
+    /** Creates a new {@link OutputTrackGroup}. */
+    constructor() {
+        /** @internal */
+        this._pairedGroups = new Set();
+        // The object's identity is the state
+    }
+    /**
+     * Marks this group as being pairable with another group, symmetrically. Output tracks where each track is assigned
+     * to one half of a group pairing are then considered pairable.
+     *
+     * You cannot pair a group with itself.
+     */
+    pairWith(other) {
+        if (!(other instanceof OutputTrackGroup)) {
+            throw new TypeError('other must be an OutputTrackGroup.');
+        }
+        if (this === other) {
+            throw new TypeError('Cannot pair a group with itself.');
+        }
+        this._pairedGroups.add(other);
+        other._pairedGroups.add(this);
+    }
+}
+const validateBaseTrackMetadata = (metadata) => {
+    if (!metadata || typeof metadata !== 'object') {
+        throw new TypeError('metadata must be an object.');
+    }
+    if (metadata.languageCode !== undefined && !isIso639Dash2LanguageCode(metadata.languageCode)) {
+        throw new TypeError('metadata.languageCode, when provided, must be a three-letter, ISO 639-2/T language code.');
+    }
+    if (metadata.name !== undefined && typeof metadata.name !== 'string') {
+        throw new TypeError('metadata.name, when provided, must be a string.');
+    }
+    if (metadata.disposition !== undefined) {
+        validateTrackDisposition(metadata.disposition);
+    }
+    if (metadata.maximumPacketCount !== undefined
+        && (!Number.isInteger(metadata.maximumPacketCount) || metadata.maximumPacketCount < 0)) {
+        throw new TypeError('metadata.maximumPacketCount, when provided, must be a non-negative integer.');
+    }
+    if (metadata.bitrate !== undefined && (!Number.isFinite(metadata.bitrate) || metadata.bitrate < 0)) {
+        throw new TypeError('metadata.bitrate, when provided, must be a non-negative number.');
+    }
+    if (metadata.averageBitrate !== undefined
+        && (!Number.isFinite(metadata.averageBitrate) || metadata.averageBitrate < 0)) {
+        throw new TypeError('metadata.averageBitrate, when provided, must be a non-negative number.');
+    }
+    if (metadata.group !== undefined
+        && !(metadata.group instanceof OutputTrackGroup)
+        && (!Array.isArray(metadata.group) || metadata.group.some(group => !(group instanceof OutputTrackGroup)))) {
+        throw new TypeError('metadata.group, when provided, must be an OutputTrackGroup instance or an array of'
+            + ' OutputTrackGroup instances.');
+    }
+};
+/**
+ * Main class orchestrating the creation of new media files.
+ * @group Output files
+ * @public
+ */
+class Output extends EventEmitter {
+    /**
+     * The target to which the root file will be written. Throws when using {@link PathedTarget} with an async callback;
+     * prefer the `'target'` event for those cases.
+     */
+    get target() {
+        const errorMessage = 'Output.target cannot be used when using PathedTarget with an async callback.'
+            + ' Use the \'target\' event instead.';
+        // We use this field to make sure we can reliably throw in the `target` getter whenever retrieving the target
+        // requires awaiting a promise. We do this so there is no different behavior based on order: if the target has
+        // already been retrieved via the normal internal operations, and then somebody calls the `target` getter, even
+        // if the target is now available, the getter should still throw to be consistent in behavior and in definition.
+        if (this._rootTargetPromise) {
+            throw new TypeError(errorMessage);
+        }
+        const rootTargetResult = this._getRootTarget();
+        if (isThenable(rootTargetResult)) {
+            throw new TypeError(errorMessage);
+        }
+        return rootTargetResult;
+    }
+    /**
+     * Creates a new instance of {@link Output} which can then be used to create a new media file according to the
+     * specified {@link OutputOptions}.
+     */
+    constructor(options) {
+        super();
+        /** The current state of the output. */
+        this.state = 'pending';
+        /**
+         * The {@link OutputTrackGroup} that all tracks are assigned to by default unless otherwise specified by
+         * {@link BaseTrackMetadata.group}.
+         */
+        this.defaultTrackGroup = new OutputTrackGroup();
+        /**
+         * The tracks that have been added to this output. Treat it as a readonly field; to add tracks, use the methods.
+         */
+        this.tracks = [];
+        /** @internal */
+        this._onFinalize = null;
+        /** @internal */
+        this._unfinalizedTargets = new Set();
+        /** @internal */
+        this._rootWriterPromise = null;
+        /** @internal */
+        this._startPromise = null;
+        /** @internal */
+        this._cancelPromise = null;
+        /** @internal */
+        this._finalizePromise = null;
+        /** @internal */
+        this._mutex = new AsyncMutex();
+        /** @internal */
+        this._metadataTags = {};
+        /** @internal */
+        this._rootTarget = null;
+        /** @internal */
+        this._rootTargetPromise = null;
+        /**
+         * This field is used to synchronize multiple MediaStreamTracks. They use the same time coordinate system across
+         * tracks, and to ensure correct audio-video sync, we must use the same offset for all of them. The reason an offset
+         * is needed at all is because the timestamps typically don't start at zero.
+         * @internal
+         */
+        this._firstMediaStreamTimestamp = null;
+        if (!options || typeof options !== 'object') {
+            throw new TypeError('options must be an object.');
+        }
+        if (!(options.format instanceof OutputFormat)) {
+            throw new TypeError('options.format must be an OutputFormat.');
+        }
+        if (!(options.target instanceof Target || options.target instanceof PathedTarget)) {
+            throw new TypeError('options.target must be a Target or a PathedTarget.');
+        }
+        if (options.target instanceof Target) {
+            this._rememberTarget(options.target);
+        }
+        if (options.initTarget !== undefined
+            && !(options.initTarget instanceof Target)
+            && typeof options.initTarget !== 'function') {
+            throw new Error('options.initTarget, when provided, must be a Target or a function that returns or resolves to'
+                + ' a Target.');
+        }
+        if (options.onFinalize !== undefined && typeof options.onFinalize !== 'function') {
+            throw new TypeError('options.onFinalize, when provided, must be a function.');
+        }
+        this.format = options.format;
+        this._target = options.target;
+        this._onFinalize = options.onFinalize ?? null;
+        this._initTarget = options.initTarget ?? null;
+        if (this._initTarget instanceof Target) {
+            this._rememberTarget(this._initTarget);
+        }
+        this._muxer = options.format._createMuxer(this);
+    }
+    /** @internal */
+    _getTargetValidated(request) {
+        assert(this._target instanceof PathedTarget);
+        const result = this._target.getTarget(request);
+        const handleResult = (result) => {
+            if (!(result instanceof Target)) {
+                throw new TypeError('getTarget must return a Target.');
+            }
+            return result;
+        };
+        if (isThenable(result)) {
+            return result.then(handleResult);
+        }
+        else {
+            return handleResult(result);
+        }
+    }
+    /** @internal */
+    async _getTarget(request) {
+        assert(this._target instanceof PathedTarget);
+        const target = await this._getTargetValidated(request);
+        this._emit('target', { target, request, isRoot: request.isRoot });
+        if (this.state === 'canceled') {
+            await target._close();
+        }
+        else {
+            this._rememberTarget(target);
+        }
+        return target;
+    }
+    /** @internal */
+    _rememberTarget(target) {
+        this._unfinalizedTargets.add(target);
+        target.on('finalized', () => this._unfinalizedTargets.delete(target), { once: true });
+    }
+    /** @internal */
+    async _getInitTarget() {
+        assert(this._initTarget !== null);
+        if (this._initTarget instanceof Target) {
+            return this._initTarget;
+        }
+        const target = await this._initTarget();
+        if (this.state === 'canceled') {
+            await target._close();
+        }
+        else {
+            this._rememberTarget(target);
+        }
+        return target;
+    }
+    /** @internal */
+    _hasInitTarget() {
+        return this._initTarget !== null;
+    }
+    /** @internal */
+    _getRootTarget() {
+        if (this._rootTarget) {
+            return this._rootTarget;
+        }
+        if (this._rootTargetPromise) {
+            return this._rootTargetPromise;
+        }
+        if (this._target instanceof Target) {
+            this._emit('target', { target: this._target, request: null, isRoot: true });
+            this._rootTarget = this._target;
+            return this._target;
+        }
+        const request = {
+            path: this._target.rootPath,
+            isRoot: true,
+            mimeType: this.format.mimeType,
+        };
+        const result = this._getTargetValidated(request);
+        const handleResult = (target) => {
+            if (this.state === 'canceled') {
+                // Promise thrown away here, but no way to surface it to the user really
+                void target._close();
+            }
+            else {
+                this._rememberTarget(target);
+            }
+            this._emit('target', { target, request, isRoot: true });
+            this._rootTarget = target;
+            return target;
+        };
+        if (isThenable(result)) {
+            return this._rootTargetPromise = result.then(handleResult);
+        }
+        else {
+            return handleResult(result);
+        }
+    }
+    /** @internal */
+    _getRootWriter(isMonotonic) {
+        return this._rootWriterPromise ??= (async () => {
+            const target = await this._getRootTarget();
+            const writer = new Writer(target, typeof isMonotonic === 'boolean' ? isMonotonic : isMonotonic(target));
+            writer.start();
+            return writer;
+        })();
+    }
+    /** Adds a video track to the output with the given source. Can only be called before the output is started. */
+    addVideoTrack(source, metadata = {}) {
+        if (!(source instanceof VideoSource)) {
+            throw new TypeError('source must be a VideoSource.');
+        }
+        validateBaseTrackMetadata(metadata);
+        if (metadata.rotation !== undefined && ![0, 90, 180, 270].includes(metadata.rotation)) {
+            throw new TypeError(`Invalid video rotation: ${metadata.rotation}. Has to be 0, 90, 180 or 270.`);
+        }
+        if (metadata.flip !== undefined && typeof metadata.flip !== 'boolean') {
+            throw new TypeError('metadata.flip, when provided, must be a boolean.');
+        }
+        if (metadata.transformationMatrix !== undefined
+            && (!Array.isArray(metadata.transformationMatrix)
+                || metadata.transformationMatrix.length !== 9
+                || !metadata.transformationMatrix.every(x => Number.isFinite(x)))) {
+            throw new TypeError('metadata.transformationMatrix, when provided, must be an array of 9 finite numbers.');
+        }
+        if (metadata.frameRate !== undefined
+            && (!Number.isFinite(metadata.frameRate) || metadata.frameRate <= 0)) {
+            throw new TypeError(`Invalid video frame rate: ${metadata.frameRate}. Must be a positive number.`);
+        }
+        if (metadata.hasOnlyKeyPackets !== undefined && typeof metadata.hasOnlyKeyPackets !== 'boolean') {
+            throw new TypeError('metadata.hasOnlyKeyPackets, when provided, must be a boolean.');
+        }
+        if (metadata.canBeTransparent !== undefined && typeof metadata.canBeTransparent !== 'boolean') {
+            throw new TypeError('metadata.canBeTransparent, when provided, must be a boolean.');
+        }
+        if (metadata.decoderConfig !== undefined) {
+            validateVideoChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
+        }
+        if (metadata.primingPacket !== undefined) {
+            if (!(metadata.primingPacket instanceof EncodedPacket)) {
+                throw new TypeError('metadata.primingPacket, when provided, must be an EncodedPacket.');
+            }
+            if (metadata.decoderConfig === undefined) {
+                throw new TypeError('metadata.primingPacket can only be provided alongside metadata.decoderConfig.');
+            }
+        }
+        const metadataCopy = { ...metadata };
+        metadataCopy.group ??= this.defaultTrackGroup;
+        return this._addTrack(new OutputVideoTrack(this.tracks.length + 1, this, source, metadataCopy));
+    }
+    /** Adds an audio track to the output with the given source. Can only be called before the output is started. */
+    addAudioTrack(source, metadata = {}) {
+        if (!(source instanceof AudioSource)) {
+            throw new TypeError('source must be an AudioSource.');
+        }
+        validateBaseTrackMetadata(metadata);
+        if (metadata.decoderConfig !== undefined) {
+            validateAudioChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
+        }
+        if (metadata.primingPacket !== undefined) {
+            if (!(metadata.primingPacket instanceof EncodedPacket)) {
+                throw new TypeError('metadata.primingPacket, when provided, must be an EncodedPacket.');
+            }
+            if (metadata.decoderConfig === undefined) {
+                throw new TypeError('metadata.primingPacket can only be provided alongside metadata.decoderConfig.');
+            }
+        }
+        const metadataCopy = { ...metadata };
+        metadataCopy.group ??= this.defaultTrackGroup;
+        return this._addTrack(new OutputAudioTrack(this.tracks.length + 1, this, source, metadataCopy));
+    }
+    /** Adds a subtitle track to the output with the given source. Can only be called before the output is started. */
+    addSubtitleTrack(source, metadata = {}) {
+        if (!(source instanceof SubtitleSource)) {
+            throw new TypeError('source must be a SubtitleSource.');
+        }
+        validateBaseTrackMetadata(metadata);
+        const metadataCopy = { ...metadata };
+        metadataCopy.group ??= this.defaultTrackGroup;
+        return this._addTrack(new OutputSubtitleTrack(this.tracks.length + 1, this, source, metadataCopy));
+    }
+    /**
+     * Sets descriptive metadata tags about the media file, such as title, author, date, or cover art. When called
+     * multiple times, only the metadata from the last call will be used.
+     *
+     * Can only be called before the output is started.
+     */
+    setMetadataTags(tags) {
+        validateMetadataTags(tags);
+        if (this.state !== 'pending') {
+            throw new Error('Cannot set metadata tags after output has been started or canceled.');
+        }
+        this._metadataTags = tags;
+    }
+    /** @internal */
+    _addTrack(track) {
+        if (this.state !== 'pending') {
+            throw new Error('Cannot add track after output has been started or canceled.');
+        }
+        if (track.source._connectedTrack) {
+            throw new Error('Source is already used for a track.');
+        }
+        // Verify maximum track count constraints
+        const supportedTrackCounts = this.format.getSupportedTrackCounts();
+        const presentTracksOfThisType = this.tracks.reduce((count, t) => count + (t.type === track.type ? 1 : 0), 0);
+        const maxCount = supportedTrackCounts[track.type].max;
+        if (presentTracksOfThisType === maxCount) {
+            throw new Error(maxCount === 0
+                ? `${this.format._name} does not support ${track.type} tracks.`
+                : (`${this.format._name} does not support more than ${maxCount} ${track.type} track`
+                    + `${maxCount === 1 ? '' : 's'}.`));
+        }
+        const maxTotalCount = supportedTrackCounts.total.max;
+        if (this.tracks.length === maxTotalCount) {
+            throw new Error(`${this.format._name} does not support more than ${maxTotalCount} tracks`
+                + `${maxTotalCount === 1 ? '' : 's'} in total.`);
+        }
+        if (track.isVideoTrack()) {
+            const supportedVideoCodecs = this.format.getSupportedVideoCodecs();
+            if (supportedVideoCodecs.length === 0) {
+                throw new Error(`${this.format._name} does not support video tracks.`
+                    + this.format._codecUnsupportedHint(track.source._codec));
+            }
+            else if (!supportedVideoCodecs.includes(track.source._codec)) {
+                throw new Error(`Codec '${track.source._codec}' cannot be contained within ${this.format._name}. Supported`
+                    + ` video codecs are: ${supportedVideoCodecs.map(codec => `'${codec}'`).join(', ')}.`
+                    + this.format._codecUnsupportedHint(track.source._codec));
+            }
+        }
+        else if (track.isAudioTrack()) {
+            const supportedAudioCodecs = this.format.getSupportedAudioCodecs();
+            if (supportedAudioCodecs.length === 0) {
+                throw new Error(`${this.format._name} does not support audio tracks.`
+                    + this.format._codecUnsupportedHint(track.source._codec));
+            }
+            else if (!supportedAudioCodecs.includes(track.source._codec)) {
+                throw new Error(`Codec '${track.source._codec}' cannot be contained within ${this.format._name}. Supported`
+                    + ` audio codecs are: ${supportedAudioCodecs.map(codec => `'${codec}'`).join(', ')}.`
+                    + this.format._codecUnsupportedHint(track.source._codec));
+            }
+        }
+        else if (track.isSubtitleTrack()) {
+            const supportedSubtitleCodecs = this.format.getSupportedSubtitleCodecs();
+            if (supportedSubtitleCodecs.length === 0) {
+                throw new Error(`${this.format._name} does not support subtitle tracks.`
+                    + this.format._codecUnsupportedHint(track.source._codec));
+            }
+            else if (!supportedSubtitleCodecs.includes(track.source._codec)) {
+                throw new Error(`Codec '${track.source._codec}' cannot be contained within ${this.format._name}. Supported`
+                    + ` subtitle codecs are: ${supportedSubtitleCodecs.map(codec => `'${codec}'`).join(', ')}.`
+                    + this.format._codecUnsupportedHint(track.source._codec));
+            }
+        }
+        this.tracks.push(track);
+        track.source._connectedTrack = track;
+        return track;
+    }
+    /**
+     * Whether the output has enough tracks (of the correct type) to be started, based on the requirements of the output
+     * format.
+     */
+    hasEnoughTracks() {
+        const supportedTrackCounts = this.format.getSupportedTrackCounts();
+        for (const trackType of ALL_TRACK_TYPES) {
+            const presentTracksOfThisType = this.tracks.reduce((count, track) => count + (track.type === trackType ? 1 : 0), 0);
+            const minCount = supportedTrackCounts[trackType].min;
+            if (presentTracksOfThisType < minCount) {
+                return false;
+            }
+        }
+        const totalMinCount = supportedTrackCounts.total.min;
+        if (this.tracks.length < totalMinCount) {
+            return false;
+        }
+        return true;
+    }
+    /**
+     * Starts the creation of the output file. This method should be called after all tracks have been added. Only after
+     * the output has started can media samples be added to the tracks.
+     *
+     * @returns A promise that resolves when the output has successfully started and is ready to receive media samples.
+     */
+    async start() {
+        // Verify minimum track count constraints
+        const supportedTrackCounts = this.format.getSupportedTrackCounts();
+        for (const trackType of ALL_TRACK_TYPES) {
+            const presentTracksOfThisType = this.tracks.reduce((count, track) => count + (track.type === trackType ? 1 : 0), 0);
+            const minCount = supportedTrackCounts[trackType].min;
+            if (presentTracksOfThisType < minCount) {
+                throw new Error(minCount === supportedTrackCounts[trackType].max
+                    ? (`${this.format._name} requires exactly ${minCount} ${trackType}`
+                        + ` track${minCount === 1 ? '' : 's'}.`)
+                    : (`${this.format._name} requires at least ${minCount} ${trackType}`
+                        + ` track${minCount === 1 ? '' : 's'}.`));
+            }
+        }
+        const totalMinCount = supportedTrackCounts.total.min;
+        if (this.tracks.length < totalMinCount) {
+            throw new Error(totalMinCount === supportedTrackCounts.total.max
+                ? (`${this.format._name} requires exactly ${totalMinCount} track`
+                    + `${totalMinCount === 1 ? '' : 's'}.`)
+                : (`${this.format._name} requires at least ${totalMinCount} track`
+                    + `${totalMinCount === 1 ? '' : 's'}.`));
+        }
+        if (this.state === 'canceled') {
+            throw new Error('Output has been canceled.');
+        }
+        if (this._startPromise) {
+            Logging._warn('Output has already been started.');
+            return this._startPromise;
+        }
+        return this._startPromise = (async () => {
+            this.state = 'started';
+            // We want to call muxer.start immediately, so we avoid using an await here
+            const releasePromise = this._mutex.acquire();
+            try {
+                await this._muxer.start();
+                const promises = this.tracks.map(track => track.source._start());
+                await Promise.all(promises);
+            }
+            finally {
+                (await releasePromise)();
+            }
+        })();
+    }
+    /**
+     * Resolves with the full MIME type of the output file, including track codecs.
+     *
+     * The returned promise will resolve only once the precise codec strings of all tracks are known.
+     */
+    getMimeType() {
+        return this._muxer.getMimeType();
+    }
+    /**
+     * Cancels the creation of the output file, releasing internal resources like encoders and preventing further
+     * samples from being added.
+     *
+     * @returns A promise that resolves once all internal resources have been released.
+     */
+    async cancel() {
+        if (this.state === 'canceled') {
+            return this._cancelPromise ?? undefined;
+        }
+        else if (this.state === 'finalizing' || this.state === 'finalized') {
+            // Don't wanna warn when finalizing since that shows a warning when finalization fails and then cancel
+            // is called
+            if (this.state === 'finalized') {
+                Logging._warn('Output has already been finalized.');
+            }
+            return;
+        }
+        return this._cancelPromise = (async () => {
+            this.state = 'canceled';
+            const release = await this._mutex.acquire();
+            try {
+                const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(true)); // Force close
+                await Promise.all(promises);
+                await Promise.all([...this._unfinalizedTargets].map(target => target._close()));
+                this._unfinalizedTargets.clear();
+            }
+            finally {
+                release();
+            }
+        })();
+    }
+    /**
+     * Finalizes the output file. This method must be called after all media samples across all tracks have been added.
+     * Once the Promise returned by this method completes, the output file is ready.
+     */
+    async finalize() {
+        if (this.state === 'pending') {
+            throw new Error('Cannot finalize before starting.');
+        }
+        if (this.state === 'canceled') {
+            throw new Error('Cannot finalize after canceling.');
+        }
+        if (this._finalizePromise) {
+            Logging._warn('Output has already been finalized.');
+            return this._finalizePromise;
+        }
+        return this._finalizePromise = (async () => {
+            this.state = 'finalizing';
+            const release = await this._mutex.acquire();
+            try {
+                const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
+                await Promise.all(promises);
+                await this._muxer.finalize();
+                if (this._rootWriterPromise) {
+                    const rootWriter = await this._rootWriterPromise;
+                    if (!rootWriter.finalized) {
+                        await rootWriter.flush();
+                        await rootWriter.finalize();
+                    }
+                }
+                if (this._onFinalize) {
+                    await this._onFinalize();
+                }
+                this.state = 'finalized';
+            }
+            catch (error) {
+                this.state = 'canceled';
+                throw error;
+            }
+            finally {
+                await Promise.all([...this._unfinalizedTargets].map(target => target._close().catch(() => { })));
+                this._unfinalizedTargets.clear();
+                release();
+            }
+        })();
+    }
+}
+
+/** Include hourly contour times and source-interval ends so missing gaps go blank. */ function forecastMovieTimes(axes) {
+    const valid = axes.filter((a)=>a.length && a.every((t, i)=>Number.isFinite(t) && (i === 0 || t > a[i - 1])));
+    if (!valid.length) return [];
+    const hour = 3600_000, first = Math.min(...valid.map((a)=>a[0])), last = Math.min(first + 144 * hour, Math.max(...valid.map((a)=>a.at(-1))));
+    const targets = new Set([
+        last
+    ]);
+    for(let t = first; t <= last; t += hour)targets.add(t);
+    for (const axis of valid)axis.forEach((t, i)=>{
+        if (t >= first && t <= last) targets.add(t);
+        const span = i + 1 < axis.length ? axis[i + 1] - t : i > 0 ? t - axis[i - 1] : 3 * hour, end = t + Math.min(3 * hour, span);
+        if (end >= first && end <= last) targets.add(end);
+    });
+    return [
+        ...targets
+    ].sort((a, b)=>a - b);
+}
+/** Forecast hours have a constant playback speed; coarse source steps are held longer. */ function movieTimeline(times) {
+    if (!times.length || times.some((t, i)=>!Number.isFinite(t) || i > 0 && t <= times[i - 1])) throw new Error('Invalid forecast video times');
+    const origin = times[0], hour = 3600_000;
+    return times.map((time, i)=>({
+            time,
+            timestamp: (time - origin) / hour / 5,
+            duration: (i + 1 < times.length ? times[i + 1] - time : Math.min(hour, i > 0 ? time - times[i - 1] : hour)) / hour / 5
+        }));
+}
+function videoSize(width, height) {
+    if (!(width > 0 && height > 0 && Number.isFinite(width) && Number.isFinite(height))) throw new Error('Map size unavailable');
+    const scale = Math.min(1, 1280 / Math.max(width, height));
+    return {
+        width: Math.max(2, Math.floor(width * scale / 2) * 2),
+        height: Math.max(2, Math.floor(height * scale / 2) * 2)
+    };
+}
+async function checkMp4Support(width, height) {
+    if (typeof VideoEncoder === 'undefined' || !await canEncodeVideo('avc', {
+        width,
+        height,
+        bitrate: 4_000_000
+    })) {
+        throw new Error('MP4 export is unavailable in this browser. Try an updated Chrome, Edge or Safari browser.');
+    }
+}
+/** One decoded canvas at a time; source rendering speed never changes video timing. */ async function encodeMapForecast(canvas, times, draw, signal, progress) {
+    const timeline = movieTimeline(times), target = new BufferTarget();
+    const output = new Output({
+        format: new Mp4OutputFormat({
+            fastStart: 'in-memory'
+        }),
+        target
+    });
+    const source = new CanvasSource(canvas, {
+        codec: 'avc',
+        bitrate: 4_000_000
+    });
+    output.addVideoTrack(source);
+    let finished = false;
+    const cancel = ()=>{
+        if (!finished) void output.cancel().catch(()=>{});
+    };
+    signal.addEventListener('abort', cancel, {
+        once: true
+    });
+    try {
+        signal.throwIfAborted();
+        await output.start();
+        for(let i = 0; i < timeline.length; i++){
+            signal.throwIfAborted();
+            const frame = timeline[i];
+            await draw(frame.time);
+            signal.throwIfAborted();
+            await source.add(frame.timestamp, frame.duration);
+            signal.throwIfAborted();
+            progress(i + 1, timeline.length);
+            await new Promise((resolve)=>setTimeout(resolve, 0));
+        }
+        await output.finalize();
+        signal.throwIfAborted();
+        finished = true;
+        if (!target.buffer?.byteLength) throw new Error('MP4 encoder returned an empty video');
+        return new Blob([
+            target.buffer
+        ], {
+            type: 'video/mp4'
+        });
+    } finally{
+        signal.removeEventListener('abort', cancel);
+        if (!finished) await output.cancel().catch(()=>{});
+    }
+}
+function videoImage(url, signal) {
+    return new Promise((resolve, reject)=>{
+        signal.throwIfAborted();
+        const image = new Image();
+        image.crossOrigin = 'anonymous';
+        const finish = ()=>{
+            clearTimeout(timer);
+            image.onload = null;
+            image.onerror = null;
+            signal.removeEventListener('abort', abort);
+        };
+        const abort = ()=>{
+            finish();
+            image.src = '';
+            reject(new DOMException('Video export cancelled', 'AbortError'));
+        };
+        const timer = setTimeout(()=>{
+            finish();
+            image.src = '';
+            reject(new Error('Video map image timed out'));
+        }, 15000);
+        signal.addEventListener('abort', abort, {
+            once: true
+        });
+        image.onload = ()=>{
+            finish();
+            resolve(image);
+        };
+        image.onerror = ()=>{
+            finish();
+            reject(new Error('Video map image unavailable'));
+        };
+        image.src = url;
+    });
+}
+
 // Submitted place searches and user-requested reverse lookups share one queue.
 // Public Nominatim does not support autocomplete. Cache and pace this client;
 // a multi-user deployment must also enforce the provider's application-wide limit.
@@ -9646,7 +21779,7 @@ function geocode(path, params, signal) {
 /* src\plugin.svelte generated by Svelte v4.2.20 */
 
 function add_css(target) {
-	append_styles(target, "svelte-z23x8a", ".snowline-click-label>span>b{text-shadow:0 0 1px #fff}.snowline-point-place{font-size:12px;line-height:1.3;font-weight:750;color:#d9e7ef;overflow-wrap:anywhere;max-height:3.9em;overflow:auto;padding:0 2px}.wintry-point-pointer{background:transparent!important;border:0!important;pointer-events:none !important}.wintry-point-pointer>span{display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #fff;border-radius:50%;background:var(--probe-accent, #fff);box-shadow:0 0 0 2px rgba(0, 0, 0, 0.55)}.storm-legend.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:9px;color:#f5df91;margin-top:5px}.wintry-storm-symbol{background:none!important;border:0!important;pointer-events:none !important}.wintry-storm-symbol span{font-size:23px;color:#ffe04b;text-shadow:0 1px 2px #111, 0 0 3px #111;line-height:28px}.wintry-precip-icon{background:none!important;border:0!important;pointer-events:none !important}.wintry-precip-icon span{display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}.wintry-precip-icon svg{width:25px;height:25px;padding:1.5px;filter:drop-shadow(0 0 0.75px #ffffffc0)}.layer-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:grid;grid-template-columns:repeat(2, 1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls.svelte-z23x8a label.svelte-z23x8a.svelte-z23x8a{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls.svelte-z23x8a input.svelte-z23x8a.svelte-z23x8a{accent-color:#67d7ff;margin:0;width:15px;height:15px}.zoom-hint.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls.svelte-z23x8a label.unavailable.svelte-z23x8a.svelte-z23x8a{opacity:0.45;cursor:not-allowed}.layer-controls.svelte-z23x8a label.unavailable input.svelte-z23x8a.svelte-z23x8a{cursor:not-allowed}.prepare-map-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls.svelte-z23x8a small.svelte-z23x8a.svelte-z23x8a{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls.svelte-z23x8a .refresh-button.svelte-z23x8a.svelte-z23x8a{min-height:34px}.prepare-ring.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress), #324857 0)}.prepare-ring.svelte-z23x8a span.svelte-z23x8a.svelte-z23x8a{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.loading-stage.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}.data-status.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:flex;flex-direction:column;gap:5px;padding:8px 0;font-size:10px;line-height:1.4;color:#b5cad8}#device-desktop #plugin-windy-plugin-snowline-map-100m{height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible !important}.refresh-error.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error.svelte-z23x8a button.svelte-z23x8a.svelte-z23x8a{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}.forecast-quality{margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}.hatch-legend.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend.svelte-z23x8a span.svelte-z23x8a.svelte-z23x8a{color:#ef70cf;font-weight:700;margin-right:4px}.snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{box-sizing:border-box;width:240px;max-width:calc(100vw - 28px);padding:8px;border-radius:9px;background:rgba(38, 42, 46, 0.96);color:white;box-shadow:0 4px 16px rgba(0, 0, 0, 0.28)}.top-row.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:flex;align-items:center;justify-content:space-between;gap:10px}.top-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:flex;align-items:center;gap:6px}.title.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:16px;font-weight:850;letter-spacing:-0.2px}.switch.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:1px solid rgba(255, 255, 255, 0.11);border-radius:7px;background:rgba(255, 255, 255, 0.035);font-size:9px;font-weight:850;white-space:nowrap;cursor:pointer}.switch.svelte-z23x8a input.svelte-z23x8a.svelte-z23x8a{appearance:none;-webkit-appearance:none;position:relative;margin:0;width:24px;height:14px;border:0;border-radius:8px;background:rgba(255, 255, 255, 0.16);cursor:pointer;transition:background 0.15s ease}.switch.svelte-z23x8a input.svelte-z23x8a.svelte-z23x8a:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#aebbc2;transition:transform 0.15s ease, background 0.15s ease}.switch.svelte-z23x8a input.svelte-z23x8a.svelte-z23x8a:checked{background:rgba(80, 190, 255, 0.35)}.switch.svelte-z23x8a input.svelte-z23x8a.svelte-z23x8a:checked:after{transform:translateX(10px);background:#8ee2ff}.hide-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:24px;height:24px;padding:0;border:1px solid rgba(255, 255, 255, 0.1);border-radius:7px;background:rgba(255, 255, 255, 0.035);color:rgba(255, 255, 255, 0.74);font-size:15px;font-weight:800;cursor:pointer}.hide-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a:hover{background:rgba(255, 255, 255, 0.075);color:#fff}.show-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{padding:7px 10px;border:1px solid rgba(255, 255, 255, 0.16);border-radius:8px;background:rgba(38, 42, 46, 0.96);color:#fff;box-shadow:0 3px 12px rgba(0, 0, 0, 0.24);font-size:11px;font-weight:800;cursor:pointer}.status-pill.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px;padding:4px 7px;border-radius:6px;background:rgba(10, 14, 18, 0.72);color:rgba(255, 255, 255, 0.92);font-size:10px;font-weight:700}.status-dot.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:7px;height:7px;border-radius:50%;background:#70d7ff;animation:svelte-z23x8a-snowline-pulse 1s ease-in-out infinite}@keyframes svelte-z23x8a-snowline-pulse{0%,100%{opacity:0.45;transform:scale(0.85)}50%{opacity:1;transform:scale(1)}}.info-overlay.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0, 0, 0, 0.3)}.info-window.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:min(360px, calc(100vw - 24px));max-height:min(74vh, 540px);overflow:hidden;border:1px solid rgba(80, 190, 255, 0.48);border-radius:10px;background:rgba(24, 28, 32, 0.99);color:white;box-shadow:0 8px 30px rgba(0, 0, 0, 0.48)}.info-head.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:flex;justify-content:space-between;align-items:center;padding:9px 10px 7px;border-bottom:1px solid rgba(255, 255, 255, 0.1);font-size:12px}.info-head.svelte-z23x8a button.svelte-z23x8a.svelte-z23x8a{width:22px;height:22px;border:0;border-radius:6px;background:rgba(255, 255, 255, 0.08);color:white;font-size:17px;cursor:pointer}.info-body.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{max-height:calc(min(74vh, 540px) - 40px);overflow-y:auto;padding:9px 10px 10px;font-size:10px;line-height:1.4;color:rgba(255, 255, 255, 0.84)}.info-body.svelte-z23x8a>div.svelte-z23x8a+div.svelte-z23x8a{margin-top:8px}.info-caveat.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{padding-top:8px;border-top:1px solid rgba(255, 255, 255, 0.1);color:rgba(255, 228, 92, 0.9)}.snowline-label{text-align:center;pointer-events:none}.snowline-label,.snowline-click-label{background:transparent!important;border:0 !important}.snowline-label span{display:inline-block;padding:1px 4px 1px 6px;border-radius:3px;border-left:4px solid var(--snowline-color, white);background:rgba(15, 17, 20, 0.86);color:white;font-size:10px;font-weight:800;white-space:nowrap;text-shadow:0 1px 2px rgba(0, 0, 0, 0.8);box-shadow:0 0 0 1px rgba(255, 255, 255, 0.12)}.snowline-label-major span{padding-left:7px;border-left-width:5px;background:rgba(10, 13, 16, 0.92);font-weight:900;box-shadow:0 0 0 1px rgba(255, 255, 255, 0.18), 0 2px 5px rgba(0, 0, 0, 0.28)}.snowline-click-label{pointer-events:none !important}.snowline-click-label>span{position:absolute;bottom:20px;left:0;transform:translateX(-50%);pointer-events:auto;display:flex;flex-direction:column;gap:6px;width:228px;min-height:146px;box-sizing:border-box;padding:40px 9px 9px;border-radius:14px;border:1px solid rgba(255, 255, 255, 0.11);border-top:2px solid var(--probe-accent, rgba(255, 255, 255, 0.4));border-bottom:3px solid var(--snowline-color, white);background:linear-gradient(180deg, rgba(11, 17, 21, 0.985), rgba(7, 12, 16, 0.99));color:#fff;text-align:center;white-space:normal;text-shadow:none;box-shadow:0 10px 30px rgba(0, 0, 0, 0.54)}.snowline-card-kicker{position:absolute;top:12px;left:74px;right:74px;color:#7f929e;font-size:6px;line-height:1;font-weight:900;letter-spacing:1.15px;text-align:center;white-space:nowrap;pointer-events:none}.snowline-label-close,.snowline-label-share,.snowline-label-chart,.snowline-label-favourite{position:absolute;top:7px;height:27px;padding:0;border:1px solid rgba(255, 255, 255, 0.085);border-radius:8px;background:rgba(255, 255, 255, 0.045);color:#dfe9ee;font-size:12px;line-height:25px;font-weight:800;text-shadow:none;cursor:pointer;pointer-events:auto;transition:background 0.12s ease, border-color 0.12s ease}.snowline-label-close:hover,.snowline-label-share:hover,.snowline-label-chart:hover,.snowline-label-favourite:hover{background:rgba(255, 255, 255, 0.09);border-color:rgba(255, 255, 255, 0.16)}.snowline-label-close{right:7px;width:27px;font-size:17px}.snowline-label-share{right:40px;width:27px;font-size:0;background-repeat:no-repeat;background-position:center;background-size:14px;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3Ccircle cx='6' cy='12' r='3'/%3E%3Ccircle cx='18' cy='19' r='3'/%3E%3Cpath d='M8.6 10.5l6.8-4M8.6 13.5l6.8 4'/%3E%3C/svg%3E\")}.snowline-label-chart{left:7px;width:29px;font-size:15px}.snowline-label-favourite{left:42px;width:29px;font-size:16px;color:#aab6bd}.snowline-label-favourite.saved{color:#ffe45c;border-color:rgba(255, 228, 92, 0.42);background:rgba(255, 228, 92, 0.08)}.snowline-click-label b{display:block;padding:4px 7px 2px;border-radius:8px;background:transparent;color:var(--probe-accent, white);font-size:15px;line-height:1.05;font-weight:900;letter-spacing:0.25px}.snowline-card-dry>span>b{padding:3px 7px 1px;background:transparent;font-size:12px;letter-spacing:0.8px;opacity:0.95}.snowline-label-detail{width:100%}.snowline-position{padding:6px 8px;border-radius:8px;background:rgba(255, 255, 255, 0.055);color:var(--probe-accent, white);line-height:1.05}.snowline-position strong{display:block;font-size:11px;font-weight:900}.snowline-position small{display:block;margin-top:3px;color:rgba(255, 255, 255, 0.68);font-size:7.5px;font-weight:750}.snowline-label-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;width:100%}.snowline-label-grid span,.snowline-outlook-grid span{min-width:0;padding:6px 4px 5px;border-radius:8px;background:rgba(255, 255, 255, 0.028);border:1px solid rgba(255, 255, 255, 0.045);text-align:center}.snowline-label-grid small,.snowline-outlook-grid small{display:block;color:#7f919b;font-size:6.2px;line-height:1;text-transform:uppercase;letter-spacing:0.42px;font-weight:800}.snowline-label-grid strong,.snowline-outlook-grid strong{display:block;margin-top:4px;color:#eef5f8;font-size:10.5px;line-height:1;font-weight:900}.metric-terrain strong{color:#ffd39a}.metric-snowline strong{color:#dff6ff}.metric-precip strong{color:#9fe5ff}.snowline-label-grid.has-precip .metric-precip{grid-column:-1}.snowline-outlook{padding:5px;border:1px solid rgba(110, 203, 255, 0.08);border-radius:8px;background:rgba(60, 150, 205, 0.035)}.snowline-outlook-title{margin-bottom:4px;color:#79badc;font-size:6.5px;font-weight:900;letter-spacing:0.75px}.snowline-outlook-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}.snowline-outlook-grid span{padding:4px 3px;background:rgba(255, 255, 255, 0.028)}.snowline-outlook-grid strong{font-size:8.8px}.snowline-no-snow strong{color:#8f9da5;font-weight:700}.snowline-transition{margin-top:4px;padding:4px 5px;border-radius:6px;background:rgba(255, 255, 255, 0.035);color:#dce9ef;font-size:8px;line-height:1.12;font-weight:800}.snowline-valid{margin:-1px 0 1px;color:#8799a4;font-size:7.2px;line-height:1;font-weight:800;text-align:center}.snowline-compact-relation{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:5px 7px;border-radius:8px;background:rgba(255, 255, 255, 0.025);color:var(--probe-accent, white);font-size:8.2px;line-height:1.1;font-weight:850;text-align:left}.snowline-compact-relation strong{display:inline!important;padding:0!important;background:none!important;color:inherit!important;font-size:8px!important;letter-spacing:0 !important}.snowline-compact-relation small{display:none}.snowline-compact-relation span{color:#aebbc2;font-weight:750;white-space:nowrap}.snowline-event-line{width:100%;box-sizing:border-box;padding:6px 7px;border:0;border-radius:8px;background:rgba(110, 203, 255, 0.045);color:#d8e5eb;text-align:left;font-family:inherit;font-size:7.8px;line-height:1.2;font-weight:800}button.snowline-event-line{display:flex;align-items:center;justify-content:space-between;gap:6px;cursor:pointer;pointer-events:auto}button.snowline-event-line:hover{background:rgba(110, 203, 255, 0.11)}button.snowline-event-line span{flex:0 0 auto;color:#8edcff;font-size:14px;line-height:8px}.snowline-loading{padding:20px 0 14px;color:#9fb0ba;font-size:10px}.snowline-probe-above>span{background:linear-gradient(180deg, rgba(8, 25, 34, 0.99), rgba(8, 14, 18, 0.99))}.snowline-probe-below>span{background:linear-gradient(180deg, rgba(32, 21, 12, 0.99), rgba(18, 13, 10, 0.99))}.snowline-probe-near>span{background:linear-gradient(180deg, rgba(29, 27, 11, 0.99), rgba(17, 16, 9, 0.99))}.snowline-card-hazard>span{border-top-color:#c184ff !important;box-shadow:0 0 0 1px rgba(193, 132, 255, 0.35), 0 12px 32px rgba(77, 27, 107, 0.58)}.snowline-card-hazard>span>b{color:#e7c8ff !important;background:rgba(174, 91, 230, 0.12) !important}@media(max-width: 520px){.info-overlay.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{align-items:flex-start;padding-top:54px}.snowline-click-label>span{width:220px;min-height:142px;padding:40px 8px 8px}.snowline-card-kicker{left:72px;right:72px}.snowline-click-label b{font-size:13px}.snowline-card-dry>span>b{font-size:10.5px}.snowline-position strong{font-size:10.5px}.snowline-label-grid strong,.snowline-outlook-grid strong{font-size:8.5px}}.snowline-label-chart{left:7px;width:69px;font-size:10px}.snowline-label-favourite{left:81px;width:46px;font-size:10px}.snowline-label-share{right:40px;width:45px;background-image:none;font-size:10px}.snowline-card-kicker{display:none}.snowline-valid{font-size:10px;line-height:1.25}.snowline-label-grid small{font-size:9px;line-height:1.2}.snowline-label-grid strong{font-size:13px;line-height:1.2}.snowline-event-line{font-size:11px;line-height:1.4;padding:8px}.snowline-compact-relation,.snowline-compact-relation strong{font-size:10px!important;line-height:1.3}.title.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:13px;white-space:nowrap}.top-row.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,.top-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{gap:3px}.info-overlay.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{z-index:10030}.snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,.show-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:fixed;left:max(16px, env(safe-area-inset-left, 0px));bottom:calc(var(--wintry-bottom-clearance, 84px) + env(safe-area-inset-bottom, 0px));z-index:10005;box-sizing:border-box;max-width:calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:280px;padding:10px;border:1px solid #355363;border-radius:12px;background:linear-gradient(155deg, #142b3b, #0c1822);max-height:calc(100vh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));max-height:calc(100dvh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}@media(max-width: 600px){.snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,.show-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{left:max(12px, env(safe-area-inset-left, 0px));right:max(12px, env(safe-area-inset-right, 0px));bottom:calc(var(--wintry-bottom-clearance, 88px) + env(safe-area-inset-bottom, 0px));margin-inline:auto;max-width:calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:440px;border-radius:16px;padding:10px 12px;max-height:min(45vh, calc(100vh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)));max-height:min(45dvh, calc(100dvh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)))}.show-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:max-content;min-height:44px}.top-row.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{flex-wrap:wrap}}.title.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:18px}.top-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{gap:4px}.hide-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:30px;height:34px}.switch.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{height:34px;font-size:11px}.hatch-legend.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:11px;margin:9px 0}.point-tools.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools.svelte-z23x8a strong.svelte-z23x8a.svelte-z23x8a{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools.svelte-z23x8a>div.svelte-z23x8a.svelte-z23x8a{display:flex;gap:8px;margin-top:9px}.point-tools.svelte-z23x8a button.svelte-z23x8a.svelte-z23x8a{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel.svelte-z23x8a button:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}.status-pill.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:12px;padding:8px}.info-body.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:13px;line-height:1.55}.title.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:15px;white-space:nowrap}.top-row.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{gap:5px}.hide-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:30px;height:32px}.switch.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{height:32px;padding:0 5px;font-size:10px}.point-tools.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{margin-top:7px;padding:0;background:none}.point-tools.svelte-z23x8a strong.svelte-z23x8a.svelte-z23x8a{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools.svelte-z23x8a>div.svelte-z23x8a.svelte-z23x8a{gap:6px;margin-top:6px}.point-tools.svelte-z23x8a button.svelte-z23x8a.svelte-z23x8a{min-height:36px;font-size:12px}.hatch-legend.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:10px;margin:6px 0}.help-link.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:10px;padding:4px}.panel-head.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:sticky;top:-10px;z-index:3;margin:-10px -10px 0;padding:10px 10px 6px;background:linear-gradient(155deg, #142b3b, #102330);border-bottom:1px solid #304655}@media(max-width: 600px){.panel-head.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{margin-inline:-12px;padding-inline:12px}}.layer-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{gap:6px;margin-top:10px}.layer-controls.svelte-z23x8a label.svelte-z23x8a.svelte-z23x8a{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls.svelte-z23x8a label.active.svelte-z23x8a.svelte-z23x8a{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls.svelte-z23x8a label.svelte-z23x8a.svelte-z23x8a:focus-within{outline:2px solid #8de4ff;outline-offset:2px}.storm-legend.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:sticky;bottom:-10px;z-index:3;background:#102330;border-top:1px solid #304655;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a:disabled{opacity:0.45;cursor:default}.panel-footer.svelte-z23x8a .help-link.svelte-z23x8a.svelte-z23x8a{min-height:34px}.status-pill.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:11px;min-height:22px}.status-dot.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{flex-shrink:0}@media(prefers-reduced-motion: reduce){.status-dot.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{animation:none}}@media(pointer: coarse){.layer-controls.svelte-z23x8a label.svelte-z23x8a.svelte-z23x8a,.refresh-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,.panel-footer.svelte-z23x8a .help-link.svelte-z23x8a.svelte-z23x8a{min-height:44px}.hide-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,.switch.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{min-height:40px}.point-tools.svelte-z23x8a button.svelte-z23x8a.svelte-z23x8a{min-height:44px}}#device-mobile .snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,#device-mobile .show-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:relative;left:auto;right:auto;bottom:auto;z-index:auto;margin:0;width:100%;max-width:100%}#device-mobile .snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{border-radius:0;padding:8px 12px;max-height:38vh;max-height:38dvh;padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px))}#device-mobile .panel-head.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{top:-8px;margin-top:-8px;padding-top:8px}#device-mobile .layer-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}#device-mobile .layer-controls.svelte-z23x8a label.svelte-z23x8a.svelte-z23x8a{min-height:44px;padding:6px 4px;justify-content:center;font-size:11px}#device-mobile .prepare-map-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{margin:6px 0;gap:3px}#device-mobile .panel-footer.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:relative;bottom:auto;padding-bottom:0}#device-mobile .title.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:15px}#device-mobile .hide-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,#device-mobile .switch.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{min-height:44px}#device-mobile .panel-actions.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px}#device-mobile .prepare-map-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,#device-mobile .panel-footer.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:contents}#device-mobile .prepare-map-controls.svelte-z23x8a button.svelte-z23x8a.svelte-z23x8a{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}#device-mobile .prepare-map-controls.svelte-z23x8a small.svelte-z23x8a.svelte-z23x8a{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}#device-mobile .panel-footer.svelte-z23x8a .refresh-button.svelte-z23x8a.svelte-z23x8a{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}#device-mobile .panel-footer.svelte-z23x8a .help-link.svelte-z23x8a.svelte-z23x8a{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}.snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{max-height:none;overflow:visible}.panel-head.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:static}.layer-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}.layer-controls.svelte-z23x8a label.svelte-z23x8a.svelte-z23x8a{padding-inline:4px;justify-content:center;font-size:11px}.settings-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:30px;height:32px;border:1px solid #304655;border-radius:7px;background:#152735;color:#dff5ff;font-size:17px;cursor:pointer}.title.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{font-size:14px}.panel-actions.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px;padding-top:7px}.prepare-map-controls.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,.panel-footer.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{display:contents}.prepare-map-controls.svelte-z23x8a button.svelte-z23x8a.svelte-z23x8a{grid-column:1;grid-row:1;min-height:34px;padding-inline:5px}.prepare-map-controls.svelte-z23x8a small.svelte-z23x8a.svelte-z23x8a{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}.panel-footer.svelte-z23x8a .refresh-button.svelte-z23x8a.svelte-z23x8a{grid-column:2;grid-row:1;padding-inline:6px}.panel-footer.svelte-z23x8a .help-link.svelte-z23x8a.svelte-z23x8a{grid-column:3;grid-row:1;padding-inline:3px}#device-mobile .snowline-panel.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{max-height:none;overflow:visible}#device-mobile .panel-head.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a,#device-mobile .panel-actions.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{position:static}#device-mobile .settings-button.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{min-height:44px;min-width:36px}#device-mobile .point-tools.svelte-z23x8a strong.svelte-z23x8a.svelte-z23x8a{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#device-mobile .status-pill.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{margin-top:4px;padding:3px;justify-content:flex-start}#device-mobile .prepare-ring.svelte-z23x8a.svelte-z23x8a.svelte-z23x8a{width:30px;height:30px;flex-basis:30px}#device-mobile .prepare-ring.svelte-z23x8a span.svelte-z23x8a.svelte-z23x8a{width:24px;height:24px;font-size:9px}");
+	append_styles(target, "svelte-1gu5mnn", ".snowline-click-label>span>b{text-shadow:0 0 1px #fff}.snowline-point-place{font-size:12px;line-height:1.3;font-weight:750;color:#d9e7ef;overflow-wrap:anywhere;max-height:3.9em;overflow:auto;padding:0 2px}.wintry-point-pointer{background:transparent!important;border:0!important;pointer-events:none !important}.wintry-point-pointer>span{display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #fff;border-radius:50%;background:var(--probe-accent, #fff);box-shadow:0 0 0 2px rgba(0, 0, 0, 0.55)}.storm-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:9px;color:#f5df91;margin-top:5px}.wintry-storm-symbol{background:none!important;border:0!important;pointer-events:none !important}.wintry-storm-symbol span{font-size:23px;color:#ffe04b;text-shadow:0 1px 2px #111, 0 0 3px #111;line-height:28px}.wintry-precip-icon{background:none!important;border:0!important;pointer-events:none !important}.wintry-precip-icon span{display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}.wintry-precip-icon svg{width:25px;height:25px;padding:1.5px;filter:drop-shadow(0 0 0.75px #ffffffc0)}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;grid-template-columns:repeat(2, 1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn{accent-color:#67d7ff;margin:0;width:15px;height:15px}.zoom-hint.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls.svelte-1gu5mnn label.unavailable.svelte-1gu5mnn.svelte-1gu5mnn{opacity:0.45;cursor:not-allowed}.layer-controls.svelte-1gu5mnn label.unavailable input.svelte-1gu5mnn.svelte-1gu5mnn{cursor:not-allowed}.prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px}.prepare-ring.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress), #324857 0)}.prepare-ring.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.loading-stage.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}.data-status.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;flex-direction:column;gap:5px;padding:8px 0;font-size:10px;line-height:1.4;color:#b5cad8}#device-desktop #plugin-windy-plugin-snowline-map-100m{height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible !important}.refresh-error.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}.forecast-quality{margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{color:#ef70cf;font-weight:700;margin-right:4px}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{box-sizing:border-box;width:240px;max-width:calc(100vw - 28px);padding:8px;border-radius:9px;background:rgba(38, 42, 46, 0.96);color:white;box-shadow:0 4px 16px rgba(0, 0, 0, 0.28)}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;justify-content:space-between;gap:10px}.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:6px}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:16px;font-weight:850;letter-spacing:-0.2px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:1px solid rgba(255, 255, 255, 0.11);border-radius:7px;background:rgba(255, 255, 255, 0.035);font-size:9px;font-weight:850;white-space:nowrap;cursor:pointer}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn{appearance:none;-webkit-appearance:none;position:relative;margin:0;width:24px;height:14px;border:0;border-radius:8px;background:rgba(255, 255, 255, 0.16);cursor:pointer;transition:background 0.15s ease}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#aebbc2;transition:transform 0.15s ease, background 0.15s ease}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:checked{background:rgba(80, 190, 255, 0.35)}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:checked:after{transform:translateX(10px);background:#8ee2ff}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:24px;height:24px;padding:0;border:1px solid rgba(255, 255, 255, 0.1);border-radius:7px;background:rgba(255, 255, 255, 0.035);color:rgba(255, 255, 255, 0.74);font-size:15px;font-weight:800;cursor:pointer}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn:hover{background:rgba(255, 255, 255, 0.075);color:#fff}.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{padding:7px 10px;border:1px solid rgba(255, 255, 255, 0.16);border-radius:8px;background:rgba(38, 42, 46, 0.96);color:#fff;box-shadow:0 3px 12px rgba(0, 0, 0, 0.24);font-size:11px;font-weight:800;cursor:pointer}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px;padding:4px 7px;border-radius:6px;background:rgba(10, 14, 18, 0.72);color:rgba(255, 255, 255, 0.92);font-size:10px;font-weight:700}.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:7px;height:7px;border-radius:50%;background:#70d7ff;animation:svelte-1gu5mnn-snowline-pulse 1s ease-in-out infinite}@keyframes svelte-1gu5mnn-snowline-pulse{0%,100%{opacity:0.45;transform:scale(0.85)}50%{opacity:1;transform:scale(1)}}.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0, 0, 0, 0.3)}.info-window.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:min(360px, calc(100vw - 24px));max-height:min(74vh, 540px);overflow:hidden;border:1px solid rgba(80, 190, 255, 0.48);border-radius:10px;background:rgba(24, 28, 32, 0.99);color:white;box-shadow:0 8px 30px rgba(0, 0, 0, 0.48)}.info-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;justify-content:space-between;align-items:center;padding:9px 10px 7px;border-bottom:1px solid rgba(255, 255, 255, 0.1);font-size:12px}.info-head.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{width:22px;height:22px;border:0;border-radius:6px;background:rgba(255, 255, 255, 0.08);color:white;font-size:17px;cursor:pointer}.info-body.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:calc(min(74vh, 540px) - 40px);overflow-y:auto;padding:9px 10px 10px;font-size:10px;line-height:1.4;color:rgba(255, 255, 255, 0.84)}.info-body.svelte-1gu5mnn>div.svelte-1gu5mnn+div.svelte-1gu5mnn{margin-top:8px}.info-caveat.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{padding-top:8px;border-top:1px solid rgba(255, 255, 255, 0.1);color:rgba(255, 228, 92, 0.9)}.snowline-label{text-align:center;pointer-events:none}.snowline-label,.snowline-click-label{background:transparent!important;border:0 !important}.snowline-label span{display:inline-block;padding:1px 4px 1px 6px;border-radius:3px;border-left:4px solid var(--snowline-color, white);background:rgba(15, 17, 20, 0.86);color:white;font-size:10px;font-weight:800;white-space:nowrap;text-shadow:0 1px 2px rgba(0, 0, 0, 0.8);box-shadow:0 0 0 1px rgba(255, 255, 255, 0.12)}.snowline-label-major span{padding-left:7px;border-left-width:5px;background:rgba(10, 13, 16, 0.92);font-weight:900;box-shadow:0 0 0 1px rgba(255, 255, 255, 0.18), 0 2px 5px rgba(0, 0, 0, 0.28)}.snowline-click-label{pointer-events:none !important}.snowline-click-label>span{position:absolute;bottom:20px;left:0;transform:translateX(-50%);pointer-events:auto;display:flex;flex-direction:column;gap:6px;width:228px;min-height:146px;box-sizing:border-box;padding:40px 9px 9px;border-radius:14px;border:1px solid rgba(255, 255, 255, 0.11);border-top:2px solid var(--probe-accent, rgba(255, 255, 255, 0.4));border-bottom:3px solid var(--snowline-color, white);background:linear-gradient(180deg, rgba(11, 17, 21, 0.985), rgba(7, 12, 16, 0.99));color:#fff;text-align:center;white-space:normal;text-shadow:none;box-shadow:0 10px 30px rgba(0, 0, 0, 0.54)}.snowline-card-kicker{position:absolute;top:12px;left:74px;right:74px;color:#7f929e;font-size:6px;line-height:1;font-weight:900;letter-spacing:1.15px;text-align:center;white-space:nowrap;pointer-events:none}.snowline-label-close,.snowline-label-share,.snowline-label-chart,.snowline-label-favourite{position:absolute;top:7px;height:27px;padding:0;border:1px solid rgba(255, 255, 255, 0.085);border-radius:8px;background:rgba(255, 255, 255, 0.045);color:#dfe9ee;font-size:12px;line-height:25px;font-weight:800;text-shadow:none;cursor:pointer;pointer-events:auto;transition:background 0.12s ease, border-color 0.12s ease}.snowline-label-close:hover,.snowline-label-share:hover,.snowline-label-chart:hover,.snowline-label-favourite:hover{background:rgba(255, 255, 255, 0.09);border-color:rgba(255, 255, 255, 0.16)}.snowline-label-close{right:7px;width:27px;font-size:17px}.snowline-label-share{right:40px;width:27px;font-size:0;background-repeat:no-repeat;background-position:center;background-size:14px;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3Ccircle cx='6' cy='12' r='3'/%3E%3Ccircle cx='18' cy='19' r='3'/%3E%3Cpath d='M8.6 10.5l6.8-4M8.6 13.5l6.8 4'/%3E%3C/svg%3E\")}.snowline-label-chart{left:7px;width:29px;font-size:15px}.snowline-label-favourite{left:42px;width:29px;font-size:16px;color:#aab6bd}.snowline-label-favourite.saved{color:#ffe45c;border-color:rgba(255, 228, 92, 0.42);background:rgba(255, 228, 92, 0.08)}.snowline-click-label b{display:block;padding:4px 7px 2px;border-radius:8px;background:transparent;color:var(--probe-accent, white);font-size:15px;line-height:1.05;font-weight:900;letter-spacing:0.25px}.snowline-card-dry>span>b{padding:3px 7px 1px;background:transparent;font-size:12px;letter-spacing:0.8px;opacity:0.95}.snowline-label-detail{width:100%}.snowline-position{padding:6px 8px;border-radius:8px;background:rgba(255, 255, 255, 0.055);color:var(--probe-accent, white);line-height:1.05}.snowline-position strong{display:block;font-size:11px;font-weight:900}.snowline-position small{display:block;margin-top:3px;color:rgba(255, 255, 255, 0.68);font-size:7.5px;font-weight:750}.snowline-label-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;width:100%}.snowline-label-grid span,.snowline-outlook-grid span{min-width:0;padding:6px 4px 5px;border-radius:8px;background:rgba(255, 255, 255, 0.028);border:1px solid rgba(255, 255, 255, 0.045);text-align:center}.snowline-label-grid small,.snowline-outlook-grid small{display:block;color:#7f919b;font-size:6.2px;line-height:1;text-transform:uppercase;letter-spacing:0.42px;font-weight:800}.snowline-label-grid strong,.snowline-outlook-grid strong{display:block;margin-top:4px;color:#eef5f8;font-size:10.5px;line-height:1;font-weight:900}.metric-terrain strong{color:#ffd39a}.metric-snowline strong{color:#dff6ff}.metric-precip strong{color:#9fe5ff}.snowline-label-grid.has-precip .metric-precip{grid-column:-1}.snowline-outlook{padding:5px;border:1px solid rgba(110, 203, 255, 0.08);border-radius:8px;background:rgba(60, 150, 205, 0.035)}.snowline-outlook-title{margin-bottom:4px;color:#79badc;font-size:6.5px;font-weight:900;letter-spacing:0.75px}.snowline-outlook-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}.snowline-outlook-grid span{padding:4px 3px;background:rgba(255, 255, 255, 0.028)}.snowline-outlook-grid strong{font-size:8.8px}.snowline-no-snow strong{color:#8f9da5;font-weight:700}.snowline-transition{margin-top:4px;padding:4px 5px;border-radius:6px;background:rgba(255, 255, 255, 0.035);color:#dce9ef;font-size:8px;line-height:1.12;font-weight:800}.snowline-valid{margin:-1px 0 1px;color:#8799a4;font-size:7.2px;line-height:1;font-weight:800;text-align:center}.snowline-compact-relation{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:5px 7px;border-radius:8px;background:rgba(255, 255, 255, 0.025);color:var(--probe-accent, white);font-size:8.2px;line-height:1.1;font-weight:850;text-align:left}.snowline-compact-relation strong{display:inline!important;padding:0!important;background:none!important;color:inherit!important;font-size:8px!important;letter-spacing:0 !important}.snowline-compact-relation small{display:none}.snowline-compact-relation span{color:#aebbc2;font-weight:750;white-space:nowrap}.snowline-event-line{width:100%;box-sizing:border-box;padding:6px 7px;border:0;border-radius:8px;background:rgba(110, 203, 255, 0.045);color:#d8e5eb;text-align:left;font-family:inherit;font-size:7.8px;line-height:1.2;font-weight:800}button.snowline-event-line{display:flex;align-items:center;justify-content:space-between;gap:6px;cursor:pointer;pointer-events:auto}button.snowline-event-line:hover{background:rgba(110, 203, 255, 0.11)}button.snowline-event-line span{flex:0 0 auto;color:#8edcff;font-size:14px;line-height:8px}.snowline-loading{padding:20px 0 14px;color:#9fb0ba;font-size:10px}.snowline-probe-above>span{background:linear-gradient(180deg, rgba(8, 25, 34, 0.99), rgba(8, 14, 18, 0.99))}.snowline-probe-below>span{background:linear-gradient(180deg, rgba(32, 21, 12, 0.99), rgba(18, 13, 10, 0.99))}.snowline-probe-near>span{background:linear-gradient(180deg, rgba(29, 27, 11, 0.99), rgba(17, 16, 9, 0.99))}.snowline-card-hazard>span{border-top-color:#c184ff !important;box-shadow:0 0 0 1px rgba(193, 132, 255, 0.35), 0 12px 32px rgba(77, 27, 107, 0.58)}.snowline-card-hazard>span>b{color:#e7c8ff !important;background:rgba(174, 91, 230, 0.12) !important}@media(max-width: 520px){.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{align-items:flex-start;padding-top:54px}.snowline-click-label>span{width:220px;min-height:142px;padding:40px 8px 8px}.snowline-card-kicker{left:72px;right:72px}.snowline-click-label b{font-size:13px}.snowline-card-dry>span>b{font-size:10.5px}.snowline-position strong{font-size:10.5px}.snowline-label-grid strong,.snowline-outlook-grid strong{font-size:8.5px}}.snowline-label-chart{left:7px;width:69px;font-size:10px}.snowline-label-favourite{left:81px;width:46px;font-size:10px}.snowline-label-share{right:40px;width:45px;background-image:none;font-size:10px}.snowline-card-kicker{display:none}.snowline-valid{font-size:10px;line-height:1.25}.snowline-label-grid small{font-size:9px;line-height:1.2}.snowline-label-grid strong{font-size:13px;line-height:1.2}.snowline-event-line{font-size:11px;line-height:1.4;padding:8px}.snowline-compact-relation,.snowline-compact-relation strong{font-size:10px!important;line-height:1.3}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:13px;white-space:nowrap}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:3px}.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{z-index:10030}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:fixed;left:max(16px, env(safe-area-inset-left, 0px));bottom:calc(var(--wintry-bottom-clearance, 84px) + env(safe-area-inset-bottom, 0px));z-index:10005;box-sizing:border-box;max-width:calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:280px;padding:10px;border:1px solid #355363;border-radius:12px;background:linear-gradient(155deg, #142b3b, #0c1822);max-height:calc(100vh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));max-height:calc(100dvh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}@media(max-width: 600px){.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{left:max(12px, env(safe-area-inset-left, 0px));right:max(12px, env(safe-area-inset-right, 0px));bottom:calc(var(--wintry-bottom-clearance, 88px) + env(safe-area-inset-bottom, 0px));margin-inline:auto;max-width:calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:440px;border-radius:16px;padding:10px 12px;max-height:min(45vh, calc(100vh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)));max-height:min(45dvh, calc(100dvh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)))}.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:max-content;min-height:44px}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{flex-wrap:wrap}}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:18px}.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:4px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:34px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{height:34px;font-size:11px}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:11px;margin:9px 0}.point-tools.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools.svelte-1gu5mnn>div.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;gap:8px;margin-top:9px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel.svelte-1gu5mnn button:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:12px;padding:8px}.info-body.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:13px;line-height:1.55}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:15px;white-space:nowrap}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:5px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:32px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{height:32px;padding:0 5px;font-size:10px}.point-tools.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:7px;padding:0;background:none}.point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools.svelte-1gu5mnn>div.svelte-1gu5mnn.svelte-1gu5mnn{gap:6px;margin-top:6px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:36px;font-size:12px}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;margin:6px 0}.help-link.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;padding:4px}.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;top:-10px;z-index:3;margin:-10px -10px 0;padding:10px 10px 6px;background:linear-gradient(155deg, #142b3b, #102330);border-bottom:1px solid #304655}@media(max-width: 600px){.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-inline:-12px;padding-inline:12px}}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:6px;margin-top:10px}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls.svelte-1gu5mnn label.active.svelte-1gu5mnn.svelte-1gu5mnn{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn:focus-within{outline:2px solid #8de4ff;outline-offset:2px}.storm-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;bottom:-10px;z-index:3;background:#102330;border-top:1px solid #304655;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn:disabled{opacity:0.45;cursor:default}.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:11px;min-height:22px}.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{flex-shrink:0}@media(prefers-reduced-motion: reduce){.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{animation:none}}@media(pointer: coarse){.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn,.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:40px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:relative;left:auto;right:auto;bottom:auto;z-index:auto;margin:0;width:100%;max-width:100%}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{border-radius:0;padding:8px 12px;max-height:38vh;max-height:38dvh;padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px))}#device-mobile .panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{top:-8px;margin-top:-8px;padding-top:8px}#device-mobile .layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}#device-mobile .layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px;padding:6px 4px;justify-content:center;font-size:11px}#device-mobile .prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin:6px 0;gap:3px}#device-mobile .panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:relative;bottom:auto;padding-bottom:0}#device-mobile .title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:15px}#device-mobile .hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}#device-mobile .panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px}#device-mobile .prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:contents}#device-mobile .prepare-map-controls.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}#device-mobile .prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}#device-mobile .panel-footer.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}#device-mobile .panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:visible}.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:static}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{padding-inline:4px;justify-content:center;font-size:11px}.settings-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:32px;border:1px solid #304655;border-radius:7px;background:#152735;color:#dff5ff;font-size:17px;cursor:pointer}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:14px}.panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px;padding-top:7px}.prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:contents}.prepare-map-controls.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:1;grid-row:1;min-height:34px;padding-inline:5px}.prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}.panel-footer.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:2;grid-row:1;padding-inline:6px}.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:3;grid-row:1;padding-inline:3px}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:visible}#device-mobile #plugin-windy-plugin-snowline-map-100m{height:auto!important;max-height:none!important;overflow:visible!important;padding:0!important}#device-mobile .panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:static}#device-mobile .settings-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px;min-width:36px}#device-mobile .point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#device-mobile .status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:4px;padding:3px;justify-content:flex-start}#device-mobile .prepare-ring.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:30px;flex-basis:30px}#device-mobile .prepare-ring.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{width:24px;height:24px;font-size:9px}");
 }
 
 // (3:0) {:else}
@@ -9699,49 +21832,51 @@ function create_else_block(ctx) {
 	let div5;
 	let t24;
 	let small;
-	let t25_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "";
+	let t25_value = (/*prepareMessage*/ ctx[17] || 'Current area · up to 144 h') + "";
 	let t25;
 	let t26;
+	let t27;
 	let div6;
 	let button2;
-	let t27;
+	let t28;
 	let button2_disabled_value;
 	let button3;
 	let current;
 	let mounted;
 	let dispose;
-	let if_block0 = !/*precipDetailAvailable*/ ctx[3] && create_if_block_14();
+	let if_block0 = !/*precipDetailAvailable*/ ctx[3] && create_if_block_15();
 	placesearch = new PlaceSearch({});
-	placesearch.$on("select", /*handlePlaceSelect*/ ctx[30]);
-	placesearch.$on("clear", /*handleSearchClear*/ ctx[31]);
-	let if_block1 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[16] && create_if_block_13(ctx);
-	let if_block2 = (/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[13] && create_if_block_12(ctx);
-	let if_block3 = /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3] && create_if_block_11(ctx);
-	let if_block4 = /*clickedPoint*/ ctx[21] && create_if_block_10(ctx);
+	placesearch.$on("select", /*handlePlaceSelect*/ ctx[34]);
+	placesearch.$on("clear", /*handleSearchClear*/ ctx[35]);
+	let if_block1 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[21] && create_if_block_14(ctx);
+	let if_block2 = (/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[15] && create_if_block_13(ctx);
+	let if_block3 = /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3] && create_if_block_12(ctx);
+	let if_block4 = /*clickedPoint*/ ctx[13] && create_if_block_11(ctx);
 
 	function v21panel_unitSystem_binding(value) {
-		/*v21panel_unitSystem_binding*/ ctx[52](value);
+		/*v21panel_unitSystem_binding*/ ctx[59](value);
 	}
 
-	let v21panel_props = { activeRunTime: /*activeRunTime*/ ctx[24] };
+	let v21panel_props = { activeRunTime: /*activeRunTime*/ ctx[28] };
 
-	if (/*unitSystem*/ ctx[11] !== void 0) {
-		v21panel_props.unitSystem = /*unitSystem*/ ctx[11];
+	if (/*unitSystem*/ ctx[12] !== void 0) {
+		v21panel_props.unitSystem = /*unitSystem*/ ctx[12];
 	}
 
 	v21panel = new V21Panel({ props: v21panel_props });
 	binding_callbacks.push(() => bind(v21panel, 'unitSystem', v21panel_unitSystem_binding));
-	let if_block5 = /*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[27] && create_if_block_9();
-	let if_block6 = /*refreshError*/ ctx[25] && create_if_block_8(ctx);
-	let if_block7 = /*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[20] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) && create_if_block_6(ctx);
+	let if_block5 = /*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[11] && /*mapDataMissing*/ ctx[31] && create_if_block_10();
+	let if_block6 = /*refreshError*/ ctx[29] && create_if_block_9(ctx);
+	let if_block7 = /*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) && create_if_block_7(ctx);
 
 	function select_block_type_2(ctx, dirty) {
-		if (/*preparingMap*/ ctx[14]) return create_if_block_5;
+		if (/*preparingMap*/ ctx[16]) return create_if_block_6;
 		return create_else_block_1;
 	}
 
 	let current_block_type = select_block_type_2(ctx);
 	let if_block8 = current_block_type(ctx);
+	let if_block9 = /*videoDownloadUrl*/ ctx[19] && create_if_block_5(ctx);
 
 	return {
 		c() {
@@ -9803,59 +21938,61 @@ function create_else_block(ctx) {
 			small = element("small");
 			t25 = text(t25_value);
 			t26 = space();
+			if (if_block9) if_block9.c();
+			t27 = space();
 			div6 = element("div");
 			button2 = element("button");
-			t27 = text("↻ Refresh");
+			t28 = text("↻ Refresh");
 			button3 = element("button");
 			button3.textContent = "How it works";
-			attr(div0, "class", "title svelte-z23x8a");
-			attr(button0, "class", "settings-button svelte-z23x8a");
+			attr(div0, "class", "title svelte-1gu5mnn");
+			attr(button0, "class", "settings-button svelte-1gu5mnn");
 			attr(button0, "type", "button");
 			attr(button0, "aria-label", "Open Wintry settings");
 			attr(button0, "title", "Colours, units and data status");
-			attr(button1, "class", "hide-button svelte-z23x8a");
+			attr(button1, "class", "hide-button svelte-1gu5mnn");
 			attr(button1, "type", "button");
 			attr(button1, "aria-label", "Hide Wintry forecast panel");
 			attr(button1, "title", "Hide");
 			attr(input0, "type", "checkbox");
 			attr(input0, "aria-label", "Enable Wintry forecast");
-			attr(input0, "class", "svelte-z23x8a");
-			attr(label0, "class", "switch svelte-z23x8a");
-			attr(div1, "class", "top-controls svelte-z23x8a");
-			attr(div2, "class", "top-row svelte-z23x8a");
+			attr(input0, "class", "svelte-1gu5mnn");
+			attr(label0, "class", "switch svelte-1gu5mnn");
+			attr(div1, "class", "top-controls svelte-1gu5mnn");
+			attr(div2, "class", "top-row svelte-1gu5mnn");
 			attr(input1, "type", "checkbox");
-			attr(input1, "class", "svelte-z23x8a");
+			attr(input1, "class", "svelte-1gu5mnn");
 			attr(label1, "title", "Estimated snowline contours and dry-terrain hatching");
-			attr(label1, "class", "svelte-z23x8a");
+			attr(label1, "class", "svelte-1gu5mnn");
 			toggle_class(label1, "active", /*showContours*/ ctx[0]);
 			attr(input2, "type", "checkbox");
 			input2.disabled = input2_disabled_value = !/*precipDetailAvailable*/ ctx[3];
-			attr(input2, "class", "svelte-z23x8a");
+			attr(input2, "class", "svelte-1gu5mnn");
 			attr(label2, "title", "Precipitation type colours");
-			attr(label2, "class", "svelte-z23x8a");
+			attr(label2, "class", "svelte-1gu5mnn");
 			toggle_class(label2, "active", /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3]);
 			toggle_class(label2, "unavailable", !/*precipDetailAvailable*/ ctx[3]);
 			attr(input3, "type", "checkbox");
 			input3.disabled = input3_disabled_value = !/*precipDetailAvailable*/ ctx[3];
-			attr(input3, "class", "svelte-z23x8a");
+			attr(input3, "class", "svelte-1gu5mnn");
 			attr(label3, "title", "Precipitation-type symbols and ECMWF forecast lightning");
-			attr(label3, "class", "svelte-z23x8a");
+			attr(label3, "class", "svelte-1gu5mnn");
 			toggle_class(label3, "active", /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3]);
 			toggle_class(label3, "unavailable", !/*precipDetailAvailable*/ ctx[3]);
-			attr(div3, "class", "layer-controls svelte-z23x8a");
+			attr(div3, "class", "layer-controls svelte-1gu5mnn");
 			attr(div3, "role", "group");
 			attr(div3, "aria-label", "Map layers");
-			attr(div4, "class", "panel-head svelte-z23x8a");
-			attr(small, "class", "svelte-z23x8a");
-			attr(div5, "class", "prepare-map-controls svelte-z23x8a");
-			attr(button2, "class", "refresh-button svelte-z23x8a");
+			attr(div4, "class", "panel-head svelte-1gu5mnn");
+			attr(small, "class", "svelte-1gu5mnn");
+			attr(div5, "class", "prepare-map-controls svelte-1gu5mnn");
+			attr(button2, "class", "refresh-button svelte-1gu5mnn");
 			attr(button2, "type", "button");
-			button2.disabled = button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[20] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6];
-			attr(button3, "class", "help-link svelte-z23x8a");
+			button2.disabled = button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6];
+			attr(button3, "class", "help-link svelte-1gu5mnn");
 			attr(button3, "type", "button");
-			attr(div6, "class", "panel-footer svelte-z23x8a");
-			attr(div7, "class", "panel-actions svelte-z23x8a");
-			attr(div8, "class", "snowline-panel svelte-z23x8a");
+			attr(div6, "class", "panel-footer svelte-1gu5mnn");
+			attr(div7, "class", "panel-actions svelte-1gu5mnn");
+			attr(div8, "class", "snowline-panel svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div8, anchor);
@@ -9916,27 +22053,29 @@ function create_else_block(ctx) {
 			append(div5, t24);
 			append(div5, small);
 			append(small, t25);
-			append(div7, t26);
+			append(div5, t26);
+			if (if_block9) if_block9.m(div5, null);
+			append(div7, t27);
 			append(div7, div6);
 			append(div6, button2);
-			append(button2, t27);
+			append(button2, t28);
 			append(div6, button3);
 			current = true;
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "click", /*click_handler_1*/ ctx[44]),
-					listen(button1, "click", /*click_handler_2*/ ctx[45]),
-					listen(input0, "change", /*input0_change_handler*/ ctx[46]),
-					listen(input0, "change", /*toggleEnabled*/ ctx[35]),
-					listen(input1, "change", /*input1_change_handler*/ ctx[47]),
-					listen(input1, "change", /*toggleMapLayers*/ ctx[34]),
-					listen(input2, "change", /*input2_change_handler*/ ctx[48]),
-					listen(input2, "change", /*toggleMapLayers*/ ctx[34]),
-					listen(input3, "change", /*input3_change_handler*/ ctx[49]),
-					listen(input3, "change", /*toggleMapLayers*/ ctx[34]),
-					listen(button2, "click", /*refreshForecast*/ ctx[29]),
-					listen(button3, "click", /*click_handler_5*/ ctx[53])
+					listen(button0, "click", /*click_handler_1*/ ctx[51]),
+					listen(button1, "click", /*click_handler_2*/ ctx[52]),
+					listen(input0, "change", /*input0_change_handler*/ ctx[53]),
+					listen(input0, "change", /*toggleEnabled*/ ctx[39]),
+					listen(input1, "change", /*input1_change_handler*/ ctx[54]),
+					listen(input1, "change", /*toggleMapLayers*/ ctx[38]),
+					listen(input2, "change", /*input2_change_handler*/ ctx[55]),
+					listen(input2, "change", /*toggleMapLayers*/ ctx[38]),
+					listen(input3, "change", /*input3_change_handler*/ ctx[56]),
+					listen(input3, "change", /*toggleMapLayers*/ ctx[38]),
+					listen(button2, "click", /*refreshForecast*/ ctx[33]),
+					listen(button3, "click", /*click_handler_5*/ ctx[60])
 				];
 
 				mounted = true;
@@ -9991,7 +22130,7 @@ function create_else_block(ctx) {
 
 			if (!/*precipDetailAvailable*/ ctx[3]) {
 				if (if_block0) ; else {
-					if_block0 = create_if_block_14();
+					if_block0 = create_if_block_15();
 					if_block0.c();
 					if_block0.m(div8, t14);
 				}
@@ -10000,11 +22139,11 @@ function create_else_block(ctx) {
 				if_block0 = null;
 			}
 
-			if (/*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[16]) {
+			if (/*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[21]) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_13(ctx);
+					if_block1 = create_if_block_14(ctx);
 					if_block1.c();
 					if_block1.m(div8, t16);
 				}
@@ -10013,11 +22152,11 @@ function create_else_block(ctx) {
 				if_block1 = null;
 			}
 
-			if ((/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[13]) {
+			if ((/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[15]) {
 				if (if_block2) {
 					if_block2.p(ctx, dirty);
 				} else {
-					if_block2 = create_if_block_12(ctx);
+					if_block2 = create_if_block_13(ctx);
 					if_block2.c();
 					if_block2.m(div8, t17);
 				}
@@ -10030,7 +22169,7 @@ function create_else_block(ctx) {
 				if (if_block3) {
 					if_block3.p(ctx, dirty);
 				} else {
-					if_block3 = create_if_block_11(ctx);
+					if_block3 = create_if_block_12(ctx);
 					if_block3.c();
 					if_block3.m(div8, t18);
 				}
@@ -10039,11 +22178,11 @@ function create_else_block(ctx) {
 				if_block3 = null;
 			}
 
-			if (/*clickedPoint*/ ctx[21]) {
+			if (/*clickedPoint*/ ctx[13]) {
 				if (if_block4) {
 					if_block4.p(ctx, dirty);
 				} else {
-					if_block4 = create_if_block_10(ctx);
+					if_block4 = create_if_block_11(ctx);
 					if_block4.c();
 					if_block4.m(div8, t19);
 				}
@@ -10053,19 +22192,19 @@ function create_else_block(ctx) {
 			}
 
 			const v21panel_changes = {};
-			if (dirty[0] & /*activeRunTime*/ 16777216) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[24];
+			if (dirty[0] & /*activeRunTime*/ 268435456) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[28];
 
-			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 2048) {
+			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 4096) {
 				updating_unitSystem = true;
-				v21panel_changes.unitSystem = /*unitSystem*/ ctx[11];
+				v21panel_changes.unitSystem = /*unitSystem*/ ctx[12];
 				add_flush_callback(() => updating_unitSystem = false);
 			}
 
 			v21panel.$set(v21panel_changes);
 
-			if (/*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[27]) {
+			if (/*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[11] && /*mapDataMissing*/ ctx[31]) {
 				if (if_block5) ; else {
-					if_block5 = create_if_block_9();
+					if_block5 = create_if_block_10();
 					if_block5.c();
 					if_block5.m(div8, t21);
 				}
@@ -10074,11 +22213,11 @@ function create_else_block(ctx) {
 				if_block5 = null;
 			}
 
-			if (/*refreshError*/ ctx[25]) {
+			if (/*refreshError*/ ctx[29]) {
 				if (if_block6) {
 					if_block6.p(ctx, dirty);
 				} else {
-					if_block6 = create_if_block_8(ctx);
+					if_block6 = create_if_block_9(ctx);
 					if_block6.c();
 					if_block6.m(div8, t22);
 				}
@@ -10087,11 +22226,11 @@ function create_else_block(ctx) {
 				if_block6 = null;
 			}
 
-			if (/*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[20] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
+			if (/*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
 				if (if_block7) {
 					if_block7.p(ctx, dirty);
 				} else {
-					if_block7 = create_if_block_6(ctx);
+					if_block7 = create_if_block_7(ctx);
 					if_block7.c();
 					if_block7.m(div8, t23);
 				}
@@ -10112,9 +22251,22 @@ function create_else_block(ctx) {
 				}
 			}
 
-			if ((!current || dirty[0] & /*prepareMessage*/ 32768) && t25_value !== (t25_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "")) set_data(t25, t25_value);
+			if ((!current || dirty[0] & /*prepareMessage*/ 131072) && t25_value !== (t25_value = (/*prepareMessage*/ ctx[17] || 'Current area · up to 144 h') + "")) set_data(t25, t25_value);
 
-			if (!current || dirty[0] & /*enabled, viewportLoading, probeLoading, terrainLoading, stormLoading, rasterLoading*/ 1049840 && button2_disabled_value !== (button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[20] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
+			if (/*videoDownloadUrl*/ ctx[19]) {
+				if (if_block9) {
+					if_block9.p(ctx, dirty);
+				} else {
+					if_block9 = create_if_block_5(ctx);
+					if_block9.c();
+					if_block9.m(div5, null);
+				}
+			} else if (if_block9) {
+				if_block9.d(1);
+				if_block9 = null;
+			}
+
+			if (!current || dirty[0] & /*enabled, viewportLoading, probeLoading, terrainLoading, stormLoading, rasterLoading*/ 16779504 && button2_disabled_value !== (button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
 				button2.disabled = button2_disabled_value;
 			}
 		},
@@ -10145,6 +22297,7 @@ function create_else_block(ctx) {
 			if (if_block6) if_block6.d();
 			if (if_block7) if_block7.d();
 			if_block8.d();
+			if (if_block9) if_block9.d();
 			mounted = false;
 			run_all(dispose);
 		}
@@ -10161,7 +22314,7 @@ function create_if_block_4(ctx) {
 		c() {
 			button = element("button");
 			button.textContent = "❄ Wintry forecast";
-			attr(button, "class", "show-panel svelte-z23x8a");
+			attr(button, "class", "show-panel svelte-1gu5mnn");
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Show Wintry forecast panel");
 		},
@@ -10169,7 +22322,7 @@ function create_if_block_4(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*click_handler*/ ctx[43]);
+				dispose = listen(button, "click", /*click_handler*/ ctx[50]);
 				mounted = true;
 			}
 		},
@@ -10188,14 +22341,14 @@ function create_if_block_4(ctx) {
 }
 
 // (21:4) {#if !precipDetailAvailable}
-function create_if_block_14(ctx) {
+function create_if_block_15(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
 			div.textContent = "Zoom in to level 8 for shading and icons";
-			attr(div, "class", "zoom-hint svelte-z23x8a");
+			attr(div, "class", "zoom-hint svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -10209,15 +22362,15 @@ function create_if_block_14(ctx) {
 }
 
 // (23:4) {#if showShading && precipDetailAvailable && geographyError}
-function create_if_block_13(ctx) {
+function create_if_block_14(ctx) {
 	let div;
 	let t;
 
 	return {
 		c() {
 			div = element("div");
-			t = text(/*geographyError*/ ctx[16]);
-			attr(div, "class", "storm-legend svelte-z23x8a");
+			t = text(/*geographyError*/ ctx[21]);
+			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -10225,7 +22378,7 @@ function create_if_block_13(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*geographyError*/ 65536) set_data(t, /*geographyError*/ ctx[16]);
+			if (dirty[0] & /*geographyError*/ 2097152) set_data(t, /*geographyError*/ ctx[21]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -10236,15 +22389,15 @@ function create_if_block_13(ctx) {
 }
 
 // (24:4) {#if (showShading || showIcons) && terrainDetailStatus}
-function create_if_block_12(ctx) {
+function create_if_block_13(ctx) {
 	let div;
 	let t;
 
 	return {
 		c() {
 			div = element("div");
-			t = text(/*terrainDetailStatus*/ ctx[13]);
-			attr(div, "class", "storm-legend svelte-z23x8a");
+			t = text(/*terrainDetailStatus*/ ctx[15]);
+			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -10252,7 +22405,7 @@ function create_if_block_12(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*terrainDetailStatus*/ 8192) set_data(t, /*terrainDetailStatus*/ ctx[13]);
+			if (dirty[0] & /*terrainDetailStatus*/ 32768) set_data(t, /*terrainDetailStatus*/ ctx[15]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -10263,15 +22416,15 @@ function create_if_block_12(ctx) {
 }
 
 // (25:4) {#if showIcons && precipDetailAvailable}
-function create_if_block_11(ctx) {
+function create_if_block_12(ctx) {
 	let div;
 	let t;
 
 	return {
 		c() {
 			div = element("div");
-			t = text(/*stormStatus*/ ctx[12]);
-			attr(div, "class", "storm-legend svelte-z23x8a");
+			t = text(/*stormStatus*/ ctx[14]);
+			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -10279,7 +22432,7 @@ function create_if_block_11(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*stormStatus*/ 4096) set_data(t, /*stormStatus*/ ctx[12]);
+			if (dirty[0] & /*stormStatus*/ 16384) set_data(t, /*stormStatus*/ ctx[14]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -10290,10 +22443,10 @@ function create_if_block_11(ctx) {
 }
 
 // (26:4) {#if clickedPoint}
-function create_if_block_10(ctx) {
+function create_if_block_11(ctx) {
 	let div1;
 	let strong;
-	let t0_value = (/*clickedPlaceName*/ ctx[23] || 'Selected point') + "";
+	let t0_value = (/*clickedPlaceName*/ ctx[26] || 'Selected point') + "";
 	let t0;
 	let div0;
 	let button0;
@@ -10311,13 +22464,13 @@ function create_if_block_10(ctx) {
 			button0.textContent = "Forecast";
 			button1 = element("button");
 			button1.textContent = "Sounding";
-			attr(strong, "class", "svelte-z23x8a");
+			attr(strong, "class", "svelte-1gu5mnn");
 			attr(button0, "type", "button");
-			attr(button0, "class", "svelte-z23x8a");
+			attr(button0, "class", "svelte-1gu5mnn");
 			attr(button1, "type", "button");
-			attr(button1, "class", "svelte-z23x8a");
-			attr(div0, "class", "svelte-z23x8a");
-			attr(div1, "class", "point-tools svelte-z23x8a");
+			attr(button1, "class", "svelte-1gu5mnn");
+			attr(div0, "class", "svelte-1gu5mnn");
+			attr(div1, "class", "point-tools svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div1, anchor);
@@ -10329,15 +22482,15 @@ function create_if_block_10(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "click", /*click_handler_3*/ ctx[50]),
-					listen(button1, "click", /*click_handler_4*/ ctx[51])
+					listen(button0, "click", /*click_handler_3*/ ctx[57]),
+					listen(button1, "click", /*click_handler_4*/ ctx[58])
 				];
 
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*clickedPlaceName*/ 8388608 && t0_value !== (t0_value = (/*clickedPlaceName*/ ctx[23] || 'Selected point') + "")) set_data(t0, t0_value);
+			if (dirty[0] & /*clickedPlaceName*/ 67108864 && t0_value !== (t0_value = (/*clickedPlaceName*/ ctx[26] || 'Selected point') + "")) set_data(t0, t0_value);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -10351,14 +22504,14 @@ function create_if_block_10(ctx) {
 }
 
 // (30:4) {#if enabled && !viewportLoading && mapDataMissing}
-function create_if_block_9(ctx) {
+function create_if_block_10(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
 			div.textContent = "Some forecast data is missing · blank areas may be unknown";
-			attr(div, "class", "storm-legend svelte-z23x8a");
+			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -10373,7 +22526,7 @@ function create_if_block_9(ctx) {
 }
 
 // (31:4) {#if refreshError}
-function create_if_block_8(ctx) {
+function create_if_block_9(ctx) {
 	let div;
 	let t0;
 	let t1;
@@ -10384,13 +22537,13 @@ function create_if_block_8(ctx) {
 	return {
 		c() {
 			div = element("div");
-			t0 = text(/*refreshError*/ ctx[25]);
+			t0 = text(/*refreshError*/ ctx[29]);
 			t1 = space();
 			button = element("button");
 			button.textContent = "Retry";
 			attr(button, "type", "button");
-			attr(button, "class", "svelte-z23x8a");
-			attr(div, "class", "refresh-error svelte-z23x8a");
+			attr(button, "class", "svelte-1gu5mnn");
+			attr(div, "class", "refresh-error svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -10400,12 +22553,12 @@ function create_if_block_8(ctx) {
 			append(div, button);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*refreshForecast*/ ctx[29]);
+				dispose = listen(button, "click", /*refreshForecast*/ ctx[33]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*refreshError*/ 33554432) set_data(t0, /*refreshError*/ ctx[25]);
+			if (dirty[0] & /*refreshError*/ 536870912) set_data(t0, /*refreshError*/ ctx[29]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -10419,11 +22572,11 @@ function create_if_block_8(ctx) {
 }
 
 // (33:4) {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
-function create_if_block_6(ctx) {
+function create_if_block_7(ctx) {
 	let div;
 
 	function select_block_type_1(ctx, dirty) {
-		if (/*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) return create_if_block_7;
+		if (/*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) return create_if_block_8;
 		return create_else_block_2;
 	}
 
@@ -10434,7 +22587,7 @@ function create_if_block_6(ctx) {
 		c() {
 			div = element("div");
 			if_block.c();
-			attr(div, "class", "status-pill svelte-z23x8a");
+			attr(div, "class", "status-pill svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -10473,7 +22626,7 @@ function create_else_block_2(ctx) {
 		c() {
 			span = element("span");
 			t = text("Reading point…");
-			attr(span, "class", "status-dot svelte-z23x8a");
+			attr(span, "class", "status-dot svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -10490,7 +22643,7 @@ function create_else_block_2(ctx) {
 }
 
 // (35:8) {#if viewportLoading || terrainLoading || stormLoading || rasterLoading}
-function create_if_block_7(ctx) {
+function create_if_block_8(ctx) {
 	let div;
 	let span0;
 	let t0;
@@ -10502,7 +22655,7 @@ function create_if_block_7(ctx) {
 	let t3;
 	let small;
 
-	let t4_value = (/*viewportLoading*/ ctx[10]
+	let t4_value = (/*viewportLoading*/ ctx[11]
 	? 'Forecast data'
 	: /*terrainLoading*/ ctx[4]
 		? 'Terrain detail'
@@ -10516,23 +22669,23 @@ function create_if_block_7(ctx) {
 		c() {
 			div = element("div");
 			span0 = element("span");
-			t0 = text(/*layerLoadPercent*/ ctx[28]);
+			t0 = text(/*layerLoadPercent*/ ctx[32]);
 			t1 = text("%");
 			t2 = space();
 			span1 = element("span");
 			t3 = text("Updating…");
 			small = element("small");
 			t4 = text(t4_value);
-			attr(span0, "class", "svelte-z23x8a");
-			attr(div, "class", "prepare-ring svelte-z23x8a");
+			attr(span0, "class", "svelte-1gu5mnn");
+			attr(div, "class", "prepare-ring svelte-1gu5mnn");
 			attr(div, "role", "progressbar");
 			attr(div, "aria-label", "Map layer loading progress");
 			attr(div, "aria-valuemin", "0");
 			attr(div, "aria-valuemax", "100");
-			attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[28]);
-			attr(div, "aria-valuetext", div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[28]}% of layer loading stages processed`);
-			attr(div, "style", div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[28]}%`);
-			attr(small, "class", "loading-stage svelte-z23x8a");
+			attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[32]);
+			attr(div, "aria-valuetext", div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[32]}% of layer loading stages processed`);
+			attr(div, "style", div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[32]}%`);
+			attr(small, "class", "loading-stage svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -10546,21 +22699,21 @@ function create_if_block_7(ctx) {
 			append(small, t4);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*layerLoadPercent*/ 268435456) set_data(t0, /*layerLoadPercent*/ ctx[28]);
+			if (dirty[1] & /*layerLoadPercent*/ 2) set_data(t0, /*layerLoadPercent*/ ctx[32]);
 
-			if (dirty[0] & /*layerLoadPercent*/ 268435456) {
-				attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[28]);
+			if (dirty[1] & /*layerLoadPercent*/ 2) {
+				attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[32]);
 			}
 
-			if (dirty[0] & /*layerLoadPercent*/ 268435456 && div_aria_valuetext_value !== (div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[28]}% of layer loading stages processed`)) {
+			if (dirty[1] & /*layerLoadPercent*/ 2 && div_aria_valuetext_value !== (div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[32]}% of layer loading stages processed`)) {
 				attr(div, "aria-valuetext", div_aria_valuetext_value);
 			}
 
-			if (dirty[0] & /*layerLoadPercent*/ 268435456 && div_style_value !== (div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[28]}%`)) {
+			if (dirty[1] & /*layerLoadPercent*/ 2 && div_style_value !== (div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[32]}%`)) {
 				attr(div, "style", div_style_value);
 			}
 
-			if (dirty[0] & /*viewportLoading, terrainLoading, rasterLoading*/ 1104 && t4_value !== (t4_value = (/*viewportLoading*/ ctx[10]
+			if (dirty[0] & /*viewportLoading, terrainLoading, rasterLoading*/ 2128 && t4_value !== (t4_value = (/*viewportLoading*/ ctx[11]
 			? 'Forecast data'
 			: /*terrainLoading*/ ctx[4]
 				? 'Terrain detail'
@@ -10589,22 +22742,22 @@ function create_else_block_1(ctx) {
 	return {
 		c() {
 			button = element("button");
-			t = text("Prepare map forecast");
-			attr(button, "class", "refresh-button svelte-z23x8a");
+			t = text("Prepare & download MP4");
+			attr(button, "class", "refresh-button svelte-1gu5mnn");
 			attr(button, "type", "button");
-			button.disabled = button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6];
+			button.disabled = button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6];
 		},
 		m(target, anchor) {
 			insert(target, button, anchor);
 			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*prepareMapForecast*/ ctx[33]);
+				dispose = listen(button, "click", /*prepareMapForecast*/ ctx[37]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*enabled, showShading, precipDetailAvailable, viewportLoading, terrainLoading, rasterLoading*/ 1242 && button_disabled_value !== (button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6])) {
+			if (dirty[0] & /*enabled, showShading, precipDetailAvailable, viewportLoading, terrainLoading, rasterLoading*/ 2266 && button_disabled_value !== (button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6])) {
 				button.disabled = button_disabled_value;
 			}
 		},
@@ -10620,27 +22773,38 @@ function create_else_block_1(ctx) {
 }
 
 // (43:6) {#if preparingMap}
-function create_if_block_5(ctx) {
+function create_if_block_6(ctx) {
 	let button;
+
+	let t_value = (/*exportingMap*/ ctx[18]
+	? 'Cancel MP4 export'
+	: 'Cancel preparation') + "";
+
+	let t;
 	let mounted;
 	let dispose;
 
 	return {
 		c() {
 			button = element("button");
-			button.textContent = "Cancel preparation";
-			attr(button, "class", "refresh-button svelte-z23x8a");
+			t = text(t_value);
+			attr(button, "class", "refresh-button svelte-1gu5mnn");
 			attr(button, "type", "button");
 		},
 		m(target, anchor) {
 			insert(target, button, anchor);
+			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*cancelMapPreparation*/ ctx[32]);
+				dispose = listen(button, "click", /*cancelMapPreparation*/ ctx[36]);
 				mounted = true;
 			}
 		},
-		p: noop,
+		p(ctx, dirty) {
+			if (dirty[0] & /*exportingMap*/ 262144 && t_value !== (t_value = (/*exportingMap*/ ctx[18]
+			? 'Cancel MP4 export'
+			: 'Cancel preparation') + "")) set_data(t, t_value);
+		},
 		d(detaching) {
 			if (detaching) {
 				detach(button);
@@ -10652,7 +22816,40 @@ function create_if_block_5(ctx) {
 	};
 }
 
-// (52:0) {#if settingsOpen}
+// (46:6) {#if videoDownloadUrl}
+function create_if_block_5(ctx) {
+	let a;
+	let t;
+
+	return {
+		c() {
+			a = element("a");
+			t = text("Download MP4 again");
+			attr(a, "href", /*videoDownloadUrl*/ ctx[19]);
+			attr(a, "download", /*videoDownloadName*/ ctx[20]);
+		},
+		m(target, anchor) {
+			insert(target, a, anchor);
+			append(a, t);
+		},
+		p(ctx, dirty) {
+			if (dirty[0] & /*videoDownloadUrl*/ 524288) {
+				attr(a, "href", /*videoDownloadUrl*/ ctx[19]);
+			}
+
+			if (dirty[0] & /*videoDownloadName*/ 1048576) {
+				attr(a, "download", /*videoDownloadName*/ ctx[20]);
+			}
+		},
+		d(detaching) {
+			if (detaching) {
+				detach(a);
+			}
+		}
+	};
+}
+
+// (53:0) {#if settingsOpen}
 function create_if_block_2(ctx) {
 	let div6;
 	let div5;
@@ -10672,7 +22869,7 @@ function create_if_block_2(ctx) {
 	let t6;
 	let t7;
 	let div3;
-	let t8_value = (/*mapDataStatus*/ ctx[26] || 'Forecast data not loaded') + "";
+	let t8_value = (/*mapDataStatus*/ ctx[30] || 'Forecast data not loaded') + "";
 	let t8;
 	let current;
 	let mounted;
@@ -10680,16 +22877,16 @@ function create_if_block_2(ctx) {
 	precipitationlegend = new PrecipitationLegend({});
 
 	function v21panel_unitSystem_binding_1(value) {
-		/*v21panel_unitSystem_binding_1*/ ctx[55](value);
+		/*v21panel_unitSystem_binding_1*/ ctx[62](value);
 	}
 
 	let v21panel_props = {
-		activeRunTime: /*activeRunTime*/ ctx[24],
+		activeRunTime: /*activeRunTime*/ ctx[28],
 		settingsOnly: true
 	};
 
-	if (/*unitSystem*/ ctx[11] !== void 0) {
-		v21panel_props.unitSystem = /*unitSystem*/ ctx[11];
+	if (/*unitSystem*/ ctx[12] !== void 0) {
+		v21panel_props.unitSystem = /*unitSystem*/ ctx[12];
 	}
 
 	v21panel = new V21Panel({ props: v21panel_props });
@@ -10723,18 +22920,18 @@ function create_if_block_2(ctx) {
 			t8 = text(t8_value);
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close settings");
-			attr(button, "class", "svelte-z23x8a");
-			attr(div0, "class", "info-head svelte-z23x8a");
-			attr(div1, "class", "svelte-z23x8a");
-			attr(div2, "class", "svelte-z23x8a");
-			attr(div3, "class", "data-status svelte-z23x8a");
+			attr(button, "class", "svelte-1gu5mnn");
+			attr(div0, "class", "info-head svelte-1gu5mnn");
+			attr(div1, "class", "svelte-1gu5mnn");
+			attr(div2, "class", "svelte-1gu5mnn");
+			attr(div3, "class", "data-status svelte-1gu5mnn");
 			attr(div3, "aria-label", "Map data status");
-			attr(div4, "class", "info-body svelte-z23x8a");
-			attr(div5, "class", "info-window svelte-z23x8a");
+			attr(div4, "class", "info-body svelte-1gu5mnn");
+			attr(div5, "class", "info-window svelte-1gu5mnn");
 			attr(div5, "role", "dialog");
 			attr(div5, "aria-modal", "true");
 			attr(div5, "aria-label", "Wintry settings");
-			attr(div6, "class", "info-overlay svelte-z23x8a");
+			attr(div6, "class", "info-overlay svelte-1gu5mnn");
 			attr(div6, "role", "presentation");
 		},
 		m(target, anchor) {
@@ -10761,8 +22958,8 @@ function create_if_block_2(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button, "click", /*click_handler_6*/ ctx[54]),
-					listen(div6, "click", self(/*click_handler_7*/ ctx[56]))
+					listen(button, "click", /*click_handler_6*/ ctx[61]),
+					listen(div6, "click", self$1(/*click_handler_7*/ ctx[63]))
 				];
 
 				mounted = true;
@@ -10770,11 +22967,11 @@ function create_if_block_2(ctx) {
 		},
 		p(ctx, dirty) {
 			const v21panel_changes = {};
-			if (dirty[0] & /*activeRunTime*/ 16777216) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[24];
+			if (dirty[0] & /*activeRunTime*/ 268435456) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[28];
 
-			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 2048) {
+			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 4096) {
 				updating_unitSystem = true;
-				v21panel_changes.unitSystem = /*unitSystem*/ ctx[11];
+				v21panel_changes.unitSystem = /*unitSystem*/ ctx[12];
 				add_flush_callback(() => updating_unitSystem = false);
 			}
 
@@ -10791,7 +22988,7 @@ function create_if_block_2(ctx) {
 				if_block = null;
 			}
 
-			if ((!current || dirty[0] & /*mapDataStatus*/ 67108864) && t8_value !== (t8_value = (/*mapDataStatus*/ ctx[26] || 'Forecast data not loaded') + "")) set_data(t8, t8_value);
+			if ((!current || dirty[0] & /*mapDataStatus*/ 1073741824) && t8_value !== (t8_value = (/*mapDataStatus*/ ctx[30] || 'Forecast data not loaded') + "")) set_data(t8, t8_value);
 		},
 		i(local) {
 			if (current) return;
@@ -10818,15 +23015,15 @@ function create_if_block_2(ctx) {
 	};
 }
 
-// (59:8) {#if showContours}
+// (60:8) {#if showContours}
 function create_if_block_3(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
-			div.innerHTML = `<span class="svelte-z23x8a">╱╱╱</span> Dry terrain above estimated snowline`;
-			attr(div, "class", "hatch-legend svelte-z23x8a");
+			div.innerHTML = `<span class="svelte-1gu5mnn">╱╱╱</span> Dry terrain above estimated snowline`;
+			attr(div, "class", "hatch-legend svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -10839,30 +23036,31 @@ function create_if_block_3(ctx) {
 	};
 }
 
-// (66:0) {#if chartOpen && clickedPoint}
+// (67:0) {#if chartOpen && clickedPoint}
 function create_if_block_1(ctx) {
 	let snowlinechart;
 	let updating_tab;
 	let current;
 
 	function snowlinechart_tab_binding(value) {
-		/*snowlinechart_tab_binding*/ ctx[57](value);
+		/*snowlinechart_tab_binding*/ ctx[64](value);
 	}
 
 	let snowlinechart_props = {
-		point: /*clickedPoint*/ ctx[21],
-		terrainM: /*clickedMapElevationM*/ ctx[22],
-		placeName: /*clickedPlaceName*/ ctx[23] || 'Selected point',
-		units: /*unitSystem*/ ctx[11]
+		point: /*clickedPoint*/ ctx[13],
+		terrainM: /*clickedMapElevationM*/ ctx[25],
+		terrainSlopes: /*clickedTerrainSlopes*/ ctx[27],
+		placeName: /*clickedPlaceName*/ ctx[26] || 'Selected point',
+		units: /*unitSystem*/ ctx[12]
 	};
 
-	if (/*forecastTab*/ ctx[9] !== void 0) {
-		snowlinechart_props.tab = /*forecastTab*/ ctx[9];
+	if (/*forecastTab*/ ctx[10] !== void 0) {
+		snowlinechart_props.tab = /*forecastTab*/ ctx[10];
 	}
 
 	snowlinechart = new SnowlineChart({ props: snowlinechart_props });
 	binding_callbacks.push(() => bind(snowlinechart, 'tab', snowlinechart_tab_binding));
-	snowlinechart.$on("close", /*close_handler*/ ctx[58]);
+	snowlinechart.$on("close", /*close_handler*/ ctx[65]);
 
 	return {
 		c() {
@@ -10874,14 +23072,15 @@ function create_if_block_1(ctx) {
 		},
 		p(ctx, dirty) {
 			const snowlinechart_changes = {};
-			if (dirty[0] & /*clickedPoint*/ 2097152) snowlinechart_changes.point = /*clickedPoint*/ ctx[21];
-			if (dirty[0] & /*clickedMapElevationM*/ 4194304) snowlinechart_changes.terrainM = /*clickedMapElevationM*/ ctx[22];
-			if (dirty[0] & /*clickedPlaceName*/ 8388608) snowlinechart_changes.placeName = /*clickedPlaceName*/ ctx[23] || 'Selected point';
-			if (dirty[0] & /*unitSystem*/ 2048) snowlinechart_changes.units = /*unitSystem*/ ctx[11];
+			if (dirty[0] & /*clickedPoint*/ 8192) snowlinechart_changes.point = /*clickedPoint*/ ctx[13];
+			if (dirty[0] & /*clickedMapElevationM*/ 33554432) snowlinechart_changes.terrainM = /*clickedMapElevationM*/ ctx[25];
+			if (dirty[0] & /*clickedTerrainSlopes*/ 134217728) snowlinechart_changes.terrainSlopes = /*clickedTerrainSlopes*/ ctx[27];
+			if (dirty[0] & /*clickedPlaceName*/ 67108864) snowlinechart_changes.placeName = /*clickedPlaceName*/ ctx[26] || 'Selected point';
+			if (dirty[0] & /*unitSystem*/ 4096) snowlinechart_changes.units = /*unitSystem*/ ctx[12];
 
-			if (!updating_tab && dirty[0] & /*forecastTab*/ 512) {
+			if (!updating_tab && dirty[0] & /*forecastTab*/ 1024) {
 				updating_tab = true;
-				snowlinechart_changes.tab = /*forecastTab*/ ctx[9];
+				snowlinechart_changes.tab = /*forecastTab*/ ctx[10];
 				add_flush_callback(() => updating_tab = false);
 			}
 
@@ -10902,23 +23101,23 @@ function create_if_block_1(ctx) {
 	};
 }
 
-// (77:0) {#if infoOpen}
+// (79:0) {#if infoOpen}
 function create_if_block(ctx) {
+	let div16;
 	let div15;
-	let div14;
 	let div0;
 	let b0;
 	let t1;
 	let button;
 	let t3;
-	let div13;
+	let div14;
 	let mounted;
 	let dispose;
 
 	return {
 		c() {
+			div16 = element("div");
 			div15 = element("div");
-			div14 = element("div");
 			div0 = element("div");
 			b0 = element("b");
 			b0.textContent = "How Wintry forecast works";
@@ -10926,35 +23125,35 @@ function create_if_block(ctx) {
 			button = element("button");
 			button.textContent = "×";
 			t3 = space();
-			div13 = element("div");
-			div13.innerHTML = `<div class="svelte-z23x8a"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-z23x8a"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-z23x8a"><b>Prepare map forecast:</b> prepares all available shading and precipitation-type icon times for the visible area, up to 144 hours. Preparation may take several minutes; progress and an estimated remaining time are shown. Cancel keeps already prepared times usable. Moving or zooming the map, refreshing, changing shading or receiving a newer model run invalidates the prepared view. Completed frames are stored locally for this session, and the normal timeline remains available if storage is full or unavailable. Windy&#39;s background layer and forecast lightning still load separately.</div> <div class="svelte-z23x8a"><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-z23x8a"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-z23x8a"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-z23x8a"><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div> <div class="svelte-z23x8a"><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div> <div class="svelte-z23x8a"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. New snow uses these intervals, precipitation type and an estimated snow-to-water ratio, with simple settling and melt.</div> <div class="svelte-z23x8a"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated new snow on one timeline.</div> <div class="svelte-z23x8a"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-z23x8a">Estimated new snow is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
+			div14 = element("div");
+			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Terrain flow:</b> the point graph compares above-terrain model winds with a fixed 4 km terrain slope. Upslope/down-slope is an experimental exposure diagnostic; it does not predict additional precipitation, resolve blocked flow, or alter ECMWF amounts. Missing wind/terrain data leaves this diagnostic unavailable.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> timing and estimated new snow through +144 h.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. The separate experimental remaining-layer estimate tracks snow water and depth, with settling and wet-bulb-based melt even in dry weather. It excludes existing snow, ground heat, radiation and drifting; it is not a snow-depth observation or a full energy-balance model.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated new snow on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close information");
 			attr(button, "title", "Close");
-			attr(button, "class", "svelte-z23x8a");
-			attr(div0, "class", "info-head svelte-z23x8a");
-			attr(div13, "class", "info-body svelte-z23x8a");
-			attr(div14, "class", "info-window svelte-z23x8a");
-			attr(div14, "role", "dialog");
-			attr(div14, "aria-modal", "true");
-			attr(div14, "aria-label", "How Wintry forecast works");
-			attr(div15, "class", "info-overlay svelte-z23x8a");
-			attr(div15, "role", "presentation");
+			attr(button, "class", "svelte-1gu5mnn");
+			attr(div0, "class", "info-head svelte-1gu5mnn");
+			attr(div14, "class", "info-body svelte-1gu5mnn");
+			attr(div15, "class", "info-window svelte-1gu5mnn");
+			attr(div15, "role", "dialog");
+			attr(div15, "aria-modal", "true");
+			attr(div15, "aria-label", "How Wintry forecast works");
+			attr(div16, "class", "info-overlay svelte-1gu5mnn");
+			attr(div16, "role", "presentation");
 		},
 		m(target, anchor) {
-			insert(target, div15, anchor);
-			append(div15, div14);
-			append(div14, div0);
+			insert(target, div16, anchor);
+			append(div16, div15);
+			append(div15, div0);
 			append(div0, b0);
 			append(div0, t1);
 			append(div0, button);
-			append(div14, t3);
-			append(div14, div13);
+			append(div15, t3);
+			append(div15, div14);
 
 			if (!mounted) {
 				dispose = [
-					listen(button, "click", /*click_handler_8*/ ctx[59]),
-					listen(div15, "click", self(/*click_handler_9*/ ctx[60]))
+					listen(button, "click", /*click_handler_8*/ ctx[66]),
+					listen(div16, "click", self$1(/*click_handler_9*/ ctx[67]))
 				];
 
 				mounted = true;
@@ -10963,7 +23162,7 @@ function create_if_block(ctx) {
 		p: noop,
 		d(detaching) {
 			if (detaching) {
-				detach(div15);
+				detach(div16);
 			}
 
 			mounted = false;
@@ -10990,9 +23189,9 @@ function create_fragment$1(ctx) {
 
 	current_block_type_index = select_block_type(ctx);
 	if_block0 = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
-	let if_block1 = /*settingsOpen*/ ctx[18] && create_if_block_2(ctx);
-	let if_block2 = /*chartOpen*/ ctx[19] && /*clickedPoint*/ ctx[21] && create_if_block_1(ctx);
-	let if_block3 = /*infoOpen*/ ctx[17] && create_if_block(ctx);
+	let if_block1 = /*settingsOpen*/ ctx[23] && create_if_block_2(ctx);
+	let if_block2 = /*chartOpen*/ ctx[9] && /*clickedPoint*/ ctx[13] && create_if_block_1(ctx);
+	let if_block3 = /*infoOpen*/ ctx[22] && create_if_block(ctx);
 
 	return {
 		c() {
@@ -11043,11 +23242,11 @@ function create_fragment$1(ctx) {
 				if_block0.m(t0.parentNode, t0);
 			}
 
-			if (/*settingsOpen*/ ctx[18]) {
+			if (/*settingsOpen*/ ctx[23]) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 
-					if (dirty[0] & /*settingsOpen*/ 262144) {
+					if (dirty[0] & /*settingsOpen*/ 8388608) {
 						transition_in(if_block1, 1);
 					}
 				} else {
@@ -11066,11 +23265,11 @@ function create_fragment$1(ctx) {
 				check_outros();
 			}
 
-			if (/*chartOpen*/ ctx[19] && /*clickedPoint*/ ctx[21]) {
+			if (/*chartOpen*/ ctx[9] && /*clickedPoint*/ ctx[13]) {
 				if (if_block2) {
 					if_block2.p(ctx, dirty);
 
-					if (dirty[0] & /*chartOpen, clickedPoint*/ 2621440) {
+					if (dirty[0] & /*chartOpen, clickedPoint*/ 8704) {
 						transition_in(if_block2, 1);
 					}
 				} else {
@@ -11089,7 +23288,7 @@ function create_fragment$1(ctx) {
 				check_outros();
 			}
 
-			if (/*infoOpen*/ ctx[17]) {
+			if (/*infoOpen*/ ctx[22]) {
 				if (if_block3) {
 					if_block3.p(ctx, dirty);
 				} else {
@@ -11346,6 +23545,11 @@ function instance$1($$self, $$props, $$invalidate) {
 		prepareGeneration = 0,
 		preparedReadKey = '';
 
+	let exportingMap = false,
+		videoAbort = null,
+		videoDownloadUrl = '',
+		videoDownloadName = '';
+
 	let weatherLoadProgress = 0,
 		terrainLoadProgress = 0,
 		rasterLoadProgress = 0,
@@ -11389,6 +23593,9 @@ function instance$1($$self, $$props, $$invalidate) {
 		clickedPlaceName = null,
 		pointSource = null,
 		clickedNextEventTime = null;
+
+	let clickedTerrainSlopes = null;
+	let exposureGeneration = -1;
 
 	let moveTimer = null,
 		generation = 0,
@@ -11474,12 +23681,12 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (run === null || isOlderRun(run, activeRunTime)) return;
 
 		if (activeRunTime === null) {
-			$$invalidate(24, activeRunTime = run);
+			$$invalidate(28, activeRunTime = run);
 			return;
 		}
 
 		if (run > activeRunTime + 60_000) {
-			$$invalidate(24, activeRunTime = run);
+			$$invalidate(28, activeRunTime = run);
 			profileCache.clear();
 			stormFrames.clear();
 			clearStorms();
@@ -11575,8 +23782,16 @@ function instance$1($$self, $$props, $$invalidate) {
 				]);
 
 				if (destroyed || epoch !== refreshEpoch) return null;
-				const { forecast, header } = extractPayload(r);
-				if (!Object.keys(forecast).length) return null;
+				const { forecast: rawForecast, header } = extractPayload(r);
+				if (!Object.keys(rawForecast).length) return null;
+
+				const forecast = typeof header.modelElevation === 'number' && Number.isFinite(header.modelElevation)
+				? {
+						...rawForecast,
+						__modelTerrainM: header.modelElevation
+					}
+				: rawForecast;
+
 				const runTime = parseTime(header.refTime);
 				if (isOlderRun(runTime, activeRunTime)) return null;
 				invalidateForNewRun(runTime);
@@ -11642,8 +23857,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		refreshQueued = false;
 		const my = ++generation;
-		$$invalidate(38, weatherLoadProgress = 0);
-		$$invalidate(10, viewportLoading = true);
+		$$invalidate(42, weatherLoadProgress = 0);
+		$$invalidate(11, viewportLoading = true);
 		const { points, rows, cols } = buildViewportPoints();
 		const progressive = Array.from({ length: rows }, () => Array(cols).fill(null));
 		let completed = 0, settled = 0, paintedAt = 0;
@@ -11679,7 +23894,7 @@ function instance$1($$self, $$props, $$invalidate) {
 					}
 				}
 
-				if (my === generation) $$invalidate(38, weatherLoadProgress = ++settled / points.length);
+				if (my === generation) $$invalidate(42, weatherLoadProgress = ++settled / points.length);
 				return { ...p, result };
 			});
 
@@ -11691,9 +23906,9 @@ function instance$1($$self, $$props, $$invalidate) {
 				cache = [];
 				clearContours();
 				clearShading();
-				$$invalidate(26, mapDataStatus = 'Forecast unavailable for this area');
-				$$invalidate(27, mapDataMissing = false);
-				$$invalidate(25, refreshError = 'Map forecast unavailable.');
+				$$invalidate(30, mapDataStatus = 'Forecast unavailable for this area');
+				$$invalidate(31, mapDataMissing = false);
+				$$invalidate(29, refreshError = 'Map forecast unavailable.');
 				return;
 			}
 
@@ -11703,11 +23918,11 @@ function instance$1($$self, $$props, $$invalidate) {
 			weatherRevision++;
 			frameCache.clear();
 			lastChecked = Date.now();
-			$$invalidate(25, refreshError = '');
+			$$invalidate(29, refreshError = '');
 			renderFromCache();
 			if (clickedPoint && clickedLatLon && !profileIsFresh(clickedPoint.fetchedAt, clickedPoint.runTime, activeRunTime)) void probeLocation(...clickedLatLon, pointSource ?? 'map-click', clickedPlaceName);
 		} finally {
-			if (my === generation) $$invalidate(10, viewportLoading = false);
+			if (my === generation) $$invalidate(11, viewportLoading = false);
 
 			if (refreshQueued && enabled && !destroyed) {
 				refreshQueued = false;
@@ -11740,11 +23955,11 @@ function instance$1($$self, $$props, $$invalidate) {
 		terrainJobKey = '';
 		refreshEpoch++;
 		generation++;
-		$$invalidate(10, viewportLoading = false);
+		$$invalidate(11, viewportLoading = false);
 		refreshQueued = false;
 		profileCache.clear();
 		pendingProfiles.clear();
-		$$invalidate(25, refreshError = '');
+		$$invalidate(29, refreshError = '');
 		if (clickedLatLon) void probeLocation(...clickedLatLon, pointSource ?? 'map-click', clickedPlaceName);
 		void refreshViewport();
 	}
@@ -11786,7 +24001,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		clearGeography();
 		$$invalidate(4, terrainLoading = false);
-		$$invalidate(13, terrainDetailStatus = '');
+		$$invalidate(15, terrainDetailStatus = '');
 		rasterEpoch++;
 
 		if (rasterTimer) {
@@ -11810,7 +24025,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	function clearGeography() {
 		geographyEpoch++;
-		$$invalidate(16, geographyError = '');
+		$$invalidate(21, geographyError = '');
 
 		if (geographyLayer) try {
 			map.removeLayer(geographyLayer);
@@ -11892,7 +24107,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				
 			}
 
-			$$invalidate(16, geographyError = frame.geographyError);
+			$$invalidate(21, geographyError = frame.geographyError);
 		}
 	}
 
@@ -11911,13 +24126,13 @@ function instance$1($$self, $$props, $$invalidate) {
 	function clearPointState(closeChart = true) {
 		placeAbort?.abort();
 		placeAbort = null;
-		clickGeneration++;
-		$$invalidate(20, probeLoading = false);
-		if (closeChart) $$invalidate(19, chartOpen = false);
-		$$invalidate(21, clickedPoint = null);
-		clickedLatLon = null;
-		$$invalidate(22, clickedMapElevationM = null);
-		$$invalidate(23, clickedPlaceName = null);
+		$$invalidate(49, clickGeneration++, clickGeneration);
+		$$invalidate(24, probeLoading = false);
+		if (closeChart) $$invalidate(9, chartOpen = false);
+		$$invalidate(13, clickedPoint = null);
+		$$invalidate(47, clickedLatLon = null);
+		$$invalidate(25, clickedMapElevationM = null);
+		$$invalidate(26, clickedPlaceName = null);
 		pointSource = null;
 		clickedNextEventTime = null;
 		clearClickLayer();
@@ -11962,9 +24177,41 @@ function instance$1($$self, $$props, $$invalidate) {
 	}
 
 	function phaseAt(point, index, terrainM) {
-		const precip = precipMmAt(point.forecast, index);
-		if (precip === null || precip < PRECIP_THRESHOLD_MM_H) return null;
-		return terrainPrecipitationType(buildProfile(point.forecast, index), terrainM);
+		return isPrecipitating(precipMmAt(point.forecast, index))
+		? buildSnowForecast(point, terrainM).thermalPhases[index]
+		: null;
+	}
+
+	async function loadTerrainSlopes(lat, lon, my) {
+		$$invalidate(27, clickedTerrainSlopes = null);
+		if (Math.abs(lat) > 80) return;
+
+		const dy = 2000 / 111195,
+			dx = dy / Math.cos(lat * Math.PI / 180),
+			west = wrappedLongitude(lon) - dx,
+			east = wrappedLongitude(lon) + dx;
+
+		if (west < -180 || east > 180) return;
+
+		const bounds = {
+			south: lat - dy,
+			north: lat + dy,
+			west,
+			east
+		};
+
+		const current = () => my === clickGeneration && enabled && !destroyed;
+
+		try {
+			await terrainTiles.ensure(bounds, 12, current, () => {
+				
+			});
+
+			if (!current()) return;
+			$$invalidate(27, clickedTerrainSlopes = terrainSlopes(terrainTiles.sample(lat, west, 12), terrainTiles.sample(lat, east, 12), terrainTiles.sample(lat - dy, wrappedLongitude(lon), 12), terrainTiles.sample(lat + dy, wrappedLongitude(lon), 12)));
+		} catch {
+			if (current()) $$invalidate(27, clickedTerrainSlopes = null);
+		}
 	}
 
 	async function resolvePlaceName(lat, lon, signal) {
@@ -12004,7 +24251,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		try {
 			const name = await resolvePlaceName(lat, lon, abort.signal);
 			if (selection !== clickGeneration || destroyed || !enabled) return;
-			$$invalidate(23, clickedPlaceName = name);
+			$$invalidate(26, clickedPlaceName = name);
 
 			if (clickedPoint) updatePersistentClickLabel(); else {
 				const title = document.querySelector('.snowline-point-place');
@@ -12072,8 +24319,10 @@ function instance$1($$self, $$props, $$invalidate) {
 			validTime = point.times[index];
 
 		const snowline = snowlineAt(point, index),
-			precip = precipMmAt(point.forecast, index),
-			phase = terrain !== null ? phaseAt(point, index, terrain) : null;
+			precip = precipMmAtTime(point.forecast, point.times, target),
+			phase = terrain !== null && isPrecipitating(precip)
+			? phaseAt(point, index, terrain)
+			: null;
 
 		const event = terrain !== null
 		? nextWintryEvent(point, terrain, target)
@@ -12093,7 +24342,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			event
 			? event.incomplete
 				? 'Snow amount uncertain'
-				: 'Estimated new snow' + (event.activeNow ? ' remaining' : '') + ': ' + formatSnow(event.newSnowCm, units)
+				: 'Estimated snowfall' + (event.activeNow ? ' remaining' : '') + ': ' + formatSnow(event.newSnowCm, units)
 			: '',
 			'ECMWF atmospheric profile · Windy terrain. Snow amounts are estimates.'
 		].filter(Boolean).join('\n');
@@ -12229,8 +24478,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			if (graph) {
 				if (clickedPoint) {
-					$$invalidate(9, forecastTab = 'graph');
-					$$invalidate(19, chartOpen = true);
+					$$invalidate(10, forecastTab = 'graph');
+					$$invalidate(9, chartOpen = true);
 				}
 
 				return;
@@ -12243,8 +24492,8 @@ function instance$1($$self, $$props, $$invalidate) {
 					
 				}
 
-				$$invalidate(9, forecastTab = 'graph');
-				$$invalidate(19, chartOpen = true);
+				$$invalidate(10, forecastTab = 'graph');
+				$$invalidate(9, chartOpen = true);
 				return;
 			}
 
@@ -12296,8 +24545,8 @@ function instance$1($$self, $$props, $$invalidate) {
 			: null;
 
 		if (snowline === null) {
-			const precip = precipMmAt(clickedPoint.forecast, index),
-				phase = clickedMapElevationM !== null
+			const precip = precipMmAtTime(clickedPoint.forecast, clickedPoint.times, target),
+				phase = clickedMapElevationM !== null && isPrecipitating(precip)
 				? phaseAt(clickedPoint, index, clickedMapElevationM)
 				: null;
 
@@ -12307,18 +24556,14 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			const detail = `<div class="snowline-valid">${shortValid(valid)}</div><div class="snowline-label-grid">${metricTile('Terrain', formatElevation(clickedMapElevationM, unitSystem), 'metric-terrain')}${metricTile('Avg precip', formatPrecip(precip, unitSystem), '')}</div><div class="snowline-event-line">${reason}. ${phase
 			? precipitationLabel(phase)
-			: precip !== null && precip < PRECIP_THRESHOLD_MM_H
-				? 'Dry'
-				: 'Precipitation type unavailable'}</div>`;
+			: precip === 0 ? 'Dry' : 'Precipitation type unavailable'}</div>`;
 
 			showClickLabel(
 				lat,
 				lon,
 				phase
 				? `${phase.icon} ${precipitationLabel(phase).toUpperCase()}`
-				: precip !== null && precip < PRECIP_THRESHOLD_MM_H
-					? 'DRY'
-					: 'WBZ unresolved',
+				: precip === 0 ? 'DRY' : 'WBZ unresolved',
 				detail,
 				'#fff',
 				'neutral',
@@ -12330,8 +24575,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		const rounded = Math.round(snowline / 10) * 10,
 			tendency = tendencyText(clickedPoint, index),
-			precip = precipMmAt(clickedPoint.forecast, index),
-			hasPrecip = precip !== null && precip >= PRECIP_THRESHOLD_MM_H;
+			precip = precipMmAtTime(clickedPoint.forecast, clickedPoint.times, target),
+			hasPrecip = isPrecipitating(precip);
 
 		if (clickedMapElevationM !== null && Number.isFinite(clickedMapElevationM)) {
 			const terrain = Math.round(clickedMapElevationM / 10) * 10,
@@ -12375,14 +24620,15 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (!enabled || destroyed || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
 		placeAbort?.abort();
 		placeAbort = null;
-		const keep = chartOpen, my = ++clickGeneration;
-		$$invalidate(21, clickedPoint = null);
-		$$invalidate(22, clickedMapElevationM = null);
+		const keep = chartOpen, my = $$invalidate(49, ++clickGeneration);
+		$$invalidate(13, clickedPoint = null);
+		$$invalidate(25, clickedMapElevationM = null);
 		clickedNextEventTime = null;
-		clickedLatLon = [lat, lon];
-		$$invalidate(23, clickedPlaceName = placeName);
+		$$invalidate(27, clickedTerrainSlopes = null);
+		$$invalidate(47, clickedLatLon = [lat, lon]);
+		$$invalidate(26, clickedPlaceName = placeName);
 		pointSource = source;
-		$$invalidate(20, probeLoading = true);
+		$$invalidate(24, probeLoading = true);
 		showClickLabel(lat, lon, 'Loading forecast…', '<div class="snowline-loading">Checking snow, timing and amounts</div>');
 		if (!placeName) void updatePointPlaceName(lat, lon, my);
 
@@ -12402,20 +24648,20 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			const aligned = alignSelectedPrecipFields(fields, point.times, point.runTime);
 
-			$$invalidate(21, clickedPoint = Object.keys(aligned).length
+			$$invalidate(13, clickedPoint = Object.keys(aligned).length
 			? {
 					...point,
 					forecast: { ...point.forecast, ...aligned }
 				}
 			: point);
 
-			$$invalidate(22, clickedMapElevationM = elev);
-			$$invalidate(21, clickedPoint.terrainM = elev, clickedPoint);
+			$$invalidate(25, clickedMapElevationM = elev);
+			$$invalidate(13, clickedPoint.terrainM = elev, clickedPoint);
 			lastChecked = Date.now();
-			if (keep) $$invalidate(19, chartOpen = true);
+			if (keep) $$invalidate(9, chartOpen = true);
 			updatePersistentClickLabel();
 		} finally {
-			if (my === clickGeneration) $$invalidate(20, probeLoading = false);
+			if (my === clickGeneration) $$invalidate(24, probeLoading = false);
 		}
 	}
 
@@ -12434,7 +24680,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 		const name = [primary, secondary].map(v => String(v ?? '').trim()).filter(Boolean).join(', ');
 		pointSource = 'search';
-		const selection = ++clickGeneration;
+		const selection = $$invalidate(49, ++clickGeneration);
 		map.panTo([lat, lon], { animate: true });
 
 		setTimeout(
@@ -12555,8 +24801,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	function mapPrecipAt(p, target) {
 		if (!p) return null;
-		const i = forecastIntervalIndex(p.times, target);
-		return i < 0 ? null : precipMmAt(p.forecast, i);
+		return precipMmAtTime(p.forecast, p.times, target);
 	}
 
 	function rasterZoom() {
@@ -12566,15 +24811,18 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	function cancelMapPreparation() {
 		prepareGeneration++;
-		$$invalidate(14, preparingMap = false);
-		$$invalidate(15, prepareMessage = `Stopped · ${preparedKeys.size} times prepared`);
+		videoAbort?.abort();
+		videoAbort = null;
+		$$invalidate(18, exportingMap = false);
+		$$invalidate(16, preparingMap = false);
+		$$invalidate(17, prepareMessage = `Stopped · ${preparedKeys.size} times prepared`);
 	}
 
 	function resetMapPreparation() {
 		cancelMapPreparation();
 		preparedKeys.clear();
 		preparedReadKey = '';
-		$$invalidate(15, prepareMessage = '');
+		$$invalidate(17, prepareMessage = '');
 	}
 
 	function restorePreparedFrame(record) {
@@ -12621,10 +24869,10 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (preparingMap || !enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading || !cache.length) return;
 		const points = cache.flat().filter(p => !!p && profileIsFresh(p.fetchedAt, p.runTime, activeRunTime));
 		if (!points.length) return;
-		const first = points[0].times[0], end = first + MAX_FORECAST_HOURS * 3600_000;
+		const videoTimes = forecastMovieTimes(points.map(p => p.times));
 
 		const seen = new Set(),
-			times = [...new Set(points.flatMap(p => p.times))].filter(t => t >= first && t <= end).sort((a, b) => a - b).filter(t => {
+			times = videoTimes.filter(t => {
 				const key = phaseFrameKey(t);
 				if (seen.has(key)) return false;
 				seen.add(key);
@@ -12635,11 +24883,12 @@ function instance$1($$self, $$props, $$invalidate) {
 			scene = phaseFrameKey(reference),
 			my = ++prepareGeneration;
 
-		const current = () => my === prepareGeneration && enabled && !destroyed && scene === phaseFrameKey(reference);
+		const options = JSON.stringify([showContours, showIcons, unitSystem]);
+		const current = () => my === prepareGeneration && enabled && !destroyed && scene === phaseFrameKey(reference) && options === JSON.stringify([showContours, showIcons, unitSystem]);
 		const started = Date.now();
-		$$invalidate(14, preparingMap = true);
+		$$invalidate(16, preparingMap = true);
 		preparedKeys.clear();
-		$$invalidate(15, prepareMessage = `0 / ${times.length} times…`);
+		$$invalidate(17, prepareMessage = `0 / ${times.length} times…`);
 
 		if (prefetchTimer) {
 			clearTimeout(prefetchTimer);
@@ -12649,6 +24898,16 @@ function instance$1($$self, $$props, $$invalidate) {
 		rasterEpoch++;
 
 		try {
+			if (!times.length) throw new Error('No available forecast times for MP4');
+			const size = videoSize(map.getSize().x, map.getSize().y + 196);
+			await checkMp4Support(size.width, size.height);
+			if (!current()) return;
+
+			if (videoDownloadUrl) {
+				URL.revokeObjectURL(videoDownloadUrl);
+				$$invalidate(19, videoDownloadUrl = '');
+			}
+
 			await preparedMapCache.clear();
 
 			for (let i = 0; i < times.length && current(); ) {
@@ -12671,14 +24930,14 @@ function instance$1($$self, $$props, $$invalidate) {
 				preparedKeys.add(key);
 				i++;
 				const minutes = Math.ceil((Date.now() - started) / 60000 / i * (times.length - i));
-				$$invalidate(15, prepareMessage = `${i} / ${times.length} times${i > 1 && minutes > 0 ? ` · ~${minutes} min left` : '…'}`);
+				$$invalidate(17, prepareMessage = `${i} / ${times.length} times${i > 1 && minutes > 0 ? ` · ~${minutes} min left` : '…'}`);
 				await new Promise(resolve => setTimeout(resolve, 0));
 			}
 
-			if (current()) $$invalidate(15, prepareMessage = `Ready · ${preparedKeys.size} / ${times.length} times · current area`); else if (my === prepareGeneration) $$invalidate(15, prepareMessage = 'Preparation stopped · forecast changed; refresh to try again');
+			if (current()) await downloadMapForecastVideo(videoTimes, current); else if (my === prepareGeneration) $$invalidate(17, prepareMessage = 'Preparation stopped · forecast changed; refresh to try again');
 		} catch(error) {
 			if (current()) {
-				$$invalidate(15, prepareMessage = error instanceof Error
+				$$invalidate(17, prepareMessage = error instanceof Error
 				? `${error.message} · ${preparedKeys.size} times prepared`
 				: 'Preparation unavailable · normal timeline still works');
 
@@ -12686,18 +24945,275 @@ function instance$1($$self, $$props, $$invalidate) {
 			}
 		} finally {
 			if (my === prepareGeneration) {
-				$$invalidate(14, preparingMap = false);
+				$$invalidate(16, preparingMap = false);
+				$$invalidate(18, exportingMap = false);
 				scheduleNextFrame();
 			}
 		}
 	}
 
+	async function downloadMapForecastVideo(times, current) {
+		const abort = new AbortController();
+		videoAbort = abort;
+		$$invalidate(18, exportingMap = true);
+
+		const requireCurrent = () => {
+			if (!current()) abort.abort();
+			abort.signal.throwIfAborted();
+		};
+
+		const size = map.getSize(),
+			header = 76,
+			footer = 120,
+			dimensions = videoSize(size.x, size.y + header + footer);
+
+		const canvas = document.createElement('canvas');
+		canvas.width = dimensions.width;
+		canvas.height = dimensions.height;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) throw new Error('Video canvas unavailable');
+		const sx = canvas.width / size.x, sy = canvas.height / (size.y + header + footer);
+		const base = document.createElement('canvas');
+		base.width = canvas.width;
+		base.height = Math.max(2, Math.round(size.y * sy));
+		const bc = base.getContext('2d');
+		if (!bc) throw new Error('Video map canvas unavailable');
+
+		const drawTile = (context, image, t) => {
+			const nw = map.latLngToContainerPoint([t.nw.lat, t.nw.lon]),
+				se = map.latLngToContainerPoint([t.se.lat, t.se.lon]);
+
+			context.drawImage(image, nw.x, nw.y, se.x - nw.x, se.y - nw.y);
+		};
+
+		try {
+			$$invalidate(17, prepareMessage = 'MP4 · loading map background…');
+			requireCurrent();
+
+			const z = rasterZoom(),
+				tiles = typeof getMapTiles === 'function' ? getMapTiles() : {},
+				kind = String(store.get('map') ?? 'sznmap');
+
+			const template = (Math.floor(Number(map.getZoom())) <= 11
+			? tiles.graymap
+			: tiles[kind] ?? tiles.sznmap) ?? 'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
+
+			bc.scale(sx, sy);
+
+			await mapLimit(visibleRasterTiles(currentBounds(), z), 4, async t => {
+				requireCurrent();
+
+				const n = 2 ** z,
+					url = template.replace('{z}', String(z)).replace('{x}', String((t.x % n + n) % n)).replace('{y}', String(t.y));
+
+				const image = await geographicTiles.get(url);
+				requireCurrent();
+
+				drawTile(bc, image, {
+					url,
+					nw: tileLocation(t.x, t.y, z),
+					se: tileLocation(t.x + 1, t.y + 1, z)
+				});
+			});
+
+			const symbolImages = new Map();
+
+			const blob = await encodeMapForecast(
+				canvas,
+				times,
+				async time => {
+					requireCurrent();
+					const record = await preparedMapCache.get(phaseFrameKey(time));
+					requireCurrent();
+					if (!record) throw new Error('Prepared frame unavailable. Prepare this area again.');
+					ctx.setTransform(1, 0, 0, 1, 0, 0);
+					ctx.fillStyle = '#132431';
+					ctx.fillRect(0, 0, canvas.width, canvas.height);
+					ctx.drawImage(base, 0, header * sy);
+					ctx.save();
+					ctx.setTransform(sx, 0, 0, sy, 0, header * sy);
+					ctx.beginPath();
+					ctx.rect(0, 0, size.x, size.y);
+					ctx.clip();
+
+					for (const tile of record.tiles) {
+						const image = await videoImage(tile.url, abort.signal);
+						requireCurrent();
+						drawTile(ctx, image, tile);
+					}
+
+					ctx.globalAlpha = .45;
+
+					for (const tile of record.geography) {
+						const image = await videoImage(tile.url, abort.signal);
+						requireCurrent();
+						drawTile(ctx, image, tile);
+					}
+
+					ctx.globalAlpha = 1;
+					if (showContours) drawVideoContours(ctx, time);
+
+					if (showIcons) for (const symbol of record.symbols) {
+						const svg = symbol.html.match(/<svg[\s\S]*<\/svg>/)?.[0];
+						if (!svg) continue;
+						let image = symbolImages.get(svg);
+
+						if (!image) {
+							image = await videoImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg), abort.signal);
+							symbolImages.set(svg, image);
+						}
+
+						requireCurrent();
+						const p = map.latLngToContainerPoint([symbol.lat, symbol.lon]);
+						ctx.drawImage(image, p.x - 14, p.y - 14, 28, 28);
+					}
+
+					ctx.restore();
+					ctx.setTransform(1, 0, 0, 1, 0, 0);
+					drawVideoCaption(ctx, time, canvas.width, canvas.height, header * sy, footer * sy, record.fallback || mapDataMissing);
+				},
+				abort.signal,
+				(done, total) => {
+					if (current()) $$invalidate(17, prepareMessage = `Encoding MP4 · ${done} / ${total} times`);
+				}
+			);
+
+			requireCurrent();
+			$$invalidate(19, videoDownloadUrl = URL.createObjectURL(blob));
+			$$invalidate(20, videoDownloadName = `wintry-forecast-${new Date(times[0]).toISOString().replace(/[:.]/g, '-')}.mp4`);
+			const link = document.createElement('a');
+			link.href = videoDownloadUrl;
+			link.download = videoDownloadName;
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+			$$invalidate(17, prepareMessage = `MP4 ready · ${times.length} times · download available below`);
+		} finally {
+			if (videoAbort === abort) {
+				videoAbort = null;
+				$$invalidate(18, exportingMap = false);
+			}
+
+			canvas.width = canvas.height = base.width = base.height = 0;
+		}
+	}
+
+	function drawVideoContours(ctx, target) {
+		const field = cache.map(row => row.map(p => p && profileIsFresh(p.fetchedAt, p.runTime, activeRunTime)
+		? {
+				lat: p.lat,
+				lon: p.lon,
+				value: interpolatedSnowline(p, target)
+			}
+		: { lat: 0, lon: 0, value: null }));
+
+		const prepared = prepareSnowlineContours(field, contourIntervalForZoom()),
+			lines = contourLinesForLevels(prepared.field, prepared.levels);
+
+		ctx.lineJoin = 'round';
+		ctx.lineCap = 'round';
+		const labels = [];
+
+		for (const level of prepared.levels) {
+			const paths = lines.get(level) ?? [],
+				colour = colorForLevel(level),
+				weight = level % 1000 === 0 ? 3 : level % 500 === 0 ? 2.2 : 1.5;
+
+			ctx.beginPath();
+
+			for (const line of paths) line.forEach((p, i) => {
+				const q = map.latLngToContainerPoint(p);
+				if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y);
+			});
+
+			ctx.strokeStyle = '#14212b';
+			ctx.lineWidth = weight + 2;
+			ctx.stroke();
+			ctx.strokeStyle = colour;
+			ctx.lineWidth = weight;
+			ctx.stroke();
+			if (level % 500 !== 0) continue;
+
+			for (const line of [...paths].sort((a, b) => lineLength(b) - lineLength(a))) {
+				if (labels.length >= 12 || lineLength(line) < 110) continue;
+				const mid = midpointAlongLine(line);
+				if (!mid) continue;
+				const p = map.latLngToContainerPoint(mid), size = map.getSize();
+				if (p.x < 45 || p.x > size.x - 45 || p.y < 20 || p.y > size.y - 20 || labels.some(l => Math.abs(l.x - p.x) < 100 && Math.abs(l.y - p.y) < 32)) continue;
+				ctx.font = 'bold 13px sans-serif';
+				ctx.textAlign = 'center';
+				ctx.lineWidth = 4;
+				ctx.strokeStyle = '#14212b';
+				ctx.strokeText(formatElevation(level, unitSystem), p.x, p.y);
+				ctx.fillStyle = colour;
+				ctx.fillText(formatElevation(level, unitSystem), p.x, p.y);
+				labels.push(p);
+				break;
+			}
+		}
+	}
+
+	function drawVideoCaption(ctx, time, width, height, header, footer, uncertain) {
+		const font = Math.max(10, Math.min(16, width / 40)), pad = 12;
+		ctx.textAlign = 'left';
+		ctx.fillStyle = '#132431';
+		ctx.fillRect(0, 0, width, header);
+		ctx.fillRect(0, height - footer, width, footer);
+		ctx.fillStyle = '#fff';
+		ctx.font = `bold ${font + 3}px sans-serif`;
+		ctx.fillText('Wintry forecast · ECMWF', pad, header * .35, width - pad * 2);
+		ctx.font = `${font}px sans-serif`;
+		ctx.fillText(formatLocal(time), pad, header * .67, width - pad * 2);
+
+		const legend = [
+			['Rain', 'rain'],
+			['Freezing rain', 'freezing-rain'],
+			['Ice pellets', 'ice-pellets'],
+			['Snow', 'snow'],
+			['Wet snow', 'wet-snow'],
+			['Rain/snow mix', 'mix']
+		];
+
+		const columns = width < 600 ? 2 : 3,
+			rows = Math.ceil(legend.length / columns),
+			step = footer * .5 / rows,
+			top = height - footer + font + 3;
+
+		ctx.font = `${Math.max(10, font - 1)}px sans-serif`;
+
+		legend.forEach(([label, key], i) => {
+			const x = pad + i % columns * (width - pad * 2) / columns,
+				y = top + Math.floor(i / columns) * step;
+
+			ctx.fillStyle = PRECIP_TYPE_COLOURS[key];
+			ctx.fillRect(x, y - 9, 10, 10);
+			ctx.fillStyle = '#fff';
+			ctx.fillText(label, x + 15, y, (width - pad * 2) / columns - 18);
+		});
+
+		ctx.fillStyle = '#d1dce4';
+		ctx.font = `${Math.max(9, font - 3)}px sans-serif`;
+
+		const notes = [
+			`${showContours ? 'Contours: estimated snowline · ' : ''}Blank: dry or unavailable${uncertain ? ' · limited data/detail' : ''}`,
+			'Map: Windy / OpenStreetMap contributors · Terrain: Mapzen / Tilezen',
+			'Forecast guidance · No Windy weather layer or lightning · 5 forecast h/s'
+		];
+
+		notes.forEach((note, i) => ctx.fillText(note, pad, height - footer * .32 + i * footer * .105, width - pad * 2));
+	}
+
 	function phaseFrameKey(target) {
 		const b = currentBounds(), size = map.getSize();
 
-		const intervals = cache.flat().map(p => p && profileIsFresh(p.fetchedAt, p.runTime, activeRunTime)
-		? forecastIntervalIndex(p.times, target)
-		: -2);
+		const intervals = cache.flat().map(p => {
+			if (!p || !profileIsFresh(p.fetchedAt, p.runTime, activeRunTime)) return -2;
+			const i = forecastIntervalIndex(p.times, target);
+
+			return i >= 0 && target >= supportedIntervalEnd(p.times, i, p.forecast.__precipPeriodsH)
+			? -3
+			: i;
+		});
 
 		return JSON.stringify([
 			weatherRevision,
@@ -12750,9 +25266,9 @@ function instance$1($$self, $$props, $$invalidate) {
 			
 		}
 
-		$$invalidate(16, geographyError = frame.geographyError);
+		$$invalidate(21, geographyError = frame.geographyError);
 
-		$$invalidate(13, terrainDetailStatus = frame.fallback && !terrainLoading
+		$$invalidate(15, terrainDetailStatus = frame.fallback && !terrainLoading
 		? 'Terrain detail unavailable here · coarse estimate'
 		: '');
 
@@ -12810,12 +25326,12 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (terrainKey !== terrainJobKey) {
 			terrainJobKey = terrainKey;
 			const epoch = ++terrainGeneration;
-			$$invalidate(39, terrainLoadProgress = 0);
+			$$invalidate(43, terrainLoadProgress = 0);
 			$$invalidate(4, terrainLoading = true);
-			$$invalidate(13, terrainDetailStatus = '');
+			$$invalidate(15, terrainDetailStatus = '');
 
 			void terrainTiles.ensure(b, z, () => epoch === terrainGeneration && enabled && !destroyed, (done, total) => {
-				$$invalidate(39, terrainLoadProgress = total ? done / total : 1);
+				$$invalidate(43, terrainLoadProgress = total ? done / total : 1);
 				terrainRevision++;
 				frameCache.clear();
 				queueRasterPaint();
@@ -12829,7 +25345,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		const key = phaseFrameKey(target);
 
 		if (key !== pendingPhaseKey) {
-			$$invalidate(40, rasterLoadProgress = 0);
+			$$invalidate(44, rasterLoadProgress = 0);
 			rasterEpoch++;
 			pendingPhaseKey = key;
 
@@ -12914,7 +25430,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			geographyMasks = [];
 
 		const preparationEpoch = prepareGeneration;
-		if (!background) $$invalidate(40, rasterLoadProgress = 0);
+		if (!background) $$invalidate(44, rasterLoadProgress = 0);
 		const obsolete = () => epoch !== rasterEpoch || destroyed || !enabled || preparation && preparationEpoch !== prepareGeneration || background && !preparation && mainKey !== phaseFrameKey(getStoreTimestamp());
 
 		const record = {
@@ -13017,7 +25533,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 					for (let y = 0; y < RASTER_SAMPLES; y++) {
 						if (y > 0 && y % 12 === 0) {
-							if (!background) $$invalidate(40, rasterLoadProgress = .9 * (paintedTiles + y / RASTER_SAMPLES) / tiles.length);
+							if (!background) $$invalidate(44, rasterLoadProgress = .9 * (paintedTiles + y / RASTER_SAMPLES) / tiles.length);
 							await new Promise(resolve => setTimeout(resolve, 0));
 
 							if (obsolete()) {
@@ -13068,7 +25584,7 @@ function instance$1($$self, $$props, $$invalidate) {
 					}
 
 					paintedTiles++;
-					if (!background) $$invalidate(40, rasterLoadProgress = .9 * paintedTiles / tiles.length);
+					if (!background) $$invalidate(44, rasterLoadProgress = .9 * paintedTiles / tiles.length);
 					await new Promise(resolve => setTimeout(resolve, 0));
 				}
 			}
@@ -13107,7 +25623,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				return;
 			}
 
-			if (!background) $$invalidate(40, rasterLoadProgress = 1);
+			if (!background) $$invalidate(44, rasterLoadProgress = 1);
 			record.fallback = fallback;
 			record.bytes = geographyMasks.length * TILE_SIZE * TILE_SIZE * 8 + iconLayer.getLayers().length * 4096;
 
@@ -13153,7 +25669,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			if (epoch === rasterEpoch && !background) {
 				$$invalidate(6, rasterLoading = false);
-				$$invalidate(13, terrainDetailStatus = 'Shading unavailable · retry refresh');
+				$$invalidate(15, terrainDetailStatus = 'Shading unavailable · retry refresh');
 			}
 		}
 	}
@@ -13189,7 +25705,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			clearStorms();
 			stormKey = key;
 			stormLayer = saved.layer.addTo(map);
-			$$invalidate(12, stormStatus = saved.status);
+			$$invalidate(14, stormStatus = saved.status);
 			stormFrames.delete(key);
 			stormFrames.set(key, saved);
 			return;
@@ -13198,9 +25714,9 @@ function instance$1($$self, $$props, $$invalidate) {
 		clearStorms();
 		stormKey = key;
 		const epoch = stormEpoch, abort = stormAbort = new AbortController();
-		$$invalidate(41, stormLoadProgress = 0);
+		$$invalidate(45, stormLoadProgress = 0);
 		$$invalidate(5, stormLoading = true);
-		$$invalidate(12, stormStatus = '⚡ Forecast lightning');
+		$$invalidate(14, stormStatus = '⚡ Forecast lightning');
 		const tiles = new Map();
 
 		const deadline = setTimeout(
@@ -13209,7 +25725,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 				if (epoch === stormEpoch) {
 					stormKey = '';
-					$$invalidate(12, stormStatus = '⚡ ECMWF lightning unavailable');
+					$$invalidate(14, stormStatus = '⚡ ECMWF lightning unavailable');
 					$$invalidate(5, stormLoading = false);
 				}
 			},
@@ -13277,7 +25793,7 @@ function instance$1($$self, $$props, $$invalidate) {
 						})
 					}).addTo(next);
 				} finally {
-					if (epoch === stormEpoch && !abort.signal.aborted) $$invalidate(41, stormLoadProgress = ++processed / points.length);
+					if (epoch === stormEpoch && !abort.signal.aborted) $$invalidate(45, stormLoadProgress = ++processed / points.length);
 				}
 			});
 
@@ -13285,7 +25801,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			next.addTo(map);
 			stormLayer = next;
 
-			$$invalidate(12, stormStatus = known
+			$$invalidate(14, stormStatus = known
 			? `⚡ ECMWF forecast lightning · ${count ? 'activity shown' : 'none at sampled points'}`
 			: '⚡ ECMWF lightning unavailable');
 
@@ -13303,7 +25819,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		} catch(error) {
 			if (epoch !== stormEpoch || abort.signal.aborted) return;
 			stormKey = '';
-			$$invalidate(12, stormStatus = '⚡ ECMWF lightning unavailable');
+			$$invalidate(14, stormStatus = '⚡ ECMWF lightning unavailable');
 			console.warn('Wintry ECMWF lightning unavailable', error);
 		} finally {
 			if (epoch === stormEpoch) $$invalidate(5, stormLoading = false);
@@ -13324,8 +25840,8 @@ function instance$1($$self, $$props, $$invalidate) {
 		void renderStorms();
 
 		if (!enabled || !cache.length) {
-			$$invalidate(26, mapDataStatus = '');
-			$$invalidate(27, mapDataMissing = false);
+			$$invalidate(30, mapDataStatus = '');
+			$$invalidate(31, mapDataMissing = false);
 			clearContours();
 			clearShading();
 			return;
@@ -13338,8 +25854,8 @@ function instance$1($$self, $$props, $$invalidate) {
 			fresh = samples.filter(p => !!p && profileIsFresh(p.fetchedAt, p.runTime, activeRunTime) && forecastIntervalIndex(p.times, target) >= 0);
 
 		const known = fresh.filter(p => mapPrecipAt(p, target) !== null).length;
-		$$invalidate(26, mapDataStatus = `Profiles ${fresh.length}/${samples.length} · precip ${known}/${samples.length}`);
-		$$invalidate(27, mapDataMissing = fresh.length < samples.length || (showShading || showIcons) && precipDetailAvailable && known < samples.length);
+		$$invalidate(30, mapDataStatus = `Profiles ${fresh.length}/${samples.length} · precip ${known}/${samples.length}`);
+		$$invalidate(31, mapDataMissing = fresh.length < samples.length || (showShading || showIcons) && precipDetailAvailable && known < samples.length);
 
 		if (!firstPoint) {
 			clearContours();
@@ -13467,13 +25983,13 @@ function instance$1($$self, $$props, $$invalidate) {
 			if (typeof p.showShading === 'boolean') $$invalidate(1, showShading = p.showShading);
 			if (typeof p.showIcons === 'boolean') $$invalidate(2, showIcons = p.showIcons);
 			if (typeof p.panelHidden === 'boolean') $$invalidate(8, panelHidden = p.panelHidden);
-			if (p.forecastTab === 'graph' || p.forecastTab === 'sounding') $$invalidate(9, forecastTab = p.forecastTab);
+			if (p.forecastTab === 'graph' || p.forecastTab === 'sounding') $$invalidate(10, forecastTab = p.forecastTab);
 		} catch {
 			
 		}
 
-		$$invalidate(11, unitSystem = loadUnitSystem());
-		$$invalidate(42, prefsReady = true);
+		$$invalidate(12, unitSystem = loadUnitSystem());
+		$$invalidate(46, prefsReady = true);
 	}
 
 	function persistPreferences() {
@@ -13510,7 +26026,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (key === lastNavigationKey) return;
 		const wasPrepared = preparingMap || preparedKeys.size > 0;
 		resetMapPreparation();
-		if (wasPrepared) $$invalidate(15, prepareMessage = 'Map changed · prepare this area');
+		if (wasPrepared) $$invalidate(17, prepareMessage = 'Map changed · prepare this area');
 		lastNavigationKey = key;
 		$$invalidate(3, precipDetailAvailable = Number(map.getZoom()) >= PRECIP_DETAIL_MIN_ZOOM);
 		if (!precipDetailAvailable) clearShading();
@@ -13547,7 +26063,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		generation++;
 		refreshEpoch++;
 		pendingProfiles.clear();
-		$$invalidate(10, viewportLoading = false);
+		$$invalidate(11, viewportLoading = false);
 		refreshQueued = false;
 
 		if (moveTimer) {
@@ -13585,6 +26101,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	onDestroy(() => {
 		destroyed = true;
+		if (videoDownloadUrl) URL.revokeObjectURL(videoDownloadUrl);
 		cancelMapPreparation();
 		preparedMapCache.close();
 		stormFrames.clear();
@@ -13597,7 +26114,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		document.removeEventListener('visibilitychange', checkAutomaticRefresh);
 		window.removeEventListener('online', checkAutomaticRefresh);
 		generation++;
-		clickGeneration++;
+		$$invalidate(49, clickGeneration++, clickGeneration);
 		refreshQueued = false;
 		if (moveTimer) clearTimeout(moveTimer);
 		map.off('moveend', handleMapNavigation);
@@ -13621,7 +26138,7 @@ function instance$1($$self, $$props, $$invalidate) {
 	});
 
 	const click_handler = () => $$invalidate(8, panelHidden = false);
-	const click_handler_1 = () => $$invalidate(18, settingsOpen = true);
+	const click_handler_1 = () => $$invalidate(23, settingsOpen = true);
 	const click_handler_2 = () => $$invalidate(8, panelHidden = true);
 
 	function input0_change_handler() {
@@ -13645,42 +26162,42 @@ function instance$1($$self, $$props, $$invalidate) {
 	}
 
 	const click_handler_3 = () => {
-		$$invalidate(9, forecastTab = 'graph');
-		$$invalidate(19, chartOpen = true);
+		$$invalidate(10, forecastTab = 'graph');
+		$$invalidate(9, chartOpen = true);
 	};
 
 	const click_handler_4 = () => {
-		$$invalidate(9, forecastTab = 'sounding');
-		$$invalidate(19, chartOpen = true);
+		$$invalidate(10, forecastTab = 'sounding');
+		$$invalidate(9, chartOpen = true);
 	};
 
 	function v21panel_unitSystem_binding(value) {
 		unitSystem = value;
-		$$invalidate(11, unitSystem);
+		$$invalidate(12, unitSystem);
 	}
 
-	const click_handler_5 = () => $$invalidate(17, infoOpen = true);
-	const click_handler_6 = () => $$invalidate(18, settingsOpen = false);
+	const click_handler_5 = () => $$invalidate(22, infoOpen = true);
+	const click_handler_6 = () => $$invalidate(23, settingsOpen = false);
 
 	function v21panel_unitSystem_binding_1(value) {
 		unitSystem = value;
-		$$invalidate(11, unitSystem);
+		$$invalidate(12, unitSystem);
 	}
 
-	const click_handler_7 = () => $$invalidate(18, settingsOpen = false);
+	const click_handler_7 = () => $$invalidate(23, settingsOpen = false);
 
 	function snowlinechart_tab_binding(value) {
 		forecastTab = value;
-		$$invalidate(9, forecastTab);
+		$$invalidate(10, forecastTab);
 	}
 
-	const close_handler = () => $$invalidate(19, chartOpen = false);
-	const click_handler_8 = () => $$invalidate(17, infoOpen = false);
-	const click_handler_9 = () => $$invalidate(17, infoOpen = false);
+	const close_handler = () => $$invalidate(9, chartOpen = false);
+	const click_handler_8 = () => $$invalidate(22, infoOpen = false);
+	const click_handler_9 = () => $$invalidate(22, infoOpen = false);
 
 	$$self.$$.update = () => {
-		if ($$self.$$.dirty[0] & /*viewportLoading, precipDetailAvailable, showShading, showIcons, terrainLoading, rasterLoading, stormLoading*/ 1150 | $$self.$$.dirty[1] & /*weatherLoadProgress, terrainLoadProgress, rasterLoadProgress, stormLoadProgress*/ 1920) {
-			$$invalidate(28, layerLoadPercent = Math.max(0, Math.min(99, Math.floor(100 * (.35 * (viewportLoading ? weatherLoadProgress : 1) + (precipDetailAvailable && (showShading || showIcons)
+		if ($$self.$$.dirty[0] & /*viewportLoading, precipDetailAvailable, showShading, showIcons, terrainLoading, rasterLoading, stormLoading*/ 2174 | $$self.$$.dirty[1] & /*weatherLoadProgress, terrainLoadProgress, rasterLoadProgress, stormLoadProgress*/ 30720) {
+			$$invalidate(32, layerLoadPercent = Math.max(0, Math.min(99, Math.floor(100 * (.35 * (viewportLoading ? weatherLoadProgress : 1) + (precipDetailAvailable && (showShading || showIcons)
 			? .15 * (terrainLoading ? terrainLoadProgress : 1) + .4 * (rasterLoading ? rasterLoadProgress : 1)
 			: 0) + (precipDetailAvailable && showIcons
 			? .1 * (stormLoading ? stormLoadProgress : 1)
@@ -13689,13 +26206,20 @@ function instance$1($$self, $$props, $$invalidate) {
 			: 0) + (precipDetailAvailable && showIcons ? .1 : 0))))));
 		}
 
-		if ($$self.$$.dirty[0] & /*enabled, panelHidden, forecastTab, showContours, showShading, showIcons*/ 903 | $$self.$$.dirty[1] & /*prefsReady*/ 2048) {
+		if ($$self.$$.dirty[0] & /*chartOpen, clickedPoint*/ 8704 | $$self.$$.dirty[1] & /*clickedLatLon, exposureGeneration, clickGeneration*/ 458752) {
+			if (chartOpen && clickedPoint && clickedLatLon && exposureGeneration !== clickGeneration) {
+				$$invalidate(48, exposureGeneration = clickGeneration);
+				void loadTerrainSlopes(clickedLatLon[0], clickedLatLon[1], clickGeneration);
+			}
+		}
+
+		if ($$self.$$.dirty[0] & /*enabled, panelHidden, forecastTab, showContours, showShading, showIcons*/ 1415 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
 			if (prefsReady) {
 				persistPreferences();
 			}
 		}
 
-		if ($$self.$$.dirty[0] & /*unitSystem*/ 2048 | $$self.$$.dirty[1] & /*prefsReady*/ 2048) {
+		if ($$self.$$.dirty[0] & /*unitSystem*/ 4096 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
 			if (prefsReady) {
 				refreshUnitDependentUi();
 			}
@@ -13712,21 +26236,25 @@ function instance$1($$self, $$props, $$invalidate) {
 		rasterLoading,
 		enabled,
 		panelHidden,
+		chartOpen,
 		forecastTab,
 		viewportLoading,
 		unitSystem,
+		clickedPoint,
 		stormStatus,
 		terrainDetailStatus,
 		preparingMap,
 		prepareMessage,
+		exportingMap,
+		videoDownloadUrl,
+		videoDownloadName,
 		geographyError,
 		infoOpen,
 		settingsOpen,
-		chartOpen,
 		probeLoading,
-		clickedPoint,
 		clickedMapElevationM,
 		clickedPlaceName,
+		clickedTerrainSlopes,
 		activeRunTime,
 		refreshError,
 		mapDataStatus,
@@ -13746,6 +26274,9 @@ function instance$1($$self, $$props, $$invalidate) {
 		rasterLoadProgress,
 		stormLoadProgress,
 		prefsReady,
+		clickedLatLon,
+		exposureGeneration,
+		clickGeneration,
 		click_handler,
 		click_handler_1,
 		click_handler_2,
@@ -13770,15 +26301,15 @@ function instance$1($$self, $$props, $$invalidate) {
 class Plugin extends SvelteComponent {
 	constructor(options) {
 		super();
-		init(this, options, instance$1, create_fragment$1, safe_not_equal, { isEnabled: 36, selectMapPoint: 37 }, add_css, [-1, -1, -1, -1, -1, -1]);
+		init(this, options, instance$1, create_fragment$1, safe_not_equal, { isEnabled: 40, selectMapPoint: 41 }, add_css, [-1, -1, -1, -1, -1, -1, -1]);
 	}
 
 	get isEnabled() {
-		return this.$$.ctx[36];
+		return this.$$.ctx[40];
 	}
 
 	get selectMapPoint() {
-		return this.$$.ctx[37];
+		return this.$$.ctx[41];
 	}
 }
 

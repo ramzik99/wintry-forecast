@@ -140,7 +140,7 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';
-  import { precipMmAt, PRECIP_THRESHOLD_MM_H, isPrecipitating } from './precip';
+  import { precipMmAt, precipMmAtTime, PRECIP_THRESHOLD_MM_H, isPrecipitating } from './precip';
   import { precipitationLabel, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
   import { terrainCrossingState } from './terrainCrossing';
   import { buildSnowForecast, snowForecastWindow, snowfallAtTime } from './snowForecast';
@@ -204,6 +204,7 @@
   function startDrag(event: PointerEvent) { if (!chartShell) return; dragPointerId = event.pointerId; const rect = chartShell.getBoundingClientRect(); dragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top }; window.addEventListener('pointermove', dragMove); window.addEventListener('pointerup', stopDrag, { once: true }); event.preventDefault(); }
   function dragMove(event: PointerEvent) { if (event.pointerId === dragPointerId) position = clampPosition(event.clientX - dragOffset.x, event.clientY - dragOffset.y); }
   function stopDrag(event: PointerEvent) { if (event.pointerId === dragPointerId) dragPointerId = null; window.removeEventListener('pointermove', dragMove); }
+  function keepChartVisible() { position = clampPosition(position.x,position.y); }
   function setTimeline(time: number) { if (!Number.isFinite(time)) return; try { (store as any).set('timestamp', time); timestamp = time; tooltip = null; } catch {} }
   function jumpToCrossing(time: number) { setTimeline(time); }
   function jumpToNextChange() { const time = chart?.nextChangeTime; if (time !== null && time !== undefined) setTimeline(time); }
@@ -257,7 +258,9 @@
     const minEntry = windowIndices.map((i: number) => ({ i, value: snowlineAt(p, i) })).filter((v: any) => v.value !== null && Number.isFinite(v.value)).sort((a: any, b: any) => a.value - b.value)[0] ?? null;
     const min24Snowline = minEntry ? Math.round(Number(minEntry.value) / 10) * 10 : null;
     const snow24 = snowForecastWindow(snowSeries,target,end24);
-    const currentKey = phases[currentIndex]?.key ?? null;
+    const currentPrecip=precipMmAtTime(p.forecast,p.times,target);
+    const currentPhase=isPrecipitating(currentPrecip)?phases[currentIndex]:null;
+    const currentKey = currentPhase?.key ?? null;
     let nextChangeLabel = '';
     let nextChangeTime:number|null = null;
     for (let i = currentIndex + 1; coverage.known[currentIndex] && i < p.times.length && p.times[i] <= end24; i++) {
@@ -277,8 +280,8 @@
       nowX: now >= t0 && now <= t1 ? x(now) : null, crossingX: crossingTime !== null ? x(crossingTime) : null,
       min24X: minEntry ? x(p.times[minEntry.i]) : null, min24Y: minEntry ? y(Number(minEntry.value)) : null,
       minLabel: formatElevation(min, units), midLabel: formatElevation((min + max) / 2, units), maxLabel: formatElevation(max, units), startLabel: new Date(t0).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }),
-      currentSnowline: currentValue !== null ? Math.round(currentValue / 10) * 10 : null, currentTerrainDifference, currentPosition: terrainPosition(currentTerrainDifference), currentPrecip: precipValues[currentIndex] ?? null,
-      currentPhase: phases[currentIndex], currentCondition:conditionLabel(precipValues[currentIndex],phases[currentIndex]), coverageComplete:coverage.complete && snowPrefix===p.times.filter((t:number)=>t<t1).length,precipCount:coverage.precipCount,snowPrefix,coverageNote:coverage.note || (snowPrefix < p.times.filter((t:number)=>t<t1).length ? 'Snowfall estimate stops at missing data' : ''),
+      currentSnowline: currentValue !== null ? Math.round(currentValue / 10) * 10 : null, currentTerrainDifference, currentPosition: terrainPosition(currentTerrainDifference), currentPrecip,
+      currentPhase, currentCondition:conditionLabel(currentPrecip,currentPhase), coverageComplete:coverage.complete && snowPrefix===p.times.filter((t:number)=>t<t1).length,precipCount:coverage.precipCount,snowPrefix,coverageNote:coverage.note || (snowPrefix < p.times.filter((t:number)=>t<t1).length ? 'Snowfall estimate stops at missing data' : ''),
       midTimeLabel:'+'+Math.round((t1-t0)/7200000)+' h', endTimeLabel:'+'+Math.round((t1-t0)/3600000)+' h', precipBars, hasPrecip: validPrecip.some(v => isPrecipitating(v)),
       precipMaxLabel: precipMax ? formatPrecip(precipMax, units).replace(/\s*(mm|in)\/h$/, '') : '—', minScale: min, maxScale: max, validLabel: `Forecast ${formatTooltipTime(target)} · ${formatRun(p.runTime)}`,
       phaseBlocks: buildBlocks(p, phases, x), newSnowPoints, newSnowArea, newSnowMax, newSnowMaxLabel: formatSnow(newSnowMax, units), cumulativeNewSnow,
@@ -329,9 +332,10 @@
   onMount(() => {
     const width = Math.min(430, window.innerWidth - 16); position = { x: Math.max(6, (window.innerWidth - width) / 2), y: window.innerWidth <= 520 ? 34 : 54 };
     realNow = Date.now(); realNowTimer = setInterval(() => realNow = Date.now(), 30000);
+    window.addEventListener('resize',keepChartVisible);
     try { const t = store.get('timestamp'); if (typeof t === 'number') timestamp = t; timestampListener = store.on('timestamp', (v: any) => { const n = Number(v); if (Number.isFinite(n)) timestamp = n; }); } catch {}
   });
-  onDestroy(() => { if (realNowTimer) clearInterval(realNowTimer); window.removeEventListener('pointermove', dragMove); window.removeEventListener('pointerup', stopDrag); if (timestampListener !== null) try { store.off(timestampListener); } catch {} });
+  onDestroy(() => { if (realNowTimer) clearInterval(realNowTimer); window.removeEventListener('resize',keepChartVisible); window.removeEventListener('pointermove', dragMove); window.removeEventListener('pointerup', stopDrag); if (timestampListener !== null) try { store.off(timestampListener); } catch {} });
 </script>
 
 <style lang="less">

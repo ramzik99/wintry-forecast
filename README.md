@@ -6,15 +6,29 @@ The interface is designed to answer five questions quickly: **what will fall, wh
 
 ## Development candidate
 
-**1000.0.13 — not published.** Shared interval accounting, separate snowfall and
+**1000.0.14 — not published.** Shared interval accounting, separate snowfall and
 experimental remaining-layer estimates, below-model-ground masking when known,
 and a point-only terrain-flow diagnostic. Rainfall amounts remain ECMWF values;
 forecast skill has not been independently validated.
-[Changes](V1000_0_13.md) · [Method, equations and limitations](METHODS.md).
+[Changes](V1000_0_14.md) · [Method, equations and limitations](METHODS.md).
 
 ## Previous release notes
 
-**1000.0.9**
+**1000.0.13**
+
+**Prepare & download MP4** now prepares the current area and then creates a real
+H.264 MP4 in the browser. The video includes a geographic background, precipitation
+shading, enabled type icons and snowline contours, local forecast timestamps and
+a legend. It uses five forecast hours per video second, with hourly contour frames
+and explicit missing-interval boundaries. A shorter forecast stays shorter; unknown
+weather remains blank. Windy's selected weather layer, forecast lightning and
+dry-terrain hatching are excluded. Browser H.264 support is checked before preparation;
+unsupported browsers show a message and normal timeline use remains available.
+Progress and cancellation cover preparation and encoding. After export, a download
+link remains available if the browser blocked the automatic download. The encoded
+video has a maximum dimension of 1280 pixels and is created without uploading frames.
+MP4 encoding/muxing uses the bundled [Mediabunny](https://mediabunny.dev/) dependency
+(MPL-2.0). The installed Windy release changes only after publishing this version.
 
 Point cards and the graph now explicitly show average precipitation in mm/h or
 in/h. The graph also reports next-24-hour liquid accumulation with its start/end
@@ -43,7 +57,7 @@ retains one fixed Windy colour per type; contours, shading and icons stay indepe
 
 Compact 260 px desktop / 250 px phone-width panel, with location settings collapsed after selection. Forecast and Sounding remain directly accessible. The panel sits on the left above the timeline, away from right-side map controls, and can minimize to a small button. Use Windy's existing timeline to change forecast time; the duplicate slider and day shortcuts have been removed from both views.
 
-[Published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.9/plugin.min.js) · [Release notes and verification](V1000.md)
+[Previous published plugin](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.0.9/plugin.min.js) · [Release notes and verification](V1000.md)
 
 v300 prioritizes quick, easy, reliable local snow forecasts. The point card gives the immediate answer; the graph and sounding remain optional.
 
@@ -364,10 +378,16 @@ Precipitation icons are prepared with each bounded cached map frame and shown on
 
 Validation: 69 unit tests, including hanging-provider timeout, cancellation, late-response rejection and completed-request cleanup; timeline regression verifies icon switching without new raster allocations or forecast-profile requests. Desktop/mobile point-card and map regression checks are retained. Version 1000.0.7 includes these improvements; no intensity overlay or intensity controls are added.
 
-### Prepare map forecast
+### Prepare & download MP4
 
-The optional Prepare map forecast button prepares all distinct represented forecast intervals for the current map footprint, up to 144 hours. It uses already loaded weather profiles and the same 96-by-96 diagnosis samples per 256-pixel tile. The timeline remains the time selector. Progress, a rough remaining-time estimate and cancellation are available. Each completed frame stores its precipitation PNG tiles, masked geographic detail and type symbols in the plugin's own IndexedDB store; decoded frames still use the bounded RAM cache. Geographic tile images are shared across prepared times to avoid repeated downloads for an unchanged view. The local prepared view has a conservative 512 MiB serialized-data limit, and storage quota or access errors stop preparation with a visible message while normal timeline rendering stays usable. Completed times survive cancellation within the current view. This is a session preparation feature, not a promise of offline Windy or persistence after a page reload.
+The optional Prepare & download MP4 button prepares all distinct represented forecast intervals for the current map footprint, up to 144 hours, then encodes and downloads an MP4. It uses already loaded weather profiles and the same 96-by-96 diagnosis samples per 256-pixel tile. The timeline remains the time selector. Progress, a rough preparation-time estimate and cancellation are available. Each completed frame stores its precipitation PNG tiles, masked geographic detail and type symbols in the plugin's own IndexedDB store; decoded frames still use the bounded RAM cache. Geographic tile images are shared across prepared times to avoid repeated downloads for an unchanged view. The local prepared view has a conservative 512 MiB serialized-data limit, and storage quota or access errors stop preparation with a visible message while normal timeline rendering stays usable. Completed times survive cancellation within the current view. Cached timeline frames are session data; the downloaded MP4 is a separate file that can be kept and shared.
 
 Moving or zooming the map, changing shading, refreshing, disabling, a new model run or expired profiles invalidates preparation. Foreground time changes take priority; obsolete background work is discarded and preparation resumes for the remaining times when the view remains valid. Automatic refresh waits until preparation stops; profile freshness checks still apply. Forecast lightning and Windy's background layer are outside this prepared shading/type-icon cache and can still load for unseen times. Preparing an entire detailed view can take several minutes and is not necessary for normal use. No intensity overlay or new intensity scale is added.
 
 Synthetic browser verification prepared all 145 hourly fixture timestamps, then evicted a wet frame from RAM and restored it from disk without new raster pixel allocation or forecast-profile requests. Geographic detail and type symbols restored correctly. Cancellation, map navigation invalidation and a simulated local-storage quota failure were verified. These fixture results are not live-network timing or scientific accuracy measurements.
+
+MP4 verification: automated timing, horizon/gap, dimension, unsupported-browser and
+image-cancellation checks; Chrome H.264 encoding followed by playback, decoded-colour
+and duration checks; export cancellation; synthetic landscape and portrait map
+composition checks using the plugin's actual export functions. These checks verify
+video generation and layout, not live Windy integration or forecast skill.
