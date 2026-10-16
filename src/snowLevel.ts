@@ -48,6 +48,8 @@ export function wetBulbFromDewpoint(
   dewpointC: number,
   pressureHpa: number
 ): number {
+  if (![tempC, dewpointC, pressureHpa].every(Number.isFinite) || pressureHpa <= 0 ||
+    tempC <= -243.5 || dewpointC <= -243.5) return NaN;
   const td = Math.min(tempC, dewpointC);
   const e = saturationVapourPressure(td);
 
@@ -175,16 +177,19 @@ export function buildProfile(
   timeIndex: number
 ): ProfilePoint[] {
   const profile: ProfilePoint[] = [];
+  // Explicit source-model terrain, never the DEM/site elevation. Pressure-level
+  // fields beneath model ground can contain extrapolated values, not real air.
+  const modelTerrainM = valueAt(data.__modelTerrainM,0);
 
   for (const level of PRESSURE_LEVELS) {
     const t = valueAt(data[`temp-${level}`], timeIndex);
     const td = valueAt(data[`dewpoint-${level}`], timeIndex);
     const gh = valueAt(data[`gh-${level}`], timeIndex);
 
-    if (t === null || td === null || gh === null) continue;
+    if (t === null || td === null || gh === null || (modelTerrainM !== null && gh < modelTerrainM)) continue;
 
     const tempC = t > 150 ? t - 273.15 : t;
-    const dewpointC = td > 150 ? td - 273.15 : td;
+    const dewpointC = Math.min(tempC,td > 150 ? td - 273.15 : td);
     const pressureHpa = Number(level.replace('h', ''));
 
     /*
@@ -194,13 +199,15 @@ export function buildProfile(
      */
     const heightM = gh;
 
+    const wetBulbC = wetBulbFromDewpoint(tempC, dewpointC, pressureHpa);
+    if (!Number.isFinite(wetBulbC)) continue;
     profile.push({
       level,
       pressureHpa,
       heightM,
       tempC,
       dewpointC,
-      wetBulbC: wetBulbFromDewpoint(tempC, dewpointC, pressureHpa),
+      wetBulbC,
     });
   }
 

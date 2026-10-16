@@ -39,7 +39,7 @@
         {#if chart.hasPrecip}
           <text x="37" y="159" text-anchor="end" class="axis precip-axis">{chart.precipMaxLabel}</text>
           <text x="37" y="190" text-anchor="end" class="axis">0</text>
-          {#each chart.precipBars as bar}<rect x={bar.x} y={bar.y} width={bar.width} height={bar.height} rx="1.1" class="precip-bar" class:wet={bar.mm >= PRECIP_THRESHOLD_MM_H} />{/each}
+          {#each chart.precipBars as bar}<rect x={bar.x} y={bar.y} width={bar.width} height={bar.height} rx="1.1" class="precip-bar" class:wet={isPrecipitating(bar.mm)} />{/each}
         {:else}
           <text x="195" y="175" text-anchor="middle" class="empty-band">{chart.precipCount ? (chart.coverageComplete ? 'Dry' : 'Dry where data available') : 'Precipitation unavailable'}</text>
         {/if}
@@ -57,7 +57,7 @@
           <rect x="246" y="258" width="7" height="7" rx="1.5" class="phase-freezing-rain"/><text x="257" y="265">Freezing rain</text>
         </g>
 
-        <text x="42" y="282" class="section-label snow-title">NEW SNOW <tspan>{units === 'imperial' ? 'est. in' : 'est. cm'}</tspan></text>
+        <text x="42" y="282" class="section-label snow-title">SNOWFALL TOTAL <tspan>{units === 'imperial' ? 'est. in' : 'est. cm'}</tspan></text>
         <rect x="42" y="288" width="306" height="28" rx="7" class="band-bg" />
         {#if chart.newSnowMax > 0.05}
           <text x="37" y="294" text-anchor="end" class="axis snow-axis">{chart.newSnowMaxLabel}</text>
@@ -90,7 +90,7 @@
           <div class="tip-grid">
             <span>SL <b>{tooltip.snowline === null ? 'Unresolved' : formatElevation(tooltip.snowline, units)}</b></span>
             <span>Avg precip <b>{formatPrecip(tooltip.precip, units)}</b></span>
-            <span>New snow <b>{formatSnow(tooltip.newSnow, units)}</b></span>
+            <span>Snowfall so far <b>{formatSnow(tooltip.newSnow, units)}</b></span>
             {#if terrainM !== null}<span>Terrain <b>{formatElevation(terrainM, units)}</b></span>{/if}
           </div>
         </div>
@@ -112,11 +112,14 @@
       <b>Next 24 h precipitation</b>
       <span>{formatPrecipTotal(chart.precip24h,units)}{#if chart.precip24h===null} · incomplete forecast coverage{/if}</span>
       <span>{chart.precip24Range} · liquid equivalent</span>
+      <span>Snowfall: {formatSnow(chart.newSnow24h,units)} · remaining layer*: {formatSnow(chart.remainingSnow24h,units)}</span>
+      <small>*Experimental settling/melt estimate; excludes existing snow and ground heat.</small>
+      {#if flow}<span title="Kinematic wind–terrain exposure over a 4 km span. Does not change forecast precipitation amounts.">Terrain flow: {flow.direction} · {Math.round(flow.relativeHumidity)}% RH · experimental</span>{/if}
     </div>
     <div class="outlook24 event-intelligence">
       <b>{event?.activeNow ? 'Current wintry period' : 'Next wintry period'}</b>
       {#if event}
-        <span>{event.dominantPhase.icon} {precipitationLabel(event.dominantPhase,event.confidence)} · {formatEventRange(event.startTime, event.endTime)}{#if event.incomplete} · Amount uncertain{:else if event.newSnowCm > 0.05} · est. {formatSnow(event.newSnowCm, units)}{event.activeNow ? ' remaining' : ''}{/if}</span>
+        <span>{event.dominantPhase.icon} {precipitationLabel(event.dominantPhase,event.confidence)} · {formatEventRange(event.startTime, event.endTime)}{#if event.incomplete} · Amount uncertain{:else if event.newSnowCm > 0.05} · est. {formatSnow(event.newSnowCm, units)}{event.activeNow ? ' still to fall' : ''}{/if}</span>
         {#if !event.activeNow}<button type="button" title="Jump to event start" on:click={jumpToEvent}>Go to event →</button>{/if}
       {:else}
         <span>{noEventMessage(point,terrainM,timestamp)}</span>
@@ -124,7 +127,7 @@
     </div>
     {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}<button class="crossing-action" type="button" on:click={() => jumpToCrossing(Number(crossing.crossingTime))}>{crossing.direction === 'below' ? 'Snowline falls below this elevation' : 'Snowline rises above this elevation'} · {formatShortTime(crossing.crossingTime)} →</button>{/if}
     {#if chart.currentPhase?.confidence === 'low'}<div class="quality-note">Limited atmospheric detail at this elevation; type may differ.</div>{/if}
-    {#if event && chart.coverageNote}<div class="quality-note">{chart.coverageNote}</div>{/if}
+    {#if chart.coverageNote}<div class="quality-note">{chart.coverageNote}</div>{/if}
   {:else}
     <div class="empty">Wintry forecast unavailable.</div>
   {/if}
@@ -137,13 +140,14 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
   import { buildProfile, wetBulbZeroHeight } from './snowLevel';
-  import { precipMmAt, formatPrecipMm, PRECIP_THRESHOLD_MM_H } from './precip';
-  import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
+  import { precipMmAt, precipMmAtTime, PRECIP_THRESHOLD_MM_H, isPrecipitating } from './precip';
+  import { precipitationLabel, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
   import { terrainCrossingState } from './terrainCrossing';
-  import { estimateNewSnowStep } from './snowAccum';
+  import { buildSnowForecast, snowForecastWindow, snowfallAtTime } from './snowForecast';
   import { nextWintryEvent } from './eventOutlook';
   import { conditionLabel, noEventMessage } from './forecastStatus';
-  import { intervalEnd, coversWindow } from './forecastTimeline';
+  import { supportedIntervalEnd } from './forecastIntervals';
+  import { terrainFlow, type TerrainSlopes } from './terrainFlow';
   import { forecastCoverage } from './forecastCoverage';
   import { precipitationAccumulation } from './precipAccumulation';
   import { forecastIntervalIndex, forecastIntervalHours } from './forecastTime';
@@ -152,6 +156,7 @@
 
   export let point: any;
   export let terrainM: number | null = null;
+  export let terrainSlopes: TerrainSlopes | null = null;
   export let placeName = '';
   export let tab: 'graph' | 'sounding' = 'graph';
   export let units: UnitSystem = 'metric';
@@ -176,18 +181,19 @@
     precip24h:number|null;precip24Range:string;
     points: string; terrainY: number | null; currentX: number | null; currentY: number | null; nowX: number | null; crossingX: number | null; min24X: number | null; min24Y: number | null;
     minLabel: string; midLabel: string; maxLabel: string; startLabel: string; currentSnowline: number | null; currentTerrainDifference: number | null; currentPosition: string;
-    currentPrecip: number | null; currentCondition:string; coverageComplete:boolean; precipCount:number; snowPrefix:number; coverageNote:string; midTimeLabel:string; endTimeLabel:string; currentPhase: TerrainPrecipType | null; currentNewSnow: number; precipBars: Bar[]; hasPrecip: boolean; precipMaxLabel: string;
-    minScale: number; maxScale: number; validLabel: string; phaseBlocks: Block[]; phaseSummary: string; newSnowPoints: string; newSnowArea: string; newSnowMax: number; newSnowMaxLabel: string; cumulativeNewSnow: number[];
-    min24Snowline: number | null; newSnow24h: number; window24Complete: boolean; nextChangeLabel: string; nextChangeTime: number | null;
+    currentPrecip: number | null; currentCondition:string; coverageComplete:boolean; precipCount:number; snowPrefix:number; coverageNote:string; midTimeLabel:string; endTimeLabel:string; currentPhase: TerrainPrecipType | null; precipBars: Bar[]; hasPrecip: boolean; precipMaxLabel: string;
+    minScale: number; maxScale: number; validLabel: string; phaseBlocks: Block[]; newSnowPoints: string; newSnowArea: string; newSnowMax: number; newSnowMaxLabel: string; cumulativeNewSnow: number[];
+    min24Snowline: number | null; newSnow24h: number | null; remainingSnow24h: number | null; window24Complete: boolean; nextChangeLabel: string; nextChangeTime: number | null;
   };
 
   $: crossing = terrainCrossingState(point, terrainM, timestamp);
   $: event = nextWintryEvent(point, terrainM, timestamp);
   $: chart = buildChart(point, terrainM, timestamp, crossing?.crossingTime ?? null, realNow, units);
   $: showNow = Math.abs(timestamp - realNow) > 90 * 60_000;
+  $: flow = point ? terrainFlow(point.forecast,forecastIntervalIndex(point.times,timestamp),terrainM,terrainSlopes) : null;
 
   function snowlineAt(p: any, index: number): number | null { try { const v = wetBulbZeroHeight(buildProfile(p.forecast, index)).snowLevelM; return v !== null && Number.isFinite(v) ? v : null; } catch { return null; } }
-  function phaseAt(p: any, terrain: number | null, index: number): TerrainPrecipType | null { if (terrain === null || !Number.isFinite(terrain)) return null; const precip = precipMmAt(p.forecast, index); if (precip === null || precip < PRECIP_THRESHOLD_MM_H) return null; return terrainPrecipitationType(buildProfile(p.forecast, index), terrain); }
+  function phaseAt(p: any, terrain: number | null, index: number): TerrainPrecipType | null { return isPrecipitating(precipMmAt(p.forecast,index)) ? buildSnowForecast(p,terrain).thermalPhases[index] : null; }
   function formatTooltipTime(time: number): string { return new Date(time).toLocaleString(undefined, { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
   function formatShortTime(time: number): string { return new Date(time).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }); }
   function formatRun(time: number | null): string { if (time === null || !Number.isFinite(time)) return 'ECMWF · run unavailable'; return `ECMWF ${String(new Date(Number(time)).getUTCHours()).padStart(2, '0')}Z`; }
@@ -198,6 +204,7 @@
   function startDrag(event: PointerEvent) { if (!chartShell) return; dragPointerId = event.pointerId; const rect = chartShell.getBoundingClientRect(); dragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top }; window.addEventListener('pointermove', dragMove); window.addEventListener('pointerup', stopDrag, { once: true }); event.preventDefault(); }
   function dragMove(event: PointerEvent) { if (event.pointerId === dragPointerId) position = clampPosition(event.clientX - dragOffset.x, event.clientY - dragOffset.y); }
   function stopDrag(event: PointerEvent) { if (event.pointerId === dragPointerId) dragPointerId = null; window.removeEventListener('pointermove', dragMove); }
+  function keepChartVisible() { position = clampPosition(position.x,position.y); }
   function setTimeline(time: number) { if (!Number.isFinite(time)) return; try { (store as any).set('timestamp', time); timestamp = time; tooltip = null; } catch {} }
   function jumpToCrossing(time: number) { setTimeline(time); }
   function jumpToNextChange() { const time = chart?.nextChangeTime; if (time !== null && time !== undefined) setTimeline(time); }
@@ -209,22 +216,13 @@
     const blocks: Block[] = [];
     for(let i=0;i<phases.length;i++){
       const phase=phases[i];if(!phase)continue;
-      const left=Math.max(42,x(p.times[i])),right=Math.min(348,x(intervalEnd(p.times,i)));
+      const left=Math.max(42,x(p.times[i])),right=Math.min(348,x(supportedIntervalEnd(p.times,i,p.forecast.__precipPeriodsH)));
       if(right<=left)continue;
       const previous=blocks.at(-1);
       if(previous?.key===phase.key&&Math.abs(previous.x+previous.width-left)<0.01)previous.width=right-previous.x;
       else blocks.push({x:left,width:right-left,key:phase.key});
     }
     return blocks;
-  }
-
-  function phaseSummary(phases: (TerrainPrecipType | null)[], precip: (number | null)[], newSnow: number[]): string {
-    const amounts: Record<TerrainPrecipTypeKey, number> = { snow: 0, 'wet-snow': 0, mix: 0, rain: 0, 'ice-pellets': 0, 'freezing-rain': 0 }; let total = 0;
-    phases.forEach((phase, i) => { const mm = precip[i]; if (!phase || mm === null || mm < PRECIP_THRESHOLD_MM_H) return; amounts[phase.key] += mm; total += mm; });
-    const finalSnow = newSnow.length ? newSnow[newSnow.length - 1] : 0;
-    if (total < PRECIP_THRESHOLD_MM_H) return 'Dry forecast · no meaningful precipitation.';
-    const ranked = (Object.entries(amounts) as [TerrainPrecipTypeKey, number][]).sort((a, b) => b[1] - a[1]); const [key, amount] = ranked[0], pct = Math.round(amount / total * 100);
-    return `${phaseName(key)} ${pct}% · new snow est. ${formatSnow(finalSnow, units)}`;
   }
 
   function buildChart(p: any, terrain: number | null, target: number, crossingTime: number | null, now: number, units: UnitSystem): ChartData | null {
@@ -244,32 +242,25 @@
     const precipValues = p.times.map((_: number, i: number) => precipMmAt(p.forecast, i)), validPrecip = precipValues.filter((v: number | null): v is number => v !== null && Number.isFinite(v)), precipMax = validPrecip.length ? Math.max(PRECIP_THRESHOLD_MM_H, ...validPrecip) : 0;
     const spacing = p.times.length > 1 ? x(p.times[1])-x(p.times[0]) : 306*3/144, barWidth = Math.max(1.1, Math.min(4.5, spacing * .78));
     const precipBars = precipValues.map((mm: number | null, i: number) => { const value = mm ?? 0, height = precipMax > 0 ? Math.min(30, value / precipMax * 30) : 0; return { x: Math.min(348-barWidth, x(p.times[i])), y: 188 - height, width: barWidth, height, mm: value }; }).filter((b: Bar,i:number) => b.height > .1 && p.times[i] < t1);
-    const phases = p.times.map((_: number, i: number) => phaseAt(p, terrain, i));
+    const snowSeries = buildSnowForecast(p, terrain);
+    const phases = p.times.map((_: number, i: number) => isPrecipitating(precipValues[i]) ? snowSeries.thermalPhases[i] : null);
 
     const coverage=forecastCoverage(precipValues,phases,p.times);
-    const cumulativeNewSnow: number[] = []; let running = 0;
-    for (let i = 0; i < p.times.length; i++) {
-      const dt = Math.max(0,(intervalEnd(p.times,i)-p.times[i])/3600_000);
-      running = estimateNewSnowStep(precipValues[i], phases[i], running, dt).cumulativeCm;
-      cumulativeNewSnow.push(running);
-    }
-    const newSnowMax = Math.max(0, ...cumulativeNewSnow.slice(0,coverage.prefix)), snowTop = 288, snowBottom = 316;
+    const cumulativeNewSnow = snowSeries.cumulativeSnowfallCm, snowPrefix = snowSeries.prefix;
+    const newSnowMax = Math.max(0, ...cumulativeNewSnow), snowTop = 288, snowBottom = 316;
     const snowY = (v: number) => snowBottom - (newSnowMax > 0 ? v / newSnowMax * (snowBottom - snowTop) : 0);
-    const newSnowPoints = coverage.prefix ? [`${x(t0).toFixed(1)},${snowBottom}`, ...cumulativeNewSnow.slice(0,coverage.prefix).map((v,i)=>`${x(intervalEnd(p.times,i)).toFixed(1)},${snowY(v).toFixed(1)}`)].join(' ') : '';
-    const newSnowArea = coverage.prefix > 0 ? `M ${x(p.times[0]).toFixed(1)} ${snowBottom} L ${newSnowPoints.replace(/,/g, ' ')} L ${x(intervalEnd(p.times,coverage.prefix - 1)).toFixed(1)} ${snowBottom} Z` : '';
+    const newSnowPoints = snowPrefix ? [`${x(t0).toFixed(1)},${snowBottom}`, ...cumulativeNewSnow.map((v,i)=>`${x(snowSeries.ends[i]).toFixed(1)},${snowY(v).toFixed(1)}`)].join(' ') : '';
+    const newSnowArea = snowPrefix > 0 ? `M ${x(t0).toFixed(1)} ${snowBottom} L ${newSnowPoints.replace(/,/g, ' ')} L ${x(snowSeries.ends[snowPrefix-1]).toFixed(1)} ${snowBottom} Z` : '';
 
     const end24 = target + 24 * 3600_000;
     const liquid24=precipitationAccumulation(p.times,precipValues,target,end24,p.forecast.__precipPeriodsH);
     const windowIndices = p.times.map((time: number, i: number) => ({ time, i })).filter((v: any) => v.time + forecastIntervalHours(p.times,v.i)*3600_000 > target && v.time < end24).map((v: any) => v.i);
     const minEntry = windowIndices.map((i: number) => ({ i, value: snowlineAt(p, i) })).filter((v: any) => v.value !== null && Number.isFinite(v.value)).sort((a: any, b: any) => a.value - b.value)[0] ?? null;
     const min24Snowline = minEntry ? Math.round(Number(minEntry.value) / 10) * 10 : null;
-    let newSnow24h = 0;
-    for (const i of windowIndices) {
-      if(p.times[i]>=end24) continue;
-      const dt = (Math.min(end24,p.times[i]+forecastIntervalHours(p.times,i)*3600_000)-Math.max(target,p.times[i]))/3600_000;
-      newSnow24h = estimateNewSnowStep(precipValues[i], phases[i], newSnow24h, dt).cumulativeCm;
-    }
-    const currentKey = phases[currentIndex]?.key ?? null;
+    const snow24 = snowForecastWindow(snowSeries,target,end24);
+    const currentPrecip=precipMmAtTime(p.forecast,p.times,target);
+    const currentPhase=isPrecipitating(currentPrecip)?phases[currentIndex]:null;
+    const currentKey = currentPhase?.key ?? null;
     let nextChangeLabel = '';
     let nextChangeTime:number|null = null;
     for (let i = currentIndex + 1; coverage.known[currentIndex] && i < p.times.length && p.times[i] <= end24; i++) {
@@ -289,12 +280,12 @@
       nowX: now >= t0 && now <= t1 ? x(now) : null, crossingX: crossingTime !== null ? x(crossingTime) : null,
       min24X: minEntry ? x(p.times[minEntry.i]) : null, min24Y: minEntry ? y(Number(minEntry.value)) : null,
       minLabel: formatElevation(min, units), midLabel: formatElevation((min + max) / 2, units), maxLabel: formatElevation(max, units), startLabel: new Date(t0).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }),
-      currentSnowline: currentValue !== null ? Math.round(currentValue / 10) * 10 : null, currentTerrainDifference, currentPosition: terrainPosition(currentTerrainDifference), currentPrecip: precipValues[currentIndex] ?? null,
-      currentPhase: phases[currentIndex], currentCondition:conditionLabel(precipValues[currentIndex],phases[currentIndex]), coverageComplete:coverage.complete,precipCount:coverage.precipCount,snowPrefix:coverage.prefix,coverageNote:coverage.note,
-      midTimeLabel:'+'+Math.round((t1-t0)/7200000)+' h', endTimeLabel:'+'+Math.round((t1-t0)/3600000)+' h', currentNewSnow: cumulativeNewSnow[currentIndex] ?? 0, precipBars, hasPrecip: validPrecip.some(v => v >= PRECIP_THRESHOLD_MM_H),
+      currentSnowline: currentValue !== null ? Math.round(currentValue / 10) * 10 : null, currentTerrainDifference, currentPosition: terrainPosition(currentTerrainDifference), currentPrecip,
+      currentPhase, currentCondition:conditionLabel(currentPrecip,currentPhase), coverageComplete:coverage.complete && snowPrefix===p.times.filter((t:number)=>t<t1).length,precipCount:coverage.precipCount,snowPrefix,coverageNote:coverage.note || (snowPrefix < p.times.filter((t:number)=>t<t1).length ? 'Snowfall estimate stops at missing data' : ''),
+      midTimeLabel:'+'+Math.round((t1-t0)/7200000)+' h', endTimeLabel:'+'+Math.round((t1-t0)/3600000)+' h', precipBars, hasPrecip: validPrecip.some(v => isPrecipitating(v)),
       precipMaxLabel: precipMax ? formatPrecip(precipMax, units).replace(/\s*(mm|in)\/h$/, '') : '—', minScale: min, maxScale: max, validLabel: `Forecast ${formatTooltipTime(target)} · ${formatRun(p.runTime)}`,
-      phaseBlocks: buildBlocks(p, phases, x), phaseSummary: phaseSummary(phases, precipValues, cumulativeNewSnow), newSnowPoints, newSnowArea, newSnowMax, newSnowMaxLabel: formatSnow(newSnowMax, units), cumulativeNewSnow,
-      min24Snowline, window24Complete:coversWindow(p.times,coverage.known,target,end24), newSnow24h: Math.max(0, newSnow24h), nextChangeLabel, nextChangeTime,
+      phaseBlocks: buildBlocks(p, phases, x), newSnowPoints, newSnowArea, newSnowMax, newSnowMaxLabel: formatSnow(newSnowMax, units), cumulativeNewSnow,
+      min24Snowline, window24Complete:snow24.complete, newSnow24h:snow24.snowfallCm, remainingSnow24h:snow24.remainingLayerCm, nextChangeLabel, nextChangeTime,
     };
   }
 
@@ -307,7 +298,7 @@
     if(idx<0){tooltip=null;return}
     const time = point.times[idx], x = 42 + (time - t0) / (t1 - t0) * 306;
     if (event.type === 'pointerdown') setTimeline(time);
-    tooltip = { x, cssX: Math.max(92, Math.min(rect.width - 92, x / 360 * rect.width)), cssY: 44, snowline: (() => { const v = snowlineAt(point, idx); return v === null ? null : Math.round(v / 10) * 10; })(), precip: precipMmAt(point.forecast, idx), phase: phaseAt(point, terrainM, idx), newSnow: idx < chart.snowPrefix ? (idx===0 ? 0 : chart.cumulativeNewSnow[idx-1] ?? 0) : null, timeLabel: formatTooltipTime(time) };
+    tooltip = { x, cssX: Math.max(92, Math.min(rect.width - 92, x / 360 * rect.width)), cssY: 44, snowline: (() => { const v = snowlineAt(point, idx); return v === null ? null : Math.round(v / 10) * 10; })(), precip: precipMmAt(point.forecast, idx), phase: phaseAt(point, terrainM, idx), newSnow: snowfallAtTime(buildSnowForecast(point,terrainM),time), timeLabel: formatTooltipTime(time) };
   }
 
   async function downloadPng() {
@@ -330,9 +321,9 @@
       y += 34; ctx.fillStyle = '#b8c8d1'; ctx.font = '22px Arial';
       ctx.fillText(`Snowline ${chart.currentSnowline === null ? 'WBZ unresolved' : formatElevation(chart.currentSnowline, units)}   ·   Avg precip ${formatPrecip(chart.currentPrecip, units)}`, 52, y);
       y += 30;ctx.fillStyle='#b8c8d1';ctx.font='22px Arial';ctx.fillText(`Next 24 h liquid precipitation: ${formatPrecipTotal(chart.precip24h,units)}${chart.precip24h===null?' (incomplete coverage)':''}`,52,y);
-      y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min estimated snowline ${formatElevation(chart.min24Snowline, units)} · new snow ${(chart.window24Complete ? formatSnow(chart.newSnow24h, units) : 'unavailable')}`, 52, y);
+      y += 38; ctx.fillStyle = '#dfeaf0'; ctx.font = '700 21px Arial'; ctx.fillText(`Next 24 h · min estimated snowline ${formatElevation(chart.min24Snowline, units)} · snowfall ${(chart.window24Complete ? formatSnow(chart.newSnow24h, units) : 'unavailable')}`, 52, y);
       if (chart.nextChangeLabel) { y += 30; ctx.fillStyle = '#e5cf7c'; ctx.font = '700 20px Arial'; ctx.fillText(chart.nextChangeLabel, 52, y); }
-      y += 30; ctx.fillStyle = '#8799a4'; ctx.font = '18px Arial'; ctx.fillText('Estimated new snow, not existing snowpack. ECMWF profile and Windy terrain.', 52, y);
+      y += 30; ctx.fillStyle = '#8799a4'; ctx.font = '18px Arial'; ctx.fillText('Gross snowfall estimate; excludes existing snowpack. Accuracy not independently validated.', 52, y);
       const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(v => v ? resolve(v) : reject(new Error('PNG failed')), 'image/png'));
       const href = URL.createObjectURL(png), a = document.createElement('a'); a.href = href; a.download = `wintry-forecast-${(placeName || 'point').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.png`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(href), 30000);
     } catch (e) { console.warn('Wintry forecast PNG export failed', e); } finally { pngBusy = false; }
@@ -341,9 +332,10 @@
   onMount(() => {
     const width = Math.min(430, window.innerWidth - 16); position = { x: Math.max(6, (window.innerWidth - width) / 2), y: window.innerWidth <= 520 ? 34 : 54 };
     realNow = Date.now(); realNowTimer = setInterval(() => realNow = Date.now(), 30000);
+    window.addEventListener('resize',keepChartVisible);
     try { const t = store.get('timestamp'); if (typeof t === 'number') timestamp = t; timestampListener = store.on('timestamp', (v: any) => { const n = Number(v); if (Number.isFinite(n)) timestamp = n; }); } catch {}
   });
-  onDestroy(() => { if (realNowTimer) clearInterval(realNowTimer); window.removeEventListener('pointermove', dragMove); window.removeEventListener('pointerup', stopDrag); if (timestampListener !== null) try { store.off(timestampListener); } catch {} });
+  onDestroy(() => { if (realNowTimer) clearInterval(realNowTimer); window.removeEventListener('resize',keepChartVisible); window.removeEventListener('pointermove', dragMove); window.removeEventListener('pointerup', stopDrag); if (timestampListener !== null) try { store.off(timestampListener); } catch {} });
 </script>
 
 <style lang="less">

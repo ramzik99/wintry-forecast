@@ -3,7 +3,7 @@ import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, canEncodeVideo } f
 export type MovieTime = { time:number; timestamp:number; duration:number };
 
 /** Include hourly contour times and source-interval ends so missing gaps go blank. */
-export function forecastMovieTimes(axes:number[][]){
+export function forecastMovieTimes(axes:number[][],supportEnds:number[][]=[]){
   const valid=axes.filter(a=>a.length&&a.every((t,i)=>Number.isFinite(t)&&(i===0||t>a[i-1])));
   if(!valid.length)return [];
   const hour=3600_000,first=Math.min(...valid.map(a=>a[0])),last=Math.min(first+144*hour,Math.max(...valid.map(a=>a.at(-1)!)));
@@ -14,6 +14,11 @@ export function forecastMovieTimes(axes:number[][]){
     const span=i+1<axis.length?axis[i+1]-t:i>0?t-axis[i-1]:3*hour,end=t+Math.min(3*hour,span);
     if(end>=first&&end<=last)targets.add(end);
   });
+  // Short source coverage can end between hourly frames; show that boundary
+  // rather than holding a wet raster into an unsupported period.
+  for(const ends of supportEnds)for(const time of ends){
+    if(Number.isFinite(time)&&time>=first&&time<=last)targets.add(time);
+  }
   return [...targets].sort((a,b)=>a-b);
 }
 
@@ -35,6 +40,11 @@ export async function checkMp4Support(width:number,height:number){
   if(typeof VideoEncoder==='undefined'||!await canEncodeVideo('avc',{width,height,bitrate:4_000_000})){
     throw new Error('MP4 export is unavailable in this browser. Try an updated Chrome, Edge or Safari browser.');
   }
+}
+
+/** An unavailable video encoder must not disable preparing the forecast map. */
+export async function canExportMapForecast(width:number,height:number):Promise<boolean>{
+  try{await checkMp4Support(width,height);return true;}catch{return false;}
 }
 
 /** One decoded canvas at a time; source rendering speed never changes video timing. */

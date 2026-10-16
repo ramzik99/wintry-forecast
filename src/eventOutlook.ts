@@ -1,7 +1,8 @@
 import { buildProfile, wetBulbZeroHeight } from './snowLevel';
-import { precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
-import { terrainPrecipitationType, type TerrainPrecipConfidence, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
-import { estimateNewSnowStep } from './snowAccum';
+import { isPrecipitating } from './precip';
+import { type TerrainPrecipConfidence, type TerrainPrecipType, type TerrainPrecipTypeKey } from './precipType';
+import { buildSnowForecast, snowForecastWindow } from './snowForecast';
+import { supportedIntervalEnd } from './forecastIntervals';
 import { forecastIntervalHours } from './forecastTime';
 
 export type EventConfidence = 'high' | 'medium' | 'low';
@@ -23,18 +24,12 @@ const MAX_EVENT_GAP_HOURS = 3;
 const WINTRY_KEYS = new Set<TerrainPrecipTypeKey>(['snow', 'wet-snow', 'mix', 'ice-pellets', 'freezing-rain']);
 const CONFIDENCE_SCORE: Record<TerrainPrecipConfidence, number> = { low: 1, medium: 2, high: 3 };
 
-function diagnosedPhase(point: any, index: number, terrainM: number): TerrainPrecipType | null {
-  const precip = precipMmAt(point.forecast, index);
-  if (precip === null || precip < PRECIP_THRESHOLD_MM_H) return null;
-  return terrainPrecipitationType(buildProfile(point.forecast, index), terrainM);
-}
-
 function aggregateConfidence(event: Array<{ precip: number; phase: TerrainPrecipType }>): EventConfidence {
   let weight = 0;
   let score = 0;
   let lowWeight = 0;
   for (const step of event) {
-    const w = Math.max(step.precip, PRECIP_THRESHOLD_MM_H);
+    const w = step.precip;
     weight += w;
     score += CONFIDENCE_SCORE[step.phase.confidence] * w;
     if (step.phase.confidence === 'low') lowWeight += w;
@@ -56,19 +51,21 @@ export function nextWintryEvent(
   if (!point?.times?.length || terrainM === null || !Number.isFinite(terrainM)) return null;
 
   const times: number[] = point.times;
+  const series = buildSnowForecast(point, terrainM);
   const horizonEnd = Math.min(times[0] + 144 * 3600_000,
     times.at(-1)! + forecastIntervalHours(times, times.length - 1) * 3600_000,
     fromTime + horizonHours * 3600_000);
-  const qualifying: Array<{ index: number; time: number; precip: number; phase: TerrainPrecipType }> = [];
+  const qualifying: Array<{ index: number; time: number; precip: number; phase: TerrainPrecipType; liquidMm: number }> = [];
 
   for (let i = 0; i < times.length && times[i] < horizonEnd; i++) {
-    const intervalEnd = times[i] + forecastIntervalHours(times, i) * 3600_000;
+    const intervalEnd = supportedIntervalEnd(times, i, series.sourcePeriods);
     if (intervalEnd <= fromTime) continue;
-    const precip = precipMmAt(point.forecast, i);
-    if (precip === null || precip < PRECIP_THRESHOLD_MM_H) continue;
-    const phase = diagnosedPhase(point, i, terrainM);
+    const precip = series.amounts[i];
+    if (!isPrecipitating(precip)) continue;
+    const phase = series.thermalPhases[i];
     if (!phase || !WINTRY_KEYS.has(phase.key)) continue;
-    qualifying.push({ index: i, time: times[i], precip, phase });
+    const hours = Math.max(0, Math.min(horizonEnd, intervalEnd) - Math.max(fromTime, times[i])) / 3600_000;
+    if (hours > 0) qualifying.push({ index: i, time: times[i], precip, phase, liquidMm: precip * hours / 3 });
   }
 
   if (!qualifying.length) return null;
@@ -82,7 +79,7 @@ export function nextWintryEvent(
 
   const startTime = event[0].time;
   const last = event[event.length - 1];
-  const endTime = Math.min(horizonEnd, last.time + forecastIntervalHours(times, last.index) * 3600_000);
+  const endTime = Math.min(horizonEnd, supportedIntervalEnd(times, last.index, series.sourcePeriods));
   let peak = event[0];
   let minSnowlineM: number | null = null;
   const phaseWeights = new Map<TerrainPrecipTypeKey, { weight: number; phase: TerrainPrecipType }>();
@@ -92,7 +89,7 @@ export function nextWintryEvent(
     const snowline = wetBulbZeroHeight(buildProfile(point.forecast, step.index)).snowLevelM;
     if (snowline !== null && Number.isFinite(snowline)) minSnowlineM = minSnowlineM === null ? snowline : Math.min(minSnowlineM, snowline);
     const current = phaseWeights.get(step.phase.key);
-    phaseWeights.set(step.phase.key, { weight: (current?.weight ?? 0) + Math.max(step.precip, PRECIP_THRESHOLD_MM_H), phase: current?.phase ?? step.phase });
+    phaseWeights.set(step.phase.key, { weight: (current?.weight ?? 0) + step.liquidMm, phase: current?.phase ?? step.phase });
   }
 
   let dominant = event[0].phase;
@@ -104,20 +101,12 @@ export function nextWintryEvent(
     }
   }
 
-  let snowpack = 0;
-  let incomplete = false;
-  const startIndex = event[0].index;
-  const endIndex = event[event.length - 1].index;
-  for (let i = startIndex; i <= endIndex; i++) {
-    const phase = diagnosedPhase(point, i, terrainM);
-    const precip = precipMmAt(point.forecast, i);
-    const intervalStart = Math.max(fromTime, times[i]);
-    const intervalEnd = Math.min(endTime, times[i] + forecastIntervalHours(times, i) * 3600_000);
-    const dt = (intervalEnd - intervalStart) / 3600_000;
-    if (dt <= 0) continue;
-    if (precip === null || (precip >= PRECIP_THRESHOLD_MM_H && !phase)) incomplete = true;
-    snowpack = estimateNewSnowStep(precip, phase, snowpack, dt).cumulativeCm;
-  }
+  const snow = snowForecastWindow(series, Math.max(fromTime, startTime), endTime);
+  // Do not present an event cut off by missing data as a complete storm total.
+  const following = last.index + 1;
+  const boundaryKnown = endTime >= horizonEnd || (following < times.length && times[following] === endTime &&
+    series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null) &&
+    supportedIntervalEnd(times,following,series.sourcePeriods) > endTime);
 
   return {
     startTime,
@@ -125,10 +114,10 @@ export function nextWintryEvent(
     peakTime: peak.time,
     peakPrecipMm3h: peak.precip,
     minSnowlineM: minSnowlineM === null ? null : Math.round(minSnowlineM / 10) * 10,
-    newSnowCm: snowpack,
+    newSnowCm: snow.snowfallCm ?? 0,
     dominantPhase: dominant,
-    confidence: aggregateConfidence(event),
+    confidence: aggregateConfidence(event.map(step => ({ precip: step.liquidMm, phase: step.phase }))),
     activeNow: fromTime >= startTime && fromTime < endTime,
-    incomplete,
+    incomplete: !snow.complete || !boundaryKnown,
   };
 }

@@ -84,7 +84,7 @@
   import { buildProfile, wetBulbZeroHeight, type ProfilePoint } from './snowLevel';
   import { precipitationLabel, terrainPrecipitationType } from './precipType';
   import { terrainDiagnostics } from './terrainDiagnostics';
-  import { precipMmAt, PRECIP_THRESHOLD_MM_H } from './precip';
+  import { precipMmAtTime, isPrecipitating } from './precip';
   import { conditionLabel } from './forecastStatus';
   import { forecastIntervalIndex } from './forecastTime';
   import { formatElevation, formatTemperature, type UnitSystem } from './displayUnits';
@@ -139,6 +139,7 @@
   function startDrag(event: PointerEvent) { if (!shell) return; dragPointerId = event.pointerId; const rect = shell.getBoundingClientRect(); dragOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top }; window.addEventListener('pointermove', dragMove); window.addEventListener('pointerup', stopDrag, { once: true }); event.preventDefault(); }
   function dragMove(event: PointerEvent) { if (event.pointerId === dragPointerId) position = clampPosition(event.clientX - dragOffset.x, event.clientY - dragOffset.y); }
   function stopDrag(event: PointerEvent) { if (event.pointerId === dragPointerId) dragPointerId = null; window.removeEventListener('pointermove', dragMove); }
+  function keepSoundingVisible() { if (!embedded) position = clampPosition(position.x,position.y); }
 
   function clampZoom(value: number): number { return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value)); }
   function zoomAround(value: number, clientX?: number, clientY?: number) {
@@ -288,8 +289,8 @@
     const wbz = wetBulbZeroHeight(profile);
     const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM) ? wbz.snowLevelM : null;
     const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH ? y(snowlineM) : null;
-    const precip = precipMmAt(p.forecast, idx);
-    const hasPrecip = precip !== null && precip >= PRECIP_THRESHOLD_MM_H;
+    const precip = precipMmAtTime(p.forecast,p.times,target);
+    const hasPrecip = isPrecipitating(precip);
     const diagnostics = terrain !== null && Number.isFinite(terrain) ? terrainDiagnostics(profile, terrain) : null;
     const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? terrainPrecipitationType(profile, terrain) : null;
     return {
@@ -305,10 +306,12 @@
   }
 
   onMount(() => {
+    window.addEventListener('resize',keepSoundingVisible);
     if (!embedded) { const width = Math.min(390, window.innerWidth - 12); position = { x: Math.max(6, window.innerWidth - width - 16), y: window.innerWidth <= 520 ? 38 : 66 }; }
     try { const t = store.get('timestamp'); if (typeof t === 'number') timestamp = t; timestampListener = store.on('timestamp', (v: any) => { const n = Number(v); if (Number.isFinite(n)) timestamp = n; }); } catch {}
   });
   onDestroy(() => {
+    window.removeEventListener('resize',keepSoundingVisible);
     plotPointers.clear();
     window.removeEventListener('pointermove', dragMove);
     window.removeEventListener('pointerup', stopDrag);

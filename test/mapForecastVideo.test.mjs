@@ -6,7 +6,7 @@ import ts from 'typescript';
 const source=ts.transpileModule(readFileSync(new URL('../src/mapForecastVideo.ts',import.meta.url),'utf8'),{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext},
 }).outputText.replace("'mediabunny'",JSON.stringify(import.meta.resolve('mediabunny')));
-const {movieTimeline,forecastMovieTimes,videoSize,checkMp4Support,videoImage}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const {movieTimeline,forecastMovieTimes,videoSize,checkMp4Support,canExportMapForecast,videoImage}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 
 test('movie includes missing-interval boundaries and hourly contours without extending a short forecast',()=>{
   const hour=3600_000;
@@ -14,6 +14,13 @@ test('movie includes missing-interval boundaries and hourly contours without ext
   assert.ok(forecastMovieTimes([[0,.5*hour,4*hour]]).includes(3.5*hour));
   assert.equal(forecastMovieTimes([[0,200*hour]]).at(-1),144*hour);
   assert.deepEqual(forecastMovieTimes([[],[2,1],[NaN]]),[]);
+});
+
+test('video includes a fractional source-coverage boundary without extending the forecast',()=>{
+  const hour=3600_000,times=forecastMovieTimes([[0,3*hour,6*hour]],[[.5*hour,4*hour,NaN,12*hour]]);
+  assert.ok(times.includes(.5*hour));assert.equal(times.at(-1),6*hour);
+  const frames=movieTimeline(times),short=frames.find(frame=>frame.time===0);
+  assert.equal(short.duration,.1);
 });
 
 test('video timing preserves hourly and three-hourly forecast spacing independently of rendering speed',()=>{
@@ -32,9 +39,9 @@ test('video dimensions keep map aspect, even encoder sizes and a bounded canvas'
   for(const size of [[0,1],[1,NaN],[-1,2],[Infinity,2]])assert.throws(()=>videoSize(...size));
 });
 
-test('unsupported browsers get an explicit MP4 error before preparation',async()=>{
+test('unsupported browsers disable export without rejecting map preparation',async()=>{
   const previous=globalThis.VideoEncoder;
-  try{delete globalThis.VideoEncoder;await assert.rejects(checkMp4Support(640,480),/MP4 export is unavailable/);}
+  try{delete globalThis.VideoEncoder;await assert.rejects(checkMp4Support(640,480),/MP4 export is unavailable/);assert.equal(await canExportMapForecast(640,480),false);}
   finally{if(previous)globalThis.VideoEncoder=previous;}
 });
 
