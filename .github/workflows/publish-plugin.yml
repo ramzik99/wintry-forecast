@@ -49,7 +49,7 @@ jobs:
           echo "{\"repositoryName\": \"${{ github.repository }}\", \"commitSha\": \"${{ github.sha }}\", \"repositoryOwner\": \"${{ github.repository_owner }}\"}" > /tmp/plugin-info.json
           mv plugin.json /tmp/plugin.json
           jq -s '.[0] * .[1]' /tmp/plugin.json /tmp/plugin-info.json > plugin.json
-          tar cf ../plugin.tar .
+          tar --exclude='*.map' -cf ../plugin.tar .
 
           echo "Publishing plugin..."
           curl -s --fail-with-body \
