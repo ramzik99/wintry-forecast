@@ -41,7 +41,7 @@
         {#if sounding.snowlineY !== null}
           <line x1="48" x2="310" y1={sounding.snowlineY} y2={sounding.snowlineY} class="snowline-marker" />
           <rect x="222" y={Math.max(24, sounding.snowlineY - 10)} width="84" height="12" rx="3" class="snowline-tag-bg" />
-          <text x="302" y={Math.max(33, sounding.snowlineY - 1)} text-anchor="end" class="snowline-tag">Snowline {sounding.snowline}</text>
+          <text x="302" y={Math.max(33, sounding.snowlineY - 1)} text-anchor="end" class="snowline-tag">Est. {sounding.snowline}</text>
         {/if}
 
         <polyline points={sounding.tempPoints} class="temp-line" />
@@ -70,7 +70,7 @@
     </div>
     <div class="stats">
       <span><small>Terrain Tw</small><b>{sounding.surfaceTw}</b></span>
-      <span><small>Snowline</small><b>{sounding.snowline}</b></span>
+      <span><small>Est. snowline</small><b>{sounding.snowline}</b></span>
     </div>
     <div class="hint">Hover/touch for T, Td and Tw · +/- to zoom · Fit to reset</div>
   {:else}
@@ -81,13 +81,13 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
-  import { buildProfile, wetBulbZeroHeight, type ProfilePoint } from './snowLevel';
-  import { precipitationLabel, terrainPrecipitationType } from './precipType';
+  import { buildProfile, wetBulbZeroHeight, resolvedSnowlineM, type ProfilePoint } from './snowLevel';
+  import { precipitationLabel, supportedPrecipitationType } from './precipType';
   import { terrainDiagnostics } from './terrainDiagnostics';
   import { precipMmAtTime, isPrecipitating } from './precip';
   import { conditionLabel } from './forecastStatus';
   import { forecastIntervalIndex } from './forecastTime';
-  import { formatElevation, formatTemperature, type UnitSystem } from './displayUnits';
+  import { formatElevation, formatSnowline, formatTemperature, type UnitSystem } from './displayUnits';
 
   export let point: any;
   export let terrainM: number | null = null;
@@ -287,16 +287,16 @@
       .map(node => ({y:y(node.heightM),label:String(node.pressureHpa)}));
     const terrainY = terrain !== null && Number.isFinite(terrain) && terrain >= bottomH && terrain <= topH ? y(terrain) : null;
     const wbz = wetBulbZeroHeight(profile);
-    const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM) ? wbz.snowLevelM : null;
+    const snowlineM = resolvedSnowlineM(profile);
     const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH ? y(snowlineM) : null;
     const precip = precipMmAtTime(p.forecast,p.times,target);
     const hasPrecip = isPrecipitating(precip);
     const diagnostics = terrain !== null && Number.isFinite(terrain) ? terrainDiagnostics(profile, terrain) : null;
-    const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? terrainPrecipitationType(profile, terrain) : null;
+    const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? supportedPrecipitationType(profile, terrain) : null;
     return {
       tempPoints, dewPoints, wetBulbPoints, nodes, tempGrid, pressureGrid, terrainY, snowlineY,
       surfaceTw: diagnostics ? `${diagnostics.extrapolated ? '~' : ''}${formatTemperature(diagnostics.wetBulbC,units)}` : '—',
-      snowline: snowlineM === null ? 'Unresolved' : (wbz.extrapolated?'~ ':'')+formatElevation(snowlineM,units),
+      snowline: formatSnowline(snowlineM,units),
       warmEnergy: phase ? `${Math.round(phase.meltingDegreeMetres)} °C·m` : '—',
       coldEnergy: phase ? `${Math.round(phase.refreezingDegreeMetres)} °C·m` : '—',
       phaseLabel: phase ? `${phase.icon} ${precipitationLabel(phase)}` : conditionLabel(precip,phase),

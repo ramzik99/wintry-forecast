@@ -1,4 +1,4 @@
-import { buildProfile, wetBulbZeroHeight } from './snowLevel';
+import { buildProfile, resolvedSnowlineM } from './snowLevel';
 import { forecastIntervalIndex } from './forecastTime';
 
 export type CrossingState = {
@@ -11,8 +11,7 @@ export type CrossingState = {
 
 function snowlineAt(point: any, index: number, terrainM: number): number | null {
   try {
-    const result = wetBulbZeroHeight(buildProfile(point.forecast, index));
-    return result.snowLevelM !== null && Number.isFinite(result.snowLevelM) ? result.snowLevelM : null;
+    return resolvedSnowlineM(buildProfile(point.forecast, index));
   } catch {
     return null;
   }

@@ -1,5 +1,5 @@
 import { buildProfile } from './snowLevel';
-import { terrainPrecipitationType, type TerrainPrecipType } from './precipType';
+import { supportedPrecipitationType, type TerrainPrecipType } from './precipType';
 import { precipMmAt } from './precip';
 import { forecastSlices, supportedIntervalEnd, HOUR_MS } from './forecastIntervals';
 import { snowfallInput, snowBudgetStep, type SnowLayer } from './snowAccum';
@@ -26,7 +26,7 @@ export function buildSnowForecast(point: Point, terrainM: number | null): SnowFo
   if (existing && existing.times === point.times) return existing;
   const amounts = point.times.map((_, i) => precipMmAt(point.forecast, i));
   const thermalPhases = point.times.map((_, i) => Number.isFinite(key)
-    ? terrainPrecipitationType(buildProfile(point.forecast, i), key) : null);
+    ? supportedPrecipitationType(buildProfile(point.forecast, i), key) : null);
   const sourcePeriods = point.forecast.__precipPeriodsH;
   const ends = point.times.map((_, i) => supportedIntervalEnd(point.times, i, sourcePeriods));
   const cumulativeSnowfallCm: number[] = [];
