@@ -1,17 +1,17 @@
 const __pluginConfig =  {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.1.1",
+  "version": "1000.1.2",
   "icon": "❄️",
   "title": "Wintry forecast",
-  "description": "Terrain-aware precipitation-type guidance with explicit unresolved states, ECMWF precipitation, approximate snowfall, forecast/sounding views and prepared-map MP4 export.",
+  "description": "Terrain-aware precipitation-type guidance with six physical types, qualified limited-detail estimates, ECMWF precipitation, approximate snowfall, forecast/sounding views and prepared-map MP4 export.",
   "author": "Ramzi Kandah",
   "repository": "https://github.com/ramzik99/wintry-forecast",
   "desktopUI": "embedded",
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1792156651449,
-  "builtReadable": "2026-10-16T13:17:31.450Z"
+  "built": 1792221437640,
+  "builtReadable": "2026-10-17T07:17:17.640Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -948,8 +948,7 @@ const PRECIP_TYPE_COLOURS = {
     mix: '#95a109',
     rain: '#0099b6',
     'ice-pellets': '#510c0f',
-    'freezing-rain': '#900096',
-    uncertain: '#718096'
+    'freezing-rain': '#900096'
 };
 const PRECIP_SHADES = [
     {
@@ -972,7 +971,6 @@ const cloud = '<path d="M7 17H25a5 5 0 0 0-.6-10 7 7 0 0 0-13-1A5.6 5.6 0 0 0 7 
 const drop = '<path d="M11 20l-2 4m11-4-2 4m-2 2-2 3"/>';
 const snow = '<path d="M16 19v11m-5-8 10 5m-10 0 10-5m-5-3-2 2m2-2 2 2m-2 9-2-2m2 2 2-2"/>';
 const shapes = {
-    uncertain: cloud + '<path d="M13 22a3 3 0 1 1 5 2c-2 1-2 2-2 3"/><circle cx="16" cy="30" r=".5"/>',
     rain: cloud + drop,
     snow: '<path d="M16 3v26M5 9l22 14M5 23 27 9M16 3l-4 4m4-4 4 4m-4 22-4-4m4 4 4-4M5 9l1 5m-1-5 5-1m17 15-5 1m5-1-1-5M5 23l5 1m-5-1 1-5M27 9l-5-1m5 1-1 5"/>',
     'wet-snow': cloud + snow + '<path d="M7 21l-2 4m21-4-2 4"/>',
@@ -1104,10 +1102,6 @@ function instance$6($$self) {
 		{
 			code: 'freezing-rain',
 			label: 'Freezing rain'
-		},
-		{
-			code: 'uncertain',
-			label: 'Type unresolved'
 		}
 	];
 
@@ -2122,7 +2116,7 @@ class PlaceSearch extends SvelteComponent {
 
 const config = {
     name: 'windy-plugin-snowline-map-100m',
-    version: '1000.1.1'};
+    version: '1000.1.2'};
 
 const UNITS_STORAGE_KEY = 'wintry:units:v1';
 function loadUnitSystem() {
@@ -2805,27 +2799,14 @@ function toThreeHourlyMillimetres(key, raw) {
 }
 
 /** Internal detail flags are not calibrated probabilities of forecast accuracy. */ function precipitationLabel(phase, confidence = phase.confidence) {
-    if (phase.label === 'Precipitation · type unresolved') return phase.label;
     return confidence === 'low' || confidence === 'medium' ? `${phase.label} possible` : phase.label;
 }
-/** Public guidance withholds a specific phase when the profile-detail flag is low.
- * This abstention rule is a product guardrail, not evidence of calibrated skill.
- * Keep the raw classifier available for research and method regression checks.
+/** Show the estimated physical type, qualifying limited-detail diagnoses in labels.
+ * Snow amounts and event timing have separate detail checks. No extra category
+ * is fabricated when the atmospheric profile cannot be classified at all.
  */ function supportedPrecipitationType(profile, terrainM) {
     if (!Number.isFinite(terrainM)) return null;
-    const phase = terrainPrecipitationType(profile, terrainM);
-    if (phase && phase.confidence !== 'low') return phase;
-    return {
-        surfaceWetBulbC: NaN,
-        meltingDegreeMetres: NaN,
-        refreezingDegreeMetres: NaN,
-        confidence: 'low',
-        ...phase,
-        key: 'uncertain',
-        label: 'Precipitation · type unresolved',
-        icon: '?',
-        detail: 'Insufficient vertical detail or site below the resolved profile; no specific type assigned'
-    };
+    return terrainPrecipitationType(profile, terrainM);
 }
 const WARM_NODE_C = 0.2;
 const MIN_MELTING_DM = 150;
@@ -3111,7 +3092,7 @@ function clamp$1(value, min, max) {
         sweMm: 0,
         depthCm: 0
     };
-    if (!phase || phase.key === 'uncertain' || phase.confidence === 'low' || !Number.isFinite(phase.surfaceWetBulbC)) return null;
+    if (!phase || phase.confidence === 'low' || !Number.isFinite(phase.surfaceWetBulbC)) return null;
     const fraction = snowFraction(phase), ratio = snowToLiquidRatio(phase);
     if (![
         fraction,
@@ -3301,7 +3282,7 @@ function aggregateConfidence(event) {
         const precip = series.amounts[i];
         if (!isPrecipitating(precip)) continue;
         const phase = series.thermalPhases[i];
-        if (!phase || !WINTRY_KEYS.has(phase.key)) continue;
+        if (!phase || phase.confidence === 'low' || !WINTRY_KEYS.has(phase.key)) continue;
         const hours = Math.max(0, Math.min(horizonEnd, intervalEnd) - Math.max(fromTime, times[i])) / 3600_000;
         if (hours > 0) qualifying.push({
             index: i,
@@ -3347,7 +3328,7 @@ function aggregateConfidence(event) {
     const snow = snowForecastWindow(series, Math.max(fromTime, startTime), endTime);
     // Do not present an event cut off by missing data as a complete storm total.
     const following = last.index + 1;
-    const boundaryKnown = endTime >= horizonEnd || following < times.length && times[following] === endTime && series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null && series.thermalPhases[following]?.key !== 'uncertain') && supportedIntervalEnd(times, following, series.sourcePeriods) > endTime;
+    const boundaryKnown = endTime >= horizonEnd || following < times.length && times[following] === endTime && series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null && series.thermalPhases[following]?.confidence !== 'low') && supportedIntervalEnd(times, following, series.sourcePeriods) > endTime;
     return {
         startTime,
         endTime,
@@ -3368,7 +3349,7 @@ function aggregateConfidence(event) {
 function conditionLabel(precip, phase) {
     if (precip === null || !Number.isFinite(precip) || precip < 0) return 'Precipitation unavailable';
     if (precip === 0) return 'Dry';
-    return phase ? precipitationLabel(phase) : 'Precipitation · type uncertain';
+    return phase ? precipitationLabel(phase) : 'Precipitation type unavailable';
 }
 /** Absence of an event is only meaningful over intervals we could classify. */ function noEventMessage(point, terrainM, fromTime) {
     if (!point?.times?.length || terrainM === null || !Number.isFinite(terrainM)) return 'Wintry outlook unavailable';
@@ -3384,8 +3365,8 @@ function conditionLabel(precip, phase) {
         if (intervalEnd <= fromTime) continue;
         const precip = precipMmAt(point.forecast, i);
         const phase = isPrecipitating(precip) ? supportedPrecipitationType(buildProfile(point.forecast, i), terrainM) : null;
-        if (start <= coveredUntil && isPrecipitating(precip) && phase?.key === 'uncertain') {
-            return 'Wintry outlook uncertain · precipitation type unresolved';
+        if (start <= coveredUntil && isPrecipitating(precip) && phase?.confidence === 'low') {
+            return 'Limited atmospheric detail · wintry outlook unavailable';
         }
         if (start > coveredUntil || intervalEnd <= start || precip === null || isPrecipitating(precip) && !phase) {
             return partialOutlook();
@@ -3396,7 +3377,7 @@ function conditionLabel(precip, phase) {
 }
 
 /** A cumulative estimate is supported only up to the first unknown interval. */ function forecastCoverage(precip, phases, times) {
-    const known = precip.map((value, i)=>value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(times[i]) && (value === 0 || phases[i] != null && phases[i].key !== 'uncertain'));
+    const known = precip.map((value, i)=>value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(times[i]) && (value === 0 || phases[i] != null && phases[i].confidence !== 'low'));
     let prefix = 0;
     while(prefix < known.length && known[prefix] && (prefix === 0 || times[prefix] > times[prefix - 1] && times[prefix] - times[prefix - 1] <= 3 * 3600_000))prefix++;
     const complete = known.length > 0 && prefix === known.length;
@@ -5337,7 +5318,7 @@ class SoundingChart extends SvelteComponent {
 /* src\SnowlineChart.svelte generated by Svelte v4.2.20 */
 
 function add_css$1(target) {
-	append_styles(target, "svelte-72n019", ".chart-shell.svelte-72n019.svelte-72n019{position:fixed;z-index:10020;width:min(430px, calc(100vw - 16px));padding:11px 12px 10px;border:1px solid rgba(98, 213, 255, 0.35);border-radius:14px;background:linear-gradient(180deg, rgba(15, 24, 31, 0.99), rgba(9, 17, 23, 0.99));color:white;box-shadow:0 16px 42px rgba(0, 0, 0, 0.56);backdrop-filter:blur(6px)}.chart-head.svelte-72n019.svelte-72n019{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.chart-title.svelte-72n019.svelte-72n019{min-width:0;flex:1}.chart-title.svelte-72n019 b.svelte-72n019{display:block;font-size:15px}.chart-title.svelte-72n019 small.svelte-72n019,.chart-title.svelte-72n019 em.svelte-72n019{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal}.chart-title.svelte-72n019 small.svelte-72n019{margin-top:3px;color:#a5b4bd;font-size:9px}.chart-title.svelte-72n019 em.svelte-72n019{margin-top:2px;color:#70cef4;font-size:8px}.chart-actions.svelte-72n019.svelte-72n019{display:flex;gap:4px}.chart-actions.svelte-72n019 button.svelte-72n019{height:26px;min-width:26px;padding:0 7px;border:1px solid rgba(255, 255, 255, 0.08);border-radius:7px;background:rgba(255, 255, 255, 0.075);color:#fff;font-size:12px;font-weight:800;cursor:pointer}.chart-actions.svelte-72n019 button.svelte-72n019:hover{background:rgba(98, 213, 255, 0.15)}.png-button.svelte-72n019.svelte-72n019{font-size:8px !important}.drag-button.svelte-72n019.svelte-72n019{cursor:grab!important;touch-action:none}.forecast-tabs.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;padding:3px;border-radius:8px;background:rgba(255, 255, 255, 0.035)}.forecast-tabs.svelte-72n019 button.svelte-72n019{height:27px;border:0;border-radius:6px;background:transparent;color:#82939d;font-size:9px;font-weight:800;cursor:pointer}.forecast-tabs.svelte-72n019 button.active.svelte-72n019{background:rgba(98, 213, 255, 0.13);color:#eaf7fc;box-shadow:inset 0 0 0 1px rgba(98, 213, 255, 0.22)}.plot-wrap.svelte-72n019.svelte-72n019{position:relative;margin-top:5px}svg.svelte-72n019.svelte-72n019{display:block;width:100%;height:auto;overflow:visible;touch-action:none}.plot-bg.svelte-72n019.svelte-72n019,.band-bg.svelte-72n019.svelte-72n019{fill:rgba(255, 255, 255, 0.022);stroke:rgba(104, 151, 177, 0.22);stroke-width:1}.terrain-zone.svelte-72n019.svelte-72n019{fill:rgba(55, 190, 232, 0.085)}.grid.svelte-72n019.svelte-72n019{stroke:rgba(160, 196, 216, 0.13)}.axis.svelte-72n019.svelte-72n019{fill:#8fa1ac;font-size:8px;font-family:sans-serif}.section-label.svelte-72n019.svelte-72n019{fill:#cbd8df;font-size:6.8px;font-family:sans-serif;font-weight:800;letter-spacing:0.35px}.section-label.svelte-72n019 tspan.svelte-72n019{fill:#657681;font-weight:500}.snowline-title.svelte-72n019.svelte-72n019{fill:#cfeefb}.precip-title.svelte-72n019.svelte-72n019,.precip-axis.svelte-72n019.svelte-72n019{fill:#64d4f5}.phase-title.svelte-72n019.svelte-72n019{fill:#d9c75e}.snow-title.svelte-72n019.svelte-72n019,.snow-axis.svelte-72n019.svelte-72n019{fill:#82e398}.terrain-line.svelte-72n019.svelte-72n019{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag.svelte-72n019.svelte-72n019{fill:#ffbd75;font-size:6px;font-family:sans-serif}.snowline-line.svelte-72n019.svelte-72n019{fill:none;stroke:#65d5ff;stroke-width:2.7;stroke-linecap:round;stroke-linejoin:round}.min24-line.svelte-72n019.svelte-72n019{stroke:#9fe9ff;stroke-width:1;stroke-dasharray:2 3}.min24-dot.svelte-72n019.svelte-72n019{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag.svelte-72n019.svelte-72n019{fill:#bdefff;font-size:5.8px;font-family:sans-serif;font-weight:800}.now-line.svelte-72n019.svelte-72n019{stroke:#ff6658;stroke-width:1.25}.now-tag-bg.svelte-72n019.svelte-72n019{fill:#ff6658}.now-tag.svelte-72n019.svelte-72n019{fill:#fff;font-size:7px;font-family:sans-serif;font-weight:800}.cursor.svelte-72n019.svelte-72n019{stroke:#b9c6cd;stroke-width:1;stroke-dasharray:2 3}.current-dot.svelte-72n019.svelte-72n019{fill:#fff;stroke:#65d5ff;stroke-width:2.3}.crossing-line.svelte-72n019.svelte-72n019{stroke:#ffe05b;stroke-width:1.3;stroke-dasharray:3 3;cursor:pointer}.crossing-dot.svelte-72n019.svelte-72n019{fill:#12191f;stroke:#ffe05b;stroke-width:2.1;cursor:pointer}.inspect-line.svelte-72n019.svelte-72n019{stroke:#83939d}.precip-bar.svelte-72n019.svelte-72n019{fill:#3f9fbe;opacity:0.72}.precip-bar.wet.svelte-72n019.svelte-72n019{fill:#67d6f5;opacity:0.96}.phase-base.svelte-72n019.svelte-72n019{fill:#0b1419}.phase-block.svelte-72n019.svelte-72n019{opacity:0.94}.phase-snow.svelte-72n019.svelte-72n019{fill:#b2b2b2}.phase-wet-snow.svelte-72n019.svelte-72n019{fill:#569456}.phase-mix.svelte-72n019.svelte-72n019{fill:#95a109}.phase-rain.svelte-72n019.svelte-72n019{fill:#0099b6}.phase-ice-pellets.svelte-72n019.svelte-72n019{fill:#510c0f}.phase-freezing-rain.svelte-72n019.svelte-72n019{fill:#900096}.phase-uncertain.svelte-72n019.svelte-72n019{fill:#718096}.phase-legend-svg.svelte-72n019 text.svelte-72n019{fill:#d4dfe6;font-size:9px;font-family:sans-serif}.new-snow-area.svelte-72n019.svelte-72n019{fill:#82e398;opacity:0.16}.new-snow-line.svelte-72n019.svelte-72n019{fill:none;stroke:#82e398;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.empty-band.svelte-72n019.svelte-72n019{fill:#778993;font-size:7px;font-family:sans-serif}.tooltip.svelte-72n019.svelte-72n019{position:absolute;z-index:4;min-width:176px;transform:translateX(-50%);padding:7px 9px;border-radius:9px;background:rgba(5, 12, 17, 0.99);border:1px solid rgba(98, 213, 255, 0.25);box-shadow:0 7px 20px rgba(0, 0, 0, 0.44);pointer-events:none}.tooltip.svelte-72n019>b.svelte-72n019{display:block;font-size:8.8px}.tooltip.svelte-72n019>strong.svelte-72n019{display:flex;align-items:center;gap:5px;margin:4px 0 5px;font-size:9.2px}.tip-phase-dot.svelte-72n019.svelte-72n019,.current-phase-dot.svelte-72n019.svelte-72n019{display:inline-block;width:8px;height:8px;border-radius:2px;flex:0 0 auto}.tip-grid.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:1fr 1fr;gap:4px 9px}.tip-grid.svelte-72n019 span.svelte-72n019{font-size:7.3px;color:#8fa0aa}.tip-grid.svelte-72n019 b.svelte-72n019{color:#eaf3f7;font-weight:800}.text-snow.svelte-72n019.svelte-72n019{color:#b2b2b2}.text-wet-snow.svelte-72n019.svelte-72n019{color:#569456}.text-mix.svelte-72n019.svelte-72n019{color:#95a109}.text-rain.svelte-72n019.svelte-72n019{color:#0099b6}.text-ice-pellets.svelte-72n019.svelte-72n019{color:#510c0f;text-shadow:0 0 1px #fff}.text-freezing-rain.svelte-72n019.svelte-72n019{color:#900096}.current-card.svelte-72n019.svelte-72n019{margin-top:3px;padding:7px;border:1px solid rgba(255, 255, 255, 0.07);border-left:3px solid rgba(255, 255, 255, 0.28);border-radius:9px;background:rgba(255, 255, 255, 0.028)}.active-snow.svelte-72n019.svelte-72n019{border-left-color:#b2b2b2}.active-wet-snow.svelte-72n019.svelte-72n019{border-left-color:#569456}.active-mix.svelte-72n019.svelte-72n019{border-left-color:#95a109}.active-rain.svelte-72n019.svelte-72n019{border-left-color:#0099b6}.active-ice-pellets.svelte-72n019.svelte-72n019{border-left-color:#510c0f}.active-freezing-rain.svelte-72n019.svelte-72n019{border-left-color:#900096}.current-type.svelte-72n019.svelte-72n019{text-align:center}.current-type.svelte-72n019 b.svelte-72n019{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px}.current-type.svelte-72n019 strong.svelte-72n019{display:block;margin-top:3px;color:#81dfff;font-size:7.3px}.metrics.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:repeat(2, 1fr);gap:4px;margin-top:6px}.metrics.svelte-72n019 span.svelte-72n019{padding:5px 2px;border-radius:7px;background:rgba(255, 255, 255, 0.035);text-align:center;min-width:0}.metrics.svelte-72n019 small.svelte-72n019{display:block;color:#7f909a;font-size:5.8px}.metrics.svelte-72n019 b.svelte-72n019{display:block;margin-top:1px;font-size:7px;white-space:nowrap}.outlook24.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin-top:6px;padding:6px 8px;border-radius:8px;background:rgba(98, 213, 255, 0.06);border:1px solid rgba(98, 213, 255, 0.11)}.outlook24.svelte-72n019>b.svelte-72n019{grid-row:0.33333333;color:#8fdfff;font-size:7px;text-transform:uppercase;letter-spacing:0.3px}.outlook24.svelte-72n019 span.svelte-72n019{color:#dceaf0;font-size:7.5px;font-weight:700}.outlook24.svelte-72n019 button.svelte-72n019{justify-self:start;padding:2px 0;border:0;background:transparent;color:#f1d67d;font-size:7px;font-weight:800;cursor:pointer}.outlook24.svelte-72n019 button.svelte-72n019:hover{color:#fff2ae;text-decoration:underline}.note.svelte-72n019.svelte-72n019{margin-top:4px;color:#d7bc4e;font-size:7.2px;text-align:center}.hint.svelte-72n019.svelte-72n019{margin-top:5px;color:#66757e;font-size:6.7px;text-align:center}.empty.svelte-72n019.svelte-72n019{padding:25px 8px;text-align:center;color:#8a9aa4;font-size:10px}@media(max-width: 520px){.chart-shell.svelte-72n019.svelte-72n019{width:calc(100vw - 12px);padding:9px;border-radius:12px}.png-button.svelte-72n019.svelte-72n019{display:none !important}.chart-title.svelte-72n019 small.svelte-72n019,.chart-title.svelte-72n019 em.svelte-72n019{max-width:180px}.metrics.svelte-72n019.svelte-72n019{gap:3px}.metrics.svelte-72n019 small.svelte-72n019{font-size:5.3px}.metrics.svelte-72n019 b.svelte-72n019{font-size:6.4px}.tooltip.svelte-72n019.svelte-72n019{min-width:158px}.outlook24.svelte-72n019 span.svelte-72n019,.outlook24.svelte-72n019 button.svelte-72n019{font-size:6.6px}}.event-head.svelte-72n019.svelte-72n019,.elevation-head.svelte-72n019.svelte-72n019{display:flex;align-items:center;justify-content:space-between;gap:8px}.confidence.svelte-72n019.svelte-72n019{padding:2px 5px;border-radius:8px;font-size:6.5px;font-style:normal;font-weight:850}.confidence-high.svelte-72n019.svelte-72n019{background:rgba(96, 211, 139, 0.12);color:#87e5aa}.confidence-medium.svelte-72n019.svelte-72n019{background:rgba(255, 209, 84, 0.12);color:#f5d76d}.confidence-low.svelte-72n019.svelte-72n019{background:rgba(255, 136, 104, 0.12);color:#ffad96}.event-hazard.svelte-72n019.svelte-72n019{border-color:rgba(193, 132, 255, 0.38) !important;box-shadow:inset 3px 0 rgba(193, 132, 255, 0.8)}.event-timeline.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:repeat(3, 1fr);gap:4px;margin-top:3px}.elevation-impact.svelte-72n019.svelte-72n019{margin-top:6px;padding:7px;border:1px solid rgba(255, 255, 255, 0.08);border-radius:8px;background:rgba(255, 255, 255, 0.025)}.impact-band.svelte-72n019.svelte-72n019{color:#87a7b7;font-size:6.8px}.impact-band.svelte-72n019.svelte-72n019{margin-top:3px}.elevation-grid.svelte-72n019.svelte-72n019{display:grid;grid-template-columns:repeat(5, 1fr);gap:3px;margin-top:5px}.chart-shell.svelte-72n019.svelte-72n019{box-sizing:border-box;max-height:calc(100dvh - 48px);overflow-y:auto;overscroll-behavior:contain}.chart-head.svelte-72n019.svelte-72n019{position:sticky;top:-11px;z-index:5;padding:8px 0;background:#101a22}.chart-actions.svelte-72n019.svelte-72n019{flex-wrap:wrap;justify-content:flex-end}.chart-actions.svelte-72n019 button.svelte-72n019{min-height:32px}.png-button.svelte-72n019.svelte-72n019{display:inline-block !important;font-size:10px !important}.current-type.svelte-72n019 b.svelte-72n019{font-size:15px}.current-type.svelte-72n019 strong.svelte-72n019{font-size:11px}.metrics.svelte-72n019 small.svelte-72n019{font-size:10px}.metrics.svelte-72n019 b.svelte-72n019{font-size:13px}.outlook24.svelte-72n019.svelte-72n019{display:flex;flex-direction:column;gap:5px}.outlook24.svelte-72n019>b.svelte-72n019{font-size:10px}.outlook24.svelte-72n019 span.svelte-72n019,.outlook24.svelte-72n019 button.svelte-72n019{font-size:12px;line-height:1.4}.crossing-action.svelte-72n019.svelte-72n019{width:100%;margin-top:7px;padding:9px;border:1px solid #35515c;border-radius:8px;background:#172932;color:#b7e6f8;text-align:left;font-size:11px;cursor:pointer}.quality-note.svelte-72n019.svelte-72n019{margin-top:6px;color:#edc881;font-size:11px;line-height:1.4}.hint.svelte-72n019.svelte-72n019{font-size:10px;line-height:1.35}.forecast-tabs.svelte-72n019 button.svelte-72n019{height:40px;font-size:13px}.chart-title.svelte-72n019 small.svelte-72n019{font-size:12px}.chart-title.svelte-72n019 em.svelte-72n019{font-size:11px}.chart-actions.svelte-72n019 button.svelte-72n019{min-height:36px;min-width:36px}.tooltip.svelte-72n019>b.svelte-72n019,.tooltip.svelte-72n019>strong.svelte-72n019{font-size:12px}.tip-grid.svelte-72n019 span.svelte-72n019{font-size:11px}.current-card.svelte-72n019.svelte-72n019{padding:12px}.metrics.svelte-72n019 b.svelte-72n019{font-size:18px}.section-label.svelte-72n019.svelte-72n019{font-size:8px}.terrain-tag.svelte-72n019.svelte-72n019{font-size:8px}button.svelte-72n019.svelte-72n019:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}");
+	append_styles(target, "svelte-1q22nou", ".chart-shell.svelte-1q22nou.svelte-1q22nou{position:fixed;z-index:10020;width:min(430px, calc(100vw - 16px));padding:11px 12px 10px;border:1px solid rgba(98, 213, 255, 0.35);border-radius:14px;background:linear-gradient(180deg, rgba(15, 24, 31, 0.99), rgba(9, 17, 23, 0.99));color:white;box-shadow:0 16px 42px rgba(0, 0, 0, 0.56);backdrop-filter:blur(6px)}.chart-head.svelte-1q22nou.svelte-1q22nou{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.chart-title.svelte-1q22nou.svelte-1q22nou{min-width:0;flex:1}.chart-title.svelte-1q22nou b.svelte-1q22nou{display:block;font-size:15px}.chart-title.svelte-1q22nou small.svelte-1q22nou,.chart-title.svelte-1q22nou em.svelte-1q22nou{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal}.chart-title.svelte-1q22nou small.svelte-1q22nou{margin-top:3px;color:#a5b4bd;font-size:9px}.chart-title.svelte-1q22nou em.svelte-1q22nou{margin-top:2px;color:#70cef4;font-size:8px}.chart-actions.svelte-1q22nou.svelte-1q22nou{display:flex;gap:4px}.chart-actions.svelte-1q22nou button.svelte-1q22nou{height:26px;min-width:26px;padding:0 7px;border:1px solid rgba(255, 255, 255, 0.08);border-radius:7px;background:rgba(255, 255, 255, 0.075);color:#fff;font-size:12px;font-weight:800;cursor:pointer}.chart-actions.svelte-1q22nou button.svelte-1q22nou:hover{background:rgba(98, 213, 255, 0.15)}.png-button.svelte-1q22nou.svelte-1q22nou{font-size:8px !important}.drag-button.svelte-1q22nou.svelte-1q22nou{cursor:grab!important;touch-action:none}.forecast-tabs.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:8px;padding:3px;border-radius:8px;background:rgba(255, 255, 255, 0.035)}.forecast-tabs.svelte-1q22nou button.svelte-1q22nou{height:27px;border:0;border-radius:6px;background:transparent;color:#82939d;font-size:9px;font-weight:800;cursor:pointer}.forecast-tabs.svelte-1q22nou button.active.svelte-1q22nou{background:rgba(98, 213, 255, 0.13);color:#eaf7fc;box-shadow:inset 0 0 0 1px rgba(98, 213, 255, 0.22)}.plot-wrap.svelte-1q22nou.svelte-1q22nou{position:relative;margin-top:5px}svg.svelte-1q22nou.svelte-1q22nou{display:block;width:100%;height:auto;overflow:visible;touch-action:none}.plot-bg.svelte-1q22nou.svelte-1q22nou,.band-bg.svelte-1q22nou.svelte-1q22nou{fill:rgba(255, 255, 255, 0.022);stroke:rgba(104, 151, 177, 0.22);stroke-width:1}.terrain-zone.svelte-1q22nou.svelte-1q22nou{fill:rgba(55, 190, 232, 0.085)}.grid.svelte-1q22nou.svelte-1q22nou{stroke:rgba(160, 196, 216, 0.13)}.axis.svelte-1q22nou.svelte-1q22nou{fill:#8fa1ac;font-size:8px;font-family:sans-serif}.section-label.svelte-1q22nou.svelte-1q22nou{fill:#cbd8df;font-size:6.8px;font-family:sans-serif;font-weight:800;letter-spacing:0.35px}.section-label.svelte-1q22nou tspan.svelte-1q22nou{fill:#657681;font-weight:500}.snowline-title.svelte-1q22nou.svelte-1q22nou{fill:#cfeefb}.precip-title.svelte-1q22nou.svelte-1q22nou,.precip-axis.svelte-1q22nou.svelte-1q22nou{fill:#64d4f5}.phase-title.svelte-1q22nou.svelte-1q22nou{fill:#d9c75e}.snow-title.svelte-1q22nou.svelte-1q22nou,.snow-axis.svelte-1q22nou.svelte-1q22nou{fill:#82e398}.terrain-line.svelte-1q22nou.svelte-1q22nou{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag.svelte-1q22nou.svelte-1q22nou{fill:#ffbd75;font-size:6px;font-family:sans-serif}.snowline-line.svelte-1q22nou.svelte-1q22nou{fill:none;stroke:#65d5ff;stroke-width:2.7;stroke-linecap:round;stroke-linejoin:round}.min24-line.svelte-1q22nou.svelte-1q22nou{stroke:#9fe9ff;stroke-width:1;stroke-dasharray:2 3}.min24-dot.svelte-1q22nou.svelte-1q22nou{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag.svelte-1q22nou.svelte-1q22nou{fill:#bdefff;font-size:5.8px;font-family:sans-serif;font-weight:800}.now-line.svelte-1q22nou.svelte-1q22nou{stroke:#ff6658;stroke-width:1.25}.now-tag-bg.svelte-1q22nou.svelte-1q22nou{fill:#ff6658}.now-tag.svelte-1q22nou.svelte-1q22nou{fill:#fff;font-size:7px;font-family:sans-serif;font-weight:800}.cursor.svelte-1q22nou.svelte-1q22nou{stroke:#b9c6cd;stroke-width:1;stroke-dasharray:2 3}.current-dot.svelte-1q22nou.svelte-1q22nou{fill:#fff;stroke:#65d5ff;stroke-width:2.3}.crossing-line.svelte-1q22nou.svelte-1q22nou{stroke:#ffe05b;stroke-width:1.3;stroke-dasharray:3 3;cursor:pointer}.crossing-dot.svelte-1q22nou.svelte-1q22nou{fill:#12191f;stroke:#ffe05b;stroke-width:2.1;cursor:pointer}.inspect-line.svelte-1q22nou.svelte-1q22nou{stroke:#83939d}.precip-bar.svelte-1q22nou.svelte-1q22nou{fill:#3f9fbe;opacity:0.72}.precip-bar.wet.svelte-1q22nou.svelte-1q22nou{fill:#67d6f5;opacity:0.96}.phase-base.svelte-1q22nou.svelte-1q22nou{fill:#0b1419}.phase-block.svelte-1q22nou.svelte-1q22nou{opacity:0.94}.phase-snow.svelte-1q22nou.svelte-1q22nou{fill:#b2b2b2}.phase-wet-snow.svelte-1q22nou.svelte-1q22nou{fill:#569456}.phase-mix.svelte-1q22nou.svelte-1q22nou{fill:#95a109}.phase-rain.svelte-1q22nou.svelte-1q22nou{fill:#0099b6}.phase-ice-pellets.svelte-1q22nou.svelte-1q22nou{fill:#510c0f}.phase-freezing-rain.svelte-1q22nou.svelte-1q22nou{fill:#900096}.phase-legend-svg.svelte-1q22nou text.svelte-1q22nou{fill:#d4dfe6;font-size:9px;font-family:sans-serif}.new-snow-area.svelte-1q22nou.svelte-1q22nou{fill:#82e398;opacity:0.16}.new-snow-line.svelte-1q22nou.svelte-1q22nou{fill:none;stroke:#82e398;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.empty-band.svelte-1q22nou.svelte-1q22nou{fill:#778993;font-size:7px;font-family:sans-serif}.tooltip.svelte-1q22nou.svelte-1q22nou{position:absolute;z-index:4;min-width:176px;transform:translateX(-50%);padding:7px 9px;border-radius:9px;background:rgba(5, 12, 17, 0.99);border:1px solid rgba(98, 213, 255, 0.25);box-shadow:0 7px 20px rgba(0, 0, 0, 0.44);pointer-events:none}.tooltip.svelte-1q22nou>b.svelte-1q22nou{display:block;font-size:8.8px}.tooltip.svelte-1q22nou>strong.svelte-1q22nou{display:flex;align-items:center;gap:5px;margin:4px 0 5px;font-size:9.2px}.tip-phase-dot.svelte-1q22nou.svelte-1q22nou,.current-phase-dot.svelte-1q22nou.svelte-1q22nou{display:inline-block;width:8px;height:8px;border-radius:2px;flex:0 0 auto}.tip-grid.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:1fr 1fr;gap:4px 9px}.tip-grid.svelte-1q22nou span.svelte-1q22nou{font-size:7.3px;color:#8fa0aa}.tip-grid.svelte-1q22nou b.svelte-1q22nou{color:#eaf3f7;font-weight:800}.text-snow.svelte-1q22nou.svelte-1q22nou{color:#b2b2b2}.text-wet-snow.svelte-1q22nou.svelte-1q22nou{color:#569456}.text-mix.svelte-1q22nou.svelte-1q22nou{color:#95a109}.text-rain.svelte-1q22nou.svelte-1q22nou{color:#0099b6}.text-ice-pellets.svelte-1q22nou.svelte-1q22nou{color:#510c0f;text-shadow:0 0 1px #fff}.text-freezing-rain.svelte-1q22nou.svelte-1q22nou{color:#900096}.current-card.svelte-1q22nou.svelte-1q22nou{margin-top:3px;padding:7px;border:1px solid rgba(255, 255, 255, 0.07);border-left:3px solid rgba(255, 255, 255, 0.28);border-radius:9px;background:rgba(255, 255, 255, 0.028)}.active-snow.svelte-1q22nou.svelte-1q22nou{border-left-color:#b2b2b2}.active-wet-snow.svelte-1q22nou.svelte-1q22nou{border-left-color:#569456}.active-mix.svelte-1q22nou.svelte-1q22nou{border-left-color:#95a109}.active-rain.svelte-1q22nou.svelte-1q22nou{border-left-color:#0099b6}.active-ice-pellets.svelte-1q22nou.svelte-1q22nou{border-left-color:#510c0f}.active-freezing-rain.svelte-1q22nou.svelte-1q22nou{border-left-color:#900096}.current-type.svelte-1q22nou.svelte-1q22nou{text-align:center}.current-type.svelte-1q22nou b.svelte-1q22nou{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px}.current-type.svelte-1q22nou strong.svelte-1q22nou{display:block;margin-top:3px;color:#81dfff;font-size:7.3px}.metrics.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:repeat(2, 1fr);gap:4px;margin-top:6px}.metrics.svelte-1q22nou span.svelte-1q22nou{padding:5px 2px;border-radius:7px;background:rgba(255, 255, 255, 0.035);text-align:center;min-width:0}.metrics.svelte-1q22nou small.svelte-1q22nou{display:block;color:#7f909a;font-size:5.8px}.metrics.svelte-1q22nou b.svelte-1q22nou{display:block;margin-top:1px;font-size:7px;white-space:nowrap}.outlook24.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin-top:6px;padding:6px 8px;border-radius:8px;background:rgba(98, 213, 255, 0.06);border:1px solid rgba(98, 213, 255, 0.11)}.outlook24.svelte-1q22nou>b.svelte-1q22nou{grid-row:0.33333333;color:#8fdfff;font-size:7px;text-transform:uppercase;letter-spacing:0.3px}.outlook24.svelte-1q22nou span.svelte-1q22nou{color:#dceaf0;font-size:7.5px;font-weight:700}.outlook24.svelte-1q22nou button.svelte-1q22nou{justify-self:start;padding:2px 0;border:0;background:transparent;color:#f1d67d;font-size:7px;font-weight:800;cursor:pointer}.outlook24.svelte-1q22nou button.svelte-1q22nou:hover{color:#fff2ae;text-decoration:underline}.note.svelte-1q22nou.svelte-1q22nou{margin-top:4px;color:#d7bc4e;font-size:7.2px;text-align:center}.hint.svelte-1q22nou.svelte-1q22nou{margin-top:5px;color:#66757e;font-size:6.7px;text-align:center}.empty.svelte-1q22nou.svelte-1q22nou{padding:25px 8px;text-align:center;color:#8a9aa4;font-size:10px}@media(max-width: 520px){.chart-shell.svelte-1q22nou.svelte-1q22nou{width:calc(100vw - 12px);padding:9px;border-radius:12px}.png-button.svelte-1q22nou.svelte-1q22nou{display:none !important}.chart-title.svelte-1q22nou small.svelte-1q22nou,.chart-title.svelte-1q22nou em.svelte-1q22nou{max-width:180px}.metrics.svelte-1q22nou.svelte-1q22nou{gap:3px}.metrics.svelte-1q22nou small.svelte-1q22nou{font-size:5.3px}.metrics.svelte-1q22nou b.svelte-1q22nou{font-size:6.4px}.tooltip.svelte-1q22nou.svelte-1q22nou{min-width:158px}.outlook24.svelte-1q22nou span.svelte-1q22nou,.outlook24.svelte-1q22nou button.svelte-1q22nou{font-size:6.6px}}.event-head.svelte-1q22nou.svelte-1q22nou,.elevation-head.svelte-1q22nou.svelte-1q22nou{display:flex;align-items:center;justify-content:space-between;gap:8px}.confidence.svelte-1q22nou.svelte-1q22nou{padding:2px 5px;border-radius:8px;font-size:6.5px;font-style:normal;font-weight:850}.confidence-high.svelte-1q22nou.svelte-1q22nou{background:rgba(96, 211, 139, 0.12);color:#87e5aa}.confidence-medium.svelte-1q22nou.svelte-1q22nou{background:rgba(255, 209, 84, 0.12);color:#f5d76d}.confidence-low.svelte-1q22nou.svelte-1q22nou{background:rgba(255, 136, 104, 0.12);color:#ffad96}.event-hazard.svelte-1q22nou.svelte-1q22nou{border-color:rgba(193, 132, 255, 0.38) !important;box-shadow:inset 3px 0 rgba(193, 132, 255, 0.8)}.event-timeline.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:repeat(3, 1fr);gap:4px;margin-top:3px}.elevation-impact.svelte-1q22nou.svelte-1q22nou{margin-top:6px;padding:7px;border:1px solid rgba(255, 255, 255, 0.08);border-radius:8px;background:rgba(255, 255, 255, 0.025)}.impact-band.svelte-1q22nou.svelte-1q22nou{color:#87a7b7;font-size:6.8px}.impact-band.svelte-1q22nou.svelte-1q22nou{margin-top:3px}.elevation-grid.svelte-1q22nou.svelte-1q22nou{display:grid;grid-template-columns:repeat(5, 1fr);gap:3px;margin-top:5px}.chart-shell.svelte-1q22nou.svelte-1q22nou{box-sizing:border-box;max-height:calc(100dvh - 48px);overflow-y:auto;overscroll-behavior:contain}.chart-head.svelte-1q22nou.svelte-1q22nou{position:sticky;top:-11px;z-index:5;padding:8px 0;background:#101a22}.chart-actions.svelte-1q22nou.svelte-1q22nou{flex-wrap:wrap;justify-content:flex-end}.chart-actions.svelte-1q22nou button.svelte-1q22nou{min-height:32px}.png-button.svelte-1q22nou.svelte-1q22nou{display:inline-block !important;font-size:10px !important}.current-type.svelte-1q22nou b.svelte-1q22nou{font-size:15px}.current-type.svelte-1q22nou strong.svelte-1q22nou{font-size:11px}.metrics.svelte-1q22nou small.svelte-1q22nou{font-size:10px}.metrics.svelte-1q22nou b.svelte-1q22nou{font-size:13px}.outlook24.svelte-1q22nou.svelte-1q22nou{display:flex;flex-direction:column;gap:5px}.outlook24.svelte-1q22nou>b.svelte-1q22nou{font-size:10px}.outlook24.svelte-1q22nou span.svelte-1q22nou,.outlook24.svelte-1q22nou button.svelte-1q22nou{font-size:12px;line-height:1.4}.crossing-action.svelte-1q22nou.svelte-1q22nou{width:100%;margin-top:7px;padding:9px;border:1px solid #35515c;border-radius:8px;background:#172932;color:#b7e6f8;text-align:left;font-size:11px;cursor:pointer}.quality-note.svelte-1q22nou.svelte-1q22nou{margin-top:6px;color:#edc881;font-size:11px;line-height:1.4}.hint.svelte-1q22nou.svelte-1q22nou{font-size:10px;line-height:1.35}.forecast-tabs.svelte-1q22nou button.svelte-1q22nou{height:40px;font-size:13px}.chart-title.svelte-1q22nou small.svelte-1q22nou{font-size:12px}.chart-title.svelte-1q22nou em.svelte-1q22nou{font-size:11px}.chart-actions.svelte-1q22nou button.svelte-1q22nou{min-height:36px;min-width:36px}.tooltip.svelte-1q22nou>b.svelte-1q22nou,.tooltip.svelte-1q22nou>strong.svelte-1q22nou{font-size:12px}.tip-grid.svelte-1q22nou span.svelte-1q22nou{font-size:11px}.current-card.svelte-1q22nou.svelte-1q22nou{padding:12px}.metrics.svelte-1q22nou b.svelte-1q22nou{font-size:18px}.section-label.svelte-1q22nou.svelte-1q22nou{font-size:8px}.terrain-tag.svelte-1q22nou.svelte-1q22nou{font-size:8px}button.svelte-1q22nou.svelte-1q22nou:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}");
 }
 
 function get_each_context(ctx, list, i) {
@@ -5368,7 +5349,7 @@ function create_if_block_23(ctx) {
 		c() {
 			button = element("button");
 			button.textContent = "Now";
-			attr(button, "class", "now-action svelte-72n019");
+			attr(button, "class", "now-action svelte-1q22nou");
 			attr(button, "type", "button");
 			attr(button, "title", "Back to now");
 			attr(button, "aria-label", "Back to now");
@@ -5405,7 +5386,7 @@ function create_if_block_22(ctx) {
 		c() {
 			button = element("button");
 			t = text(t_value);
-			attr(button, "class", "png-button svelte-72n019");
+			attr(button, "class", "png-button svelte-1q22nou");
 			attr(button, "type", "button");
 			button.disabled = /*pngBusy*/ ctx[7];
 		},
@@ -5436,7 +5417,7 @@ function create_if_block_22(ctx) {
 	};
 }
 
-// (135:2) {:else}
+// (134:2) {:else}
 function create_else_block_5(ctx) {
 	let soundingchart;
 	let current;
@@ -5528,7 +5509,7 @@ function create_if_block$1(ctx) {
 	};
 }
 
-// (132:2) {:else}
+// (131:2) {:else}
 function create_else_block_4(ctx) {
 	let div;
 
@@ -5536,7 +5517,7 @@ function create_else_block_4(ctx) {
 		c() {
 			div = element("div");
 			div.textContent = "Wintry forecast unavailable.";
-			attr(div, "class", "empty svelte-72n019");
+			attr(div, "class", "empty svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -5603,72 +5584,69 @@ function create_if_block_1$1(ctx) {
 	let rect8;
 	let text11;
 	let t13;
-	let rect9;
 	let text12;
 	let t14;
-	let text13;
-	let t15;
 	let tspan2;
-	let t16_value = (/*units*/ ctx[4] === 'imperial' ? 'in' : 'cm') + "";
-	let t16;
-	let rect10;
+	let t15_value = (/*units*/ ctx[4] === 'imperial' ? 'in' : 'cm') + "";
+	let t15;
+	let rect9;
 	let if_block3_anchor;
 	let if_block4_anchor;
 	let if_block5_anchor;
 	let if_block6_anchor;
+	let t16;
 	let t17;
-	let t18;
 	let div3;
 	let div1;
 	let b0;
+	let t18;
 	let t19;
-	let t20;
 	let div2;
 	let span0;
 	let small0;
 	let b1;
-	let t22_value = formatSnowline(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4]) + "";
+	let t21_value = formatSnowline(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4]) + "";
+	let t21;
 	let t22;
-	let t23;
 	let span1;
 	let small1;
 	let b2;
-	let t25_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "";
+	let t24_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "";
+	let t24;
 	let t25;
-	let t26;
 	let div4;
 	let b3;
-	let t28;
+	let t27;
 	let span2;
-	let t29_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "";
+	let t28_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "";
+	let t28;
 	let t29;
-	let t30;
 	let span3;
-	let t31_value = /*chart*/ ctx[12].precip24Range + "";
+	let t30_value = /*chart*/ ctx[12].precip24Range + "";
+	let t30;
 	let t31;
 	let t32;
-	let t33;
 	let span4;
+	let t33;
+	let t34_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "";
 	let t34;
-	let t35_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "";
 	let t35;
-	let t36;
 	let small2;
-	let t38;
+	let t37;
 	let div5;
 	let b4;
 
-	let t39_value = ((/*event*/ ctx[13]?.activeNow)
+	let t38_value = ((/*event*/ ctx[13]?.activeNow)
 	? 'Current wintry period'
 	: 'Next wintry period') + "";
 
+	let t38;
 	let t39;
 	let t40;
 	let t41;
 	let t42;
-	let t43;
 	let div6;
-	let t45;
+	let t44;
 	let if_block14_anchor;
 	let mounted;
 	let dispose;
@@ -5697,7 +5675,7 @@ function create_if_block_1$1(ctx) {
 	let current_block_type_1 = select_block_type_3(ctx);
 	let if_block3 = current_block_type_1(ctx);
 	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_17(ctx);
-	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_16$1(ctx);
+	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_16(ctx);
 	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_15$1(ctx);
 	let each_value = ensure_array_like([24, 48, 72, 96, 120, 144]);
 	let each_blocks = [];
@@ -5726,7 +5704,7 @@ function create_if_block_1$1(ctx) {
 	let current_block_type_3 = select_block_type_5(ctx);
 	let if_block11 = current_block_type_3(ctx);
 	let if_block12 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
-	let if_block13 = /*chart*/ ctx[12].currentPhase?.key === 'uncertain' && create_if_block_3$1();
+	let if_block13 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
 	let if_block14 = /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
 
 	return {
@@ -5783,14 +5761,11 @@ function create_if_block_1$1(ctx) {
 			rect8 = svg_element("rect");
 			text11 = svg_element("text");
 			t13 = text("Freezing rain");
-			rect9 = svg_element("rect");
 			text12 = svg_element("text");
-			t14 = text("Type unresolved");
-			text13 = svg_element("text");
-			t15 = text("SNOWFALL ESTIMATE ");
+			t14 = text("SNOWFALL ESTIMATE ");
 			tspan2 = svg_element("tspan");
-			t16 = text(t16_value);
-			rect10 = svg_element("rect");
+			t15 = text(t15_value);
+			rect9 = svg_element("rect");
 			if_block3.c();
 			if_block3_anchor = empty();
 			if (if_block4) if_block4.c();
@@ -5804,225 +5779,216 @@ function create_if_block_1$1(ctx) {
 				each_blocks[i].c();
 			}
 
-			t17 = space();
+			t16 = space();
 			if (if_block7) if_block7.c();
-			t18 = space();
+			t17 = space();
 			div3 = element("div");
 			div1 = element("div");
 			b0 = element("b");
 			if_block8.c();
-			t19 = space();
+			t18 = space();
 			if (if_block9) if_block9.c();
-			t20 = space();
+			t19 = space();
 			div2 = element("div");
 			span0 = element("span");
 			small0 = element("small");
 			small0.textContent = "Est. snowline";
 			b1 = element("b");
-			t22 = text(t22_value);
-			t23 = space();
+			t21 = text(t21_value);
+			t22 = space();
 			span1 = element("span");
 			small1 = element("small");
 			small1.textContent = "Avg precip";
 			b2 = element("b");
-			t25 = text(t25_value);
-			t26 = space();
+			t24 = text(t24_value);
+			t25 = space();
 			div4 = element("div");
 			b3 = element("b");
 			b3.textContent = "Next 24 h · ECMWF precipitation";
-			t28 = space();
+			t27 = space();
 			span2 = element("span");
-			t29 = text(t29_value);
+			t28 = text(t28_value);
 			if (if_block10) if_block10.c();
-			t30 = space();
+			t29 = space();
 			span3 = element("span");
-			t31 = text(t31_value);
-			t32 = text(" · liquid equivalent");
-			t33 = space();
+			t30 = text(t30_value);
+			t31 = text(" · liquid equivalent");
+			t32 = space();
 			span4 = element("span");
-			t34 = text("Snowfall estimate: ");
-			t35 = text(t35_value);
-			t36 = space();
+			t33 = text("Snowfall estimate: ");
+			t34 = text(t34_value);
+			t35 = space();
 			small2 = element("small");
-			small2.textContent = "Approximate fresh snowfall, not snow depth on the ground. Amount withheld when type is unresolved.";
-			t38 = space();
+			small2.textContent = "Approximate fresh snowfall, not snow depth on the ground. Amount withheld when atmospheric detail is insufficient.";
+			t37 = space();
 			div5 = element("div");
 			b4 = element("b");
-			t39 = text(t39_value);
-			t40 = space();
+			t38 = text(t38_value);
+			t39 = space();
 			if_block11.c();
-			t41 = space();
+			t40 = space();
 			if (if_block12) if_block12.c();
-			t42 = space();
+			t41 = space();
 			if (if_block13) if_block13.c();
-			t43 = space();
+			t42 = space();
 			div6 = element("div");
 			div6.textContent = "Model guidance · accuracy has not been independently validated.";
-			t45 = space();
+			t44 = space();
 			if (if_block14) if_block14.c();
 			if_block14_anchor = empty();
-			attr(tspan0, "class", "svelte-72n019");
+			attr(tspan0, "class", "svelte-1q22nou");
 			attr(text0, "x", "42");
 			attr(text0, "y", "11");
-			attr(text0, "class", "section-label snowline-title svelte-72n019");
+			attr(text0, "class", "section-label snowline-title svelte-1q22nou");
 			attr(rect0, "x", "42");
 			attr(rect0, "y", "18");
 			attr(rect0, "width", "306");
 			attr(rect0, "height", "112");
 			attr(rect0, "rx", "8");
-			attr(rect0, "class", "plot-bg svelte-72n019");
+			attr(rect0, "class", "plot-bg svelte-1q22nou");
 			attr(line0, "x1", "42");
 			attr(line0, "x2", "348");
 			attr(line0, "y1", "18");
 			attr(line0, "y2", "18");
-			attr(line0, "class", "grid svelte-72n019");
+			attr(line0, "class", "grid svelte-1q22nou");
 			attr(line1, "x1", "42");
 			attr(line1, "x2", "348");
 			attr(line1, "y1", "74");
 			attr(line1, "y2", "74");
-			attr(line1, "class", "grid svelte-72n019");
+			attr(line1, "class", "grid svelte-1q22nou");
 			attr(line2, "x1", "42");
 			attr(line2, "x2", "348");
 			attr(line2, "y1", "130");
 			attr(line2, "y2", "130");
-			attr(line2, "class", "grid svelte-72n019");
+			attr(line2, "class", "grid svelte-1q22nou");
 			attr(text1, "x", "37");
 			attr(text1, "y", "22");
 			attr(text1, "text-anchor", "end");
-			attr(text1, "class", "axis svelte-72n019");
+			attr(text1, "class", "axis svelte-1q22nou");
 			attr(text2, "x", "37");
 			attr(text2, "y", "78");
 			attr(text2, "text-anchor", "end");
-			attr(text2, "class", "axis svelte-72n019");
+			attr(text2, "class", "axis svelte-1q22nou");
 			attr(text3, "x", "37");
 			attr(text3, "y", "134");
 			attr(text3, "text-anchor", "end");
-			attr(text3, "class", "axis svelte-72n019");
+			attr(text3, "class", "axis svelte-1q22nou");
 			attr(path, "d", path_d_value = /*chart*/ ctx[12].points);
-			attr(path, "class", "snowline-line svelte-72n019");
-			attr(tspan1, "class", "svelte-72n019");
+			attr(path, "class", "snowline-line svelte-1q22nou");
+			attr(tspan1, "class", "svelte-1q22nou");
 			attr(text4, "x", "42");
 			attr(text4, "y", "147");
-			attr(text4, "class", "section-label precip-title svelte-72n019");
+			attr(text4, "class", "section-label precip-title svelte-1q22nou");
 			attr(rect1, "x", "42");
 			attr(rect1, "y", "153");
 			attr(rect1, "width", "306");
 			attr(rect1, "height", "36");
 			attr(rect1, "rx", "7");
-			attr(rect1, "class", "band-bg svelte-72n019");
+			attr(rect1, "class", "band-bg svelte-1q22nou");
 			attr(text5, "x", "42");
 			attr(text5, "y", "205");
-			attr(text5, "class", "section-label phase-title svelte-72n019");
+			attr(text5, "class", "section-label phase-title svelte-1q22nou");
 			attr(rect2, "x", "42");
 			attr(rect2, "y", "211");
 			attr(rect2, "width", "306");
 			attr(rect2, "height", "25");
 			attr(rect2, "rx", "7");
-			attr(rect2, "class", "band-bg phase-base svelte-72n019");
+			attr(rect2, "class", "band-bg phase-base svelte-1q22nou");
 			attr(rect3, "x", "42");
 			attr(rect3, "y", "244");
 			attr(rect3, "width", "7");
 			attr(rect3, "height", "7");
 			attr(rect3, "rx", "1.5");
-			attr(rect3, "class", "phase-snow svelte-72n019");
+			attr(rect3, "class", "phase-snow svelte-1q22nou");
 			attr(text6, "x", "53");
 			attr(text6, "y", "251");
-			attr(text6, "class", "svelte-72n019");
+			attr(text6, "class", "svelte-1q22nou");
 			attr(rect4, "x", "145");
 			attr(rect4, "y", "244");
 			attr(rect4, "width", "7");
 			attr(rect4, "height", "7");
 			attr(rect4, "rx", "1.5");
-			attr(rect4, "class", "phase-wet-snow svelte-72n019");
+			attr(rect4, "class", "phase-wet-snow svelte-1q22nou");
 			attr(text7, "x", "156");
 			attr(text7, "y", "251");
-			attr(text7, "class", "svelte-72n019");
+			attr(text7, "class", "svelte-1q22nou");
 			attr(rect5, "x", "246");
 			attr(rect5, "y", "244");
 			attr(rect5, "width", "7");
 			attr(rect5, "height", "7");
 			attr(rect5, "rx", "1.5");
-			attr(rect5, "class", "phase-mix svelte-72n019");
+			attr(rect5, "class", "phase-mix svelte-1q22nou");
 			attr(text8, "x", "257");
 			attr(text8, "y", "251");
-			attr(text8, "class", "svelte-72n019");
+			attr(text8, "class", "svelte-1q22nou");
 			attr(rect6, "x", "42");
 			attr(rect6, "y", "258");
 			attr(rect6, "width", "7");
 			attr(rect6, "height", "7");
 			attr(rect6, "rx", "1.5");
-			attr(rect6, "class", "phase-rain svelte-72n019");
+			attr(rect6, "class", "phase-rain svelte-1q22nou");
 			attr(text9, "x", "53");
 			attr(text9, "y", "265");
-			attr(text9, "class", "svelte-72n019");
+			attr(text9, "class", "svelte-1q22nou");
 			attr(rect7, "x", "145");
 			attr(rect7, "y", "258");
 			attr(rect7, "width", "7");
 			attr(rect7, "height", "7");
 			attr(rect7, "rx", "1.5");
-			attr(rect7, "class", "phase-ice-pellets svelte-72n019");
+			attr(rect7, "class", "phase-ice-pellets svelte-1q22nou");
 			attr(text10, "x", "156");
 			attr(text10, "y", "265");
-			attr(text10, "class", "svelte-72n019");
+			attr(text10, "class", "svelte-1q22nou");
 			attr(rect8, "x", "246");
 			attr(rect8, "y", "258");
 			attr(rect8, "width", "7");
 			attr(rect8, "height", "7");
 			attr(rect8, "rx", "1.5");
-			attr(rect8, "class", "phase-freezing-rain svelte-72n019");
+			attr(rect8, "class", "phase-freezing-rain svelte-1q22nou");
 			attr(text11, "x", "257");
 			attr(text11, "y", "265");
-			attr(text11, "class", "svelte-72n019");
+			attr(text11, "class", "svelte-1q22nou");
+			attr(g, "class", "phase-legend-svg svelte-1q22nou");
+			attr(tspan2, "class", "svelte-1q22nou");
+			attr(text12, "x", "42");
+			attr(text12, "y", "282");
+			attr(text12, "class", "section-label snow-title svelte-1q22nou");
 			attr(rect9, "x", "42");
-			attr(rect9, "y", "270");
-			attr(rect9, "width", "7");
-			attr(rect9, "height", "7");
-			attr(rect9, "rx", "1.5");
-			attr(rect9, "class", "phase-uncertain svelte-72n019");
-			attr(text12, "x", "53");
-			attr(text12, "y", "277");
-			attr(text12, "class", "svelte-72n019");
-			attr(g, "class", "phase-legend-svg svelte-72n019");
-			attr(tspan2, "class", "svelte-72n019");
-			attr(text13, "x", "188");
-			attr(text13, "y", "282");
-			attr(text13, "class", "section-label snow-title svelte-72n019");
-			attr(rect10, "x", "42");
-			attr(rect10, "y", "288");
-			attr(rect10, "width", "306");
-			attr(rect10, "height", "28");
-			attr(rect10, "rx", "7");
-			attr(rect10, "class", "band-bg svelte-72n019");
+			attr(rect9, "y", "288");
+			attr(rect9, "width", "306");
+			attr(rect9, "height", "28");
+			attr(rect9, "rx", "7");
+			attr(rect9, "class", "band-bg svelte-1q22nou");
 			attr(svg, "viewBox", "0 0 360 338");
 			attr(svg, "role", "img");
 			attr(svg, "aria-label", "Terrain-aware wintry forecast through 144 hours");
-			attr(svg, "class", "svelte-72n019");
-			attr(div0, "class", "plot-wrap svelte-72n019");
-			attr(b0, "class", "svelte-72n019");
-			attr(div1, "class", "current-type svelte-72n019");
-			attr(small0, "class", "svelte-72n019");
-			attr(b1, "class", "svelte-72n019");
-			attr(span0, "class", "svelte-72n019");
-			attr(small1, "class", "svelte-72n019");
-			attr(b2, "class", "svelte-72n019");
-			attr(span1, "class", "svelte-72n019");
-			attr(div2, "class", "metrics svelte-72n019");
-			attr(div3, "class", "current-card svelte-72n019");
+			attr(svg, "class", "svelte-1q22nou");
+			attr(div0, "class", "plot-wrap svelte-1q22nou");
+			attr(b0, "class", "svelte-1q22nou");
+			attr(div1, "class", "current-type svelte-1q22nou");
+			attr(small0, "class", "svelte-1q22nou");
+			attr(b1, "class", "svelte-1q22nou");
+			attr(span0, "class", "svelte-1q22nou");
+			attr(small1, "class", "svelte-1q22nou");
+			attr(b2, "class", "svelte-1q22nou");
+			attr(span1, "class", "svelte-1q22nou");
+			attr(div2, "class", "metrics svelte-1q22nou");
+			attr(div3, "class", "current-card svelte-1q22nou");
 			toggle_class(div3, "active-snow", /*chart*/ ctx[12].currentPhase?.key === 'snow');
 			toggle_class(div3, "active-wet-snow", /*chart*/ ctx[12].currentPhase?.key === 'wet-snow');
 			toggle_class(div3, "active-mix", /*chart*/ ctx[12].currentPhase?.key === 'mix');
 			toggle_class(div3, "active-rain", /*chart*/ ctx[12].currentPhase?.key === 'rain');
 			toggle_class(div3, "active-ice-pellets", /*chart*/ ctx[12].currentPhase?.key === 'ice-pellets');
 			toggle_class(div3, "active-freezing-rain", /*chart*/ ctx[12].currentPhase?.key === 'freezing-rain');
-			attr(b3, "class", "svelte-72n019");
-			attr(span2, "class", "svelte-72n019");
-			attr(span3, "class", "svelte-72n019");
-			attr(span4, "class", "svelte-72n019");
-			attr(div4, "class", "outlook24 svelte-72n019");
+			attr(b3, "class", "svelte-1q22nou");
+			attr(span2, "class", "svelte-1q22nou");
+			attr(span3, "class", "svelte-1q22nou");
+			attr(span4, "class", "svelte-1q22nou");
+			attr(div4, "class", "outlook24 svelte-1q22nou");
 			attr(div4, "aria-label", "Next 24 hours precipitation");
-			attr(b4, "class", "svelte-72n019");
-			attr(div5, "class", "outlook24 event-intelligence svelte-72n019");
-			attr(div6, "class", "quality-note svelte-72n019");
+			attr(b4, "class", "svelte-1q22nou");
+			attr(div5, "class", "outlook24 event-intelligence svelte-1q22nou");
+			attr(div6, "class", "quality-note svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, div0, anchor);
@@ -6079,14 +6045,11 @@ function create_if_block_1$1(ctx) {
 			append(g, rect8);
 			append(g, text11);
 			append(text11, t13);
-			append(g, rect9);
-			append(g, text12);
+			append(svg, text12);
 			append(text12, t14);
-			append(svg, text13);
-			append(text13, t15);
-			append(text13, tspan2);
-			append(tspan2, t16);
-			append(svg, rect10);
+			append(text12, tspan2);
+			append(tspan2, t15);
+			append(svg, rect9);
 			if_block3.m(svg, null);
 			append(svg, if_block3_anchor);
 			if (if_block4) if_block4.m(svg, null);
@@ -6103,56 +6066,56 @@ function create_if_block_1$1(ctx) {
 			}
 
 			/*svg_binding*/ ctx[26](svg);
-			append(div0, t17);
+			append(div0, t16);
 			if (if_block7) if_block7.m(div0, null);
-			insert(target, t18, anchor);
+			insert(target, t17, anchor);
 			insert(target, div3, anchor);
 			append(div3, div1);
 			append(div1, b0);
 			if_block8.m(b0, null);
-			append(div1, t19);
+			append(div1, t18);
 			if (if_block9) if_block9.m(div1, null);
-			append(div3, t20);
+			append(div3, t19);
 			append(div3, div2);
 			append(div2, span0);
 			append(span0, small0);
 			append(span0, b1);
-			append(b1, t22);
-			append(div2, t23);
+			append(b1, t21);
+			append(div2, t22);
 			append(div2, span1);
 			append(span1, small1);
 			append(span1, b2);
-			append(b2, t25);
-			insert(target, t26, anchor);
+			append(b2, t24);
+			insert(target, t25, anchor);
 			insert(target, div4, anchor);
 			append(div4, b3);
-			append(div4, t28);
+			append(div4, t27);
 			append(div4, span2);
-			append(span2, t29);
+			append(span2, t28);
 			if (if_block10) if_block10.m(span2, null);
-			append(div4, t30);
+			append(div4, t29);
 			append(div4, span3);
+			append(span3, t30);
 			append(span3, t31);
-			append(span3, t32);
-			append(div4, t33);
+			append(div4, t32);
 			append(div4, span4);
+			append(span4, t33);
 			append(span4, t34);
-			append(span4, t35);
-			append(div4, t36);
+			append(div4, t35);
 			append(div4, small2);
-			insert(target, t38, anchor);
+			insert(target, t37, anchor);
 			insert(target, div5, anchor);
 			append(div5, b4);
-			append(b4, t39);
-			append(div5, t40);
+			append(b4, t38);
+			append(div5, t39);
 			if_block11.m(div5, null);
-			insert(target, t41, anchor);
+			insert(target, t40, anchor);
 			if (if_block12) if_block12.m(target, anchor);
-			insert(target, t42, anchor);
+			insert(target, t41, anchor);
 			if (if_block13) if_block13.m(target, anchor);
-			insert(target, t43, anchor);
+			insert(target, t42, anchor);
 			insert(target, div6, anchor);
-			insert(target, t45, anchor);
+			insert(target, t44, anchor);
 			if (if_block14) if_block14.m(target, anchor);
 			insert(target, if_block14_anchor, anchor);
 
@@ -6240,7 +6203,7 @@ function create_if_block_1$1(ctx) {
 				each_blocks_1.length = each_value_1.length;
 			}
 
-			if (dirty[0] & /*units*/ 16 && t16_value !== (t16_value = (/*units*/ ctx[4] === 'imperial' ? 'in' : 'cm') + "")) set_data(t16, t16_value);
+			if (dirty[0] & /*units*/ 16 && t15_value !== (t15_value = (/*units*/ ctx[4] === 'imperial' ? 'in' : 'cm') + "")) set_data(t15, t15_value);
 
 			if (current_block_type_1 === (current_block_type_1 = select_block_type_3(ctx)) && if_block3) {
 				if_block3.p(ctx, dirty);
@@ -6271,7 +6234,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block5) {
 					if_block5.p(ctx, dirty);
 				} else {
-					if_block5 = create_if_block_16$1(ctx);
+					if_block5 = create_if_block_16(ctx);
 					if_block5.c();
 					if_block5.m(svg, if_block5_anchor);
 				}
@@ -6331,8 +6294,8 @@ function create_if_block_1$1(ctx) {
 				if_block9 = null;
 			}
 
-			if (dirty[0] & /*chart, units*/ 4112 && t22_value !== (t22_value = formatSnowline(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4]) + "")) set_data(t22, t22_value);
-			if (dirty[0] & /*chart, units*/ 4112 && t25_value !== (t25_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "")) set_data(t25, t25_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t21_value !== (t21_value = formatSnowline(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4]) + "")) set_data(t21, t21_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t24_value !== (t24_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "")) set_data(t24, t24_value);
 
 			if (dirty[0] & /*chart*/ 4096) {
 				toggle_class(div3, "active-snow", /*chart*/ ctx[12].currentPhase?.key === 'snow');
@@ -6358,7 +6321,7 @@ function create_if_block_1$1(ctx) {
 				toggle_class(div3, "active-freezing-rain", /*chart*/ ctx[12].currentPhase?.key === 'freezing-rain');
 			}
 
-			if (dirty[0] & /*chart, units*/ 4112 && t29_value !== (t29_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "")) set_data(t29, t29_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t28_value !== (t28_value = formatPrecipTotal(/*chart*/ ctx[12].precip24h, /*units*/ ctx[4]) + "")) set_data(t28, t28_value);
 
 			if (/*chart*/ ctx[12].precip24h === null) {
 				if (if_block10) ; else {
@@ -6371,12 +6334,12 @@ function create_if_block_1$1(ctx) {
 				if_block10 = null;
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && t31_value !== (t31_value = /*chart*/ ctx[12].precip24Range + "")) set_data(t31, t31_value);
-			if (dirty[0] & /*chart, units*/ 4112 && t35_value !== (t35_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "")) set_data(t35, t35_value);
+			if (dirty[0] & /*chart*/ 4096 && t30_value !== (t30_value = /*chart*/ ctx[12].precip24Range + "")) set_data(t30, t30_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t34_value !== (t34_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "")) set_data(t34, t34_value);
 
-			if (dirty[0] & /*event*/ 8192 && t39_value !== (t39_value = ((/*event*/ ctx[13]?.activeNow)
+			if (dirty[0] & /*event*/ 8192 && t38_value !== (t38_value = ((/*event*/ ctx[13]?.activeNow)
 			? 'Current wintry period'
-			: 'Next wintry period') + "")) set_data(t39, t39_value);
+			: 'Next wintry period') + "")) set_data(t38, t38_value);
 
 			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block11) {
 				if_block11.p(ctx, dirty);
@@ -6396,18 +6359,18 @@ function create_if_block_1$1(ctx) {
 				} else {
 					if_block12 = create_if_block_4$1(ctx);
 					if_block12.c();
-					if_block12.m(t42.parentNode, t42);
+					if_block12.m(t41.parentNode, t41);
 				}
 			} else if (if_block12) {
 				if_block12.d(1);
 				if_block12 = null;
 			}
 
-			if (/*chart*/ ctx[12].currentPhase?.key === 'uncertain') {
+			if (/*chart*/ ctx[12].currentPhase?.confidence === 'low') {
 				if (if_block13) ; else {
 					if_block13 = create_if_block_3$1();
 					if_block13.c();
-					if_block13.m(t43.parentNode, t43);
+					if_block13.m(t42.parentNode, t42);
 				}
 			} else if (if_block13) {
 				if_block13.d(1);
@@ -6430,17 +6393,17 @@ function create_if_block_1$1(ctx) {
 		d(detaching) {
 			if (detaching) {
 				detach(div0);
-				detach(t18);
+				detach(t17);
 				detach(div3);
-				detach(t26);
+				detach(t25);
 				detach(div4);
-				detach(t38);
+				detach(t37);
 				detach(div5);
+				detach(t40);
 				detach(t41);
 				detach(t42);
-				detach(t43);
 				detach(div6);
-				detach(t45);
+				detach(t44);
 				detach(if_block14_anchor);
 			}
 
@@ -6490,16 +6453,16 @@ function create_if_block_21(ctx) {
 			attr(rect, "y", rect_y_value = /*chart*/ ctx[12].terrainY);
 			attr(rect, "width", "306");
 			attr(rect, "height", rect_height_value = Math.max(0, 130 - /*chart*/ ctx[12].terrainY));
-			attr(rect, "class", "terrain-zone svelte-72n019");
+			attr(rect, "class", "terrain-zone svelte-1q22nou");
 			attr(line, "x1", "42");
 			attr(line, "x2", "348");
 			attr(line, "y1", line_y__value = /*chart*/ ctx[12].terrainY);
 			attr(line, "y2", line_y__value_1 = /*chart*/ ctx[12].terrainY);
-			attr(line, "class", "terrain-line svelte-72n019");
+			attr(line, "class", "terrain-line svelte-1q22nou");
 			attr(text_1, "x", "344");
 			attr(text_1, "y", text_1_y_value = Math.max(27, /*chart*/ ctx[12].terrainY - 4));
 			attr(text_1, "text-anchor", "end");
-			attr(text_1, "class", "terrain-tag svelte-72n019");
+			attr(text_1, "class", "terrain-tag svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
@@ -6550,7 +6513,7 @@ function create_if_block_20(ctx) {
 			attr(text_1, "x", "195");
 			attr(text_1, "y", "65");
 			attr(text_1, "text-anchor", "middle");
-			attr(text_1, "class", "empty-band svelte-72n019");
+			attr(text_1, "class", "empty-band svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -6583,7 +6546,7 @@ function create_else_block_3(ctx) {
 			attr(text_1, "x", "195");
 			attr(text_1, "y", "175");
 			attr(text_1, "text-anchor", "middle");
-			attr(text_1, "class", "empty-band svelte-72n019");
+			attr(text_1, "class", "empty-band svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -6634,11 +6597,11 @@ function create_if_block_19(ctx) {
 			attr(text0, "x", "37");
 			attr(text0, "y", "159");
 			attr(text0, "text-anchor", "end");
-			attr(text0, "class", "axis precip-axis svelte-72n019");
+			attr(text0, "class", "axis precip-axis svelte-1q22nou");
 			attr(text1, "x", "37");
 			attr(text1, "y", "190");
 			attr(text1, "text-anchor", "end");
-			attr(text1, "class", "axis svelte-72n019");
+			attr(text1, "class", "axis svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, text0, anchor);
@@ -6708,7 +6671,7 @@ function create_each_block_2(ctx) {
 			attr(rect, "width", rect_width_value = /*bar*/ ctx[51].width);
 			attr(rect, "height", rect_height_value = /*bar*/ ctx[51].height);
 			attr(rect, "rx", "1.1");
-			attr(rect, "class", "precip-bar svelte-72n019");
+			attr(rect, "class", "precip-bar svelte-1q22nou");
 			toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[51].mm));
 		},
 		m(target, anchor) {
@@ -6758,7 +6721,7 @@ function create_each_block_1(ctx) {
 			attr(rect, "width", rect_width_value = /*block*/ ctx[48].width);
 			attr(rect, "height", "23");
 			attr(rect, "rx", "2.8");
-			attr(rect, "class", rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-72n019"));
+			attr(rect, "class", rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-1q22nou"));
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
@@ -6772,7 +6735,7 @@ function create_each_block_1(ctx) {
 				attr(rect, "width", rect_width_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_class_value !== (rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-72n019"))) {
+			if (dirty[0] & /*chart*/ 4096 && rect_class_value !== (rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-1q22nou"))) {
 				attr(rect, "class", rect_class_value);
 			}
 		},
@@ -6784,7 +6747,7 @@ function create_each_block_1(ctx) {
 	};
 }
 
-// (67:8) {:else}
+// (66:8) {:else}
 function create_else_block_2$1(ctx) {
 	let text_1;
 
@@ -6803,7 +6766,7 @@ function create_else_block_2$1(ctx) {
 			attr(text_1, "x", "195");
 			attr(text_1, "y", "305");
 			attr(text_1, "text-anchor", "middle");
-			attr(text_1, "class", "empty-band svelte-72n019");
+			attr(text_1, "class", "empty-band svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -6824,7 +6787,7 @@ function create_else_block_2$1(ctx) {
 	};
 }
 
-// (63:8) {#if chart.newSnowMax > 0}
+// (62:8) {#if chart.newSnowMax > 0}
 function create_if_block_18(ctx) {
 	let text_1;
 	let t_value = /*chart*/ ctx[12].newSnowMaxLabel + "";
@@ -6843,11 +6806,11 @@ function create_if_block_18(ctx) {
 			attr(text_1, "x", "37");
 			attr(text_1, "y", "294");
 			attr(text_1, "text-anchor", "end");
-			attr(text_1, "class", "axis snow-axis svelte-72n019");
+			attr(text_1, "class", "axis snow-axis svelte-1q22nou");
 			attr(path, "d", path_d_value = /*chart*/ ctx[12].newSnowArea);
-			attr(path, "class", "new-snow-area svelte-72n019");
+			attr(path, "class", "new-snow-area svelte-1q22nou");
 			attr(polyline, "points", polyline_points_value = /*chart*/ ctx[12].newSnowPoints);
-			attr(polyline, "class", "new-snow-line svelte-72n019");
+			attr(polyline, "class", "new-snow-line svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -6876,7 +6839,7 @@ function create_if_block_18(ctx) {
 	};
 }
 
-// (71:8) {#if chart.nowX !== null}
+// (70:8) {#if chart.nowX !== null}
 function create_if_block_17(ctx) {
 	let line;
 	let line_x__value;
@@ -6897,17 +6860,17 @@ function create_if_block_17(ctx) {
 			attr(line, "x2", line_x__value_1 = /*chart*/ ctx[12].nowX);
 			attr(line, "y1", "18");
 			attr(line, "y2", "316");
-			attr(line, "class", "now-line svelte-72n019");
+			attr(line, "class", "now-line svelte-1q22nou");
 			attr(rect, "x", rect_x_value = Math.max(43, Math.min(322, /*chart*/ ctx[12].nowX - 13)));
 			attr(rect, "y", "20");
 			attr(rect, "width", "26");
 			attr(rect, "height", "12");
 			attr(rect, "rx", "3");
-			attr(rect, "class", "now-tag-bg svelte-72n019");
+			attr(rect, "class", "now-tag-bg svelte-1q22nou");
 			attr(text_1, "x", text_1_x_value = Math.max(56, Math.min(335, /*chart*/ ctx[12].nowX)));
 			attr(text_1, "y", "29");
 			attr(text_1, "text-anchor", "middle");
-			attr(text_1, "class", "now-tag svelte-72n019");
+			attr(text_1, "class", "now-tag svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, line, anchor);
@@ -6942,8 +6905,8 @@ function create_if_block_17(ctx) {
 	};
 }
 
-// (76:8) {#if chart.currentX !== null && chart.currentY !== null}
-function create_if_block_16$1(ctx) {
+// (75:8) {#if chart.currentX !== null && chart.currentY !== null}
+function create_if_block_16(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6959,11 +6922,11 @@ function create_if_block_16$1(ctx) {
 			attr(line, "x2", line_x__value_1 = /*chart*/ ctx[12].currentX);
 			attr(line, "y1", "18");
 			attr(line, "y2", "316");
-			attr(line, "class", "cursor svelte-72n019");
+			attr(line, "class", "cursor svelte-1q22nou");
 			attr(circle, "cx", circle_cx_value = /*chart*/ ctx[12].currentX);
 			attr(circle, "cy", circle_cy_value = /*chart*/ ctx[12].currentY);
 			attr(circle, "r", "4.2");
-			attr(circle, "class", "current-dot svelte-72n019");
+			attr(circle, "class", "current-dot svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, line, anchor);
@@ -6995,7 +6958,7 @@ function create_if_block_16$1(ctx) {
 	};
 }
 
-// (80:8) {#if tooltip}
+// (79:8) {#if tooltip}
 function create_if_block_15$1(ctx) {
 	let line;
 	let line_x__value;
@@ -7008,7 +6971,7 @@ function create_if_block_15$1(ctx) {
 			attr(line, "x2", line_x__value_1 = /*tooltip*/ ctx[11].x);
 			attr(line, "y1", "18");
 			attr(line, "y2", "316");
-			attr(line, "class", "inspect-line svelte-72n019");
+			attr(line, "class", "inspect-line svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, line, anchor);
@@ -7030,7 +6993,7 @@ function create_if_block_15$1(ctx) {
 	};
 }
 
-// (82:8) {#each [24,48,72,96,120,144] as hour}
+// (81:8) {#each [24,48,72,96,120,144] as hour}
 function create_each_block(ctx) {
 	let text_1;
 	let t0;
@@ -7046,7 +7009,7 @@ function create_each_block(ctx) {
 			attr(text_1, "x", 42 + 306 * /*hour*/ ctx[45] / 144);
 			attr(text_1, "y", "334");
 			attr(text_1, "text-anchor", /*hour*/ ctx[45] === 144 ? 'end' : 'middle');
-			attr(text_1, "class", "axis timeline-tick svelte-72n019");
+			attr(text_1, "class", "axis timeline-tick svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, text_1, anchor);
@@ -7063,7 +7026,7 @@ function create_each_block(ctx) {
 	};
 }
 
-// (87:6) {#if tooltip}
+// (86:6) {#if tooltip}
 function create_if_block_12$1(ctx) {
 	let div1;
 	let b0;
@@ -7119,15 +7082,15 @@ function create_if_block_12$1(ctx) {
 			t10 = text(t10_value);
 			t11 = space();
 			if (if_block1) if_block1.c();
-			attr(b0, "class", "svelte-72n019");
-			attr(b1, "class", "svelte-72n019");
-			attr(span0, "class", "svelte-72n019");
-			attr(b2, "class", "svelte-72n019");
-			attr(span1, "class", "svelte-72n019");
-			attr(b3, "class", "svelte-72n019");
-			attr(span2, "class", "svelte-72n019");
-			attr(div0, "class", "tip-grid svelte-72n019");
-			attr(div1, "class", "tooltip svelte-72n019");
+			attr(b0, "class", "svelte-1q22nou");
+			attr(b1, "class", "svelte-1q22nou");
+			attr(span0, "class", "svelte-1q22nou");
+			attr(b2, "class", "svelte-1q22nou");
+			attr(span1, "class", "svelte-1q22nou");
+			attr(b3, "class", "svelte-1q22nou");
+			attr(span2, "class", "svelte-1q22nou");
+			attr(div0, "class", "tip-grid svelte-1q22nou");
+			attr(div1, "class", "tooltip svelte-1q22nou");
 			attr(div1, "style", div1_style_value = `left:${/*tooltip*/ ctx[11].cssX}px;top:${/*tooltip*/ ctx[11].cssY}px;`);
 		},
 		m(target, anchor) {
@@ -7203,7 +7166,7 @@ function create_if_block_12$1(ctx) {
 	};
 }
 
-// (90:10) {#if tooltip.phase}
+// (89:10) {#if tooltip.phase}
 function create_if_block_14$1(ctx) {
 	let strong;
 	let i;
@@ -7217,8 +7180,8 @@ function create_if_block_14$1(ctx) {
 			strong = element("strong");
 			i = element("i");
 			t = text(t_value);
-			attr(i, "class", i_class_value = "" + (null_to_empty(`tip-phase-dot phase-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-72n019"));
-			attr(strong, "class", strong_class_value = "" + (null_to_empty(`text-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-72n019"));
+			attr(i, "class", i_class_value = "" + (null_to_empty(`tip-phase-dot phase-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-1q22nou"));
+			attr(strong, "class", strong_class_value = "" + (null_to_empty(`text-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-1q22nou"));
 		},
 		m(target, anchor) {
 			insert(target, strong, anchor);
@@ -7226,13 +7189,13 @@ function create_if_block_14$1(ctx) {
 			append(strong, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*tooltip*/ 2048 && i_class_value !== (i_class_value = "" + (null_to_empty(`tip-phase-dot phase-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-72n019"))) {
+			if (dirty[0] & /*tooltip*/ 2048 && i_class_value !== (i_class_value = "" + (null_to_empty(`tip-phase-dot phase-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-1q22nou"))) {
 				attr(i, "class", i_class_value);
 			}
 
 			if (dirty[0] & /*tooltip*/ 2048 && t_value !== (t_value = precipitationLabel(/*tooltip*/ ctx[11].phase) + "")) set_data(t, t_value);
 
-			if (dirty[0] & /*tooltip*/ 2048 && strong_class_value !== (strong_class_value = "" + (null_to_empty(`text-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-72n019"))) {
+			if (dirty[0] & /*tooltip*/ 2048 && strong_class_value !== (strong_class_value = "" + (null_to_empty(`text-${/*tooltip*/ ctx[11].phase.key}`) + " svelte-1q22nou"))) {
 				attr(strong, "class", strong_class_value);
 			}
 		},
@@ -7244,7 +7207,7 @@ function create_if_block_14$1(ctx) {
 	};
 }
 
-// (95:12) {#if terrainM !== null}
+// (94:12) {#if terrainM !== null}
 function create_if_block_13$1(ctx) {
 	let span;
 	let t0;
@@ -7258,8 +7221,8 @@ function create_if_block_13$1(ctx) {
 			t0 = text("Terrain ");
 			b = element("b");
 			t1 = text(t1_value);
-			attr(b, "class", "svelte-72n019");
-			attr(span, "class", "svelte-72n019");
+			attr(b, "class", "svelte-1q22nou");
+			attr(span, "class", "svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -7278,7 +7241,7 @@ function create_if_block_13$1(ctx) {
 	};
 }
 
-// (103:142) {:else}
+// (102:142) {:else}
 function create_else_block_1$1(ctx) {
 	let t_value = /*chart*/ ctx[12].currentCondition + "";
 	let t;
@@ -7301,7 +7264,7 @@ function create_else_block_1$1(ctx) {
 	};
 }
 
-// (103:11) {#if chart.currentPhase}
+// (102:11) {#if chart.currentPhase}
 function create_if_block_11$1(ctx) {
 	let i;
 	let i_class_value;
@@ -7312,14 +7275,14 @@ function create_if_block_11$1(ctx) {
 		c() {
 			i = element("i");
 			t = text(t_value);
-			attr(i, "class", i_class_value = "" + (null_to_empty(`current-phase-dot phase-${/*chart*/ ctx[12].currentPhase.key}`) + " svelte-72n019"));
+			attr(i, "class", i_class_value = "" + (null_to_empty(`current-phase-dot phase-${/*chart*/ ctx[12].currentPhase.key}`) + " svelte-1q22nou"));
 		},
 		m(target, anchor) {
 			insert(target, i, anchor);
 			insert(target, t, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*chart*/ 4096 && i_class_value !== (i_class_value = "" + (null_to_empty(`current-phase-dot phase-${/*chart*/ ctx[12].currentPhase.key}`) + " svelte-72n019"))) {
+			if (dirty[0] & /*chart*/ 4096 && i_class_value !== (i_class_value = "" + (null_to_empty(`current-phase-dot phase-${/*chart*/ ctx[12].currentPhase.key}`) + " svelte-1q22nou"))) {
 				attr(i, "class", i_class_value);
 			}
 
@@ -7334,7 +7297,7 @@ function create_if_block_11$1(ctx) {
 	};
 }
 
-// (104:8) {#if chart.currentPosition}
+// (103:8) {#if chart.currentPosition}
 function create_if_block_10$1(ctx) {
 	let strong;
 	let t_value = /*chart*/ ctx[12].currentPosition + "";
@@ -7344,7 +7307,7 @@ function create_if_block_10$1(ctx) {
 		c() {
 			strong = element("strong");
 			t = text(t_value);
-			attr(strong, "class", "svelte-72n019");
+			attr(strong, "class", "svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, strong, anchor);
@@ -7361,7 +7324,7 @@ function create_if_block_10$1(ctx) {
 	};
 }
 
-// (114:54) {#if chart.precip24h===null}
+// (113:54) {#if chart.precip24h===null}
 function create_if_block_9$1(ctx) {
 	let t;
 
@@ -7380,7 +7343,7 @@ function create_if_block_9$1(ctx) {
 	};
 }
 
-// (124:6) {:else}
+// (123:6) {:else}
 function create_else_block$1(ctx) {
 	let span;
 	let t_value = noEventMessage(/*point*/ ctx[1], /*terrainM*/ ctx[2], /*timestamp*/ ctx[5]) + "";
@@ -7390,7 +7353,7 @@ function create_else_block$1(ctx) {
 		c() {
 			span = element("span");
 			t = text(t_value);
-			attr(span, "class", "svelte-72n019");
+			attr(span, "class", "svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -7407,7 +7370,7 @@ function create_else_block$1(ctx) {
 	};
 }
 
-// (121:6) {#if event}
+// (120:6) {#if event}
 function create_if_block_5$1(ctx) {
 	let span;
 	let t0_value = /*event*/ ctx[13].dominantPhase.icon + "";
@@ -7442,7 +7405,7 @@ function create_if_block_5$1(ctx) {
 			t5 = space();
 			if (if_block1) if_block1.c();
 			if_block1_anchor = empty();
-			attr(span, "class", "svelte-72n019");
+			attr(span, "class", "svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -7502,7 +7465,7 @@ function create_if_block_5$1(ctx) {
 	};
 }
 
-// (122:223) 
+// (121:223) 
 function create_if_block_8$1(ctx) {
 	let t0;
 	let t1_value = formatSnow(/*event*/ ctx[13].newSnowCm, /*units*/ ctx[4]) + "";
@@ -7535,7 +7498,7 @@ function create_if_block_8$1(ctx) {
 	};
 }
 
-// (122:152) {#if event.incomplete}
+// (121:152) {#if event.incomplete}
 function create_if_block_7$1(ctx) {
 	let t;
 
@@ -7555,7 +7518,7 @@ function create_if_block_7$1(ctx) {
 	};
 }
 
-// (123:8) {#if !event.activeNow}
+// (122:8) {#if !event.activeNow}
 function create_if_block_6$1(ctx) {
 	let button;
 	let mounted;
@@ -7567,7 +7530,7 @@ function create_if_block_6$1(ctx) {
 			button.textContent = "Go to event →";
 			attr(button, "type", "button");
 			attr(button, "title", "Jump to event start");
-			attr(button, "class", "svelte-72n019");
+			attr(button, "class", "svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, button, anchor);
@@ -7589,7 +7552,7 @@ function create_if_block_6$1(ctx) {
 	};
 }
 
-// (128:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
+// (127:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
 function create_if_block_4$1(ctx) {
 	let button;
 	let t0;
@@ -7614,7 +7577,7 @@ function create_if_block_4$1(ctx) {
 			t2 = text(" terrain around ");
 			t3 = text(t3_value);
 			t4 = text(" →");
-			attr(button, "class", "crossing-action svelte-72n019");
+			attr(button, "class", "crossing-action svelte-1q22nou");
 			attr(button, "type", "button");
 		},
 		m(target, anchor) {
@@ -7648,15 +7611,15 @@ function create_if_block_4$1(ctx) {
 	};
 }
 
-// (129:4) {#if chart.currentPhase?.key === 'uncertain'}
+// (128:4) {#if chart.currentPhase?.confidence === 'low'}
 function create_if_block_3$1(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
-			div.textContent = "Precipitation is forecast, but the vertical profile cannot support a specific type.";
-			attr(div, "class", "quality-note svelte-72n019");
+			div.textContent = "Limited atmospheric detail · precipitation type is approximate.";
+			attr(div, "class", "quality-note svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -7669,7 +7632,7 @@ function create_if_block_3$1(ctx) {
 	};
 }
 
-// (131:4) {#if chart.coverageNote}
+// (130:4) {#if chart.coverageNote}
 function create_if_block_2$1(ctx) {
 	let div;
 	let t_value = /*chart*/ ctx[12].coverageNote + "";
@@ -7679,7 +7642,7 @@ function create_if_block_2$1(ctx) {
 		c() {
 			div = element("div");
 			t = text(t_value);
-			attr(div, "class", "quality-note svelte-72n019");
+			attr(div, "class", "quality-note svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -7776,34 +7739,34 @@ function create_fragment$2(ctx) {
 			t13 = text("Sounding");
 			t14 = space();
 			if_block2.c();
-			attr(b, "class", "svelte-72n019");
-			attr(small, "class", "svelte-72n019");
-			attr(em, "class", "svelte-72n019");
-			attr(div0, "class", "chart-title svelte-72n019");
-			attr(button0, "class", "drag-button svelte-72n019");
+			attr(b, "class", "svelte-1q22nou");
+			attr(small, "class", "svelte-1q22nou");
+			attr(em, "class", "svelte-1q22nou");
+			attr(div0, "class", "chart-title svelte-1q22nou");
+			attr(button0, "class", "drag-button svelte-1q22nou");
 			attr(button0, "type", "button");
 			attr(button0, "title", "Drag graph");
 			attr(button0, "aria-label", "Drag graph");
 			attr(button1, "type", "button");
 			attr(button1, "title", "Close");
 			attr(button1, "aria-label", "Close graph");
-			attr(button1, "class", "svelte-72n019");
-			attr(div1, "class", "chart-actions svelte-72n019");
-			attr(div2, "class", "chart-head svelte-72n019");
+			attr(button1, "class", "svelte-1q22nou");
+			attr(div1, "class", "chart-actions svelte-1q22nou");
+			attr(div2, "class", "chart-head svelte-1q22nou");
 			attr(button2, "type", "button");
 			attr(button2, "role", "tab");
 			attr(button2, "aria-selected", button2_aria_selected_value = /*tab*/ ctx[0] === 'graph');
-			attr(button2, "class", "svelte-72n019");
+			attr(button2, "class", "svelte-1q22nou");
 			toggle_class(button2, "active", /*tab*/ ctx[0] === 'graph');
 			attr(button3, "type", "button");
 			attr(button3, "role", "tab");
 			attr(button3, "aria-selected", button3_aria_selected_value = /*tab*/ ctx[0] === 'sounding');
-			attr(button3, "class", "svelte-72n019");
+			attr(button3, "class", "svelte-1q22nou");
 			toggle_class(button3, "active", /*tab*/ ctx[0] === 'sounding');
-			attr(div3, "class", "forecast-tabs svelte-72n019");
+			attr(div3, "class", "forecast-tabs svelte-1q22nou");
 			attr(div3, "role", "tablist");
 			attr(div3, "aria-label", "Forecast view");
-			attr(div4, "class", "chart-shell svelte-72n019");
+			attr(div4, "class", "chart-shell svelte-1q22nou");
 			attr(div4, "role", "dialog");
 			attr(div4, "aria-modal", "false");
 			attr(div4, "aria-label", "Wintry forecast graph");
@@ -7982,8 +7945,7 @@ function phaseName(key) {
 		mix: 'Mix',
 		rain: 'Rain',
 		'ice-pellets': 'Ice pellets',
-		'freezing-rain': 'Freezing rain',
-		uncertain: 'Type unresolved'
+		'freezing-rain': 'Freezing rain'
 	};
 
 	return labels[key];
@@ -8298,7 +8260,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			precipCount: coverage.precipCount,
 			snowPrefix,
 			coverageNote: coverage.note || (snowPrefix < p.times.filter(t => t < t1).length
-			? 'Snowfall estimate stops at missing data or unresolved type'
+			? 'Snowfall estimate stops at missing data or limited atmospheric detail'
 			: ''),
 			midTimeLabel: '+' + Math.round((t1 - t0) / 7200000) + ' h',
 			endTimeLabel: '+' + Math.round((t1 - t0) / 3600000) + ' h',
@@ -8374,7 +8336,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			clone.setAttribute('width', '1080');
 			clone.setAttribute('height', '1002');
 			const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-			style.textContent = 'text{font-family:Arial,sans-serif}.plot-bg,.band-bg{fill:#101b22;stroke:#29404d}.terrain-zone{fill:#17313a}.grid{stroke:#29404d}.axis{fill:#9fb0ba;font-size:8px}.section-label{fill:#dce8ee;font-size:7px;font-weight:700}.section-label tspan{fill:#72838d}.snowline-line{fill:none;stroke:#67d7ff;stroke-width:2.7}.terrain-line{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag{fill:#ffbd75;font-size:6px}.min24-line{stroke:#9fe9ff;stroke-dasharray:2 3}.min24-dot{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag{fill:#bdefff;font-size:6px}.precip-bar{fill:#3794b8}.precip-bar.wet{fill:#64d4f5}.phase-snow{fill:#b2b2b2}.phase-wet-snow{fill:#569456}.phase-mix{fill:#95a109}.phase-rain{fill:#0099b6}.phase-ice-pellets{fill:#510c0f}.phase-freezing-rain{fill:#900096}.phase-uncertain{fill:#718096}.phase-block{opacity:.94}.phase-legend-svg text{fill:#d4dfe6;font-size:9px}.new-snow-line{fill:none;stroke:#82e398;stroke-width:2}.new-snow-area{fill:#82e398;opacity:.18}.now-line{stroke:#ff6759}.now-tag-bg{fill:#ff6759}.now-tag{fill:#fff;font-size:7px}.cursor{stroke:#dce8ee;stroke-dasharray:2 3}.current-dot{fill:#fff;stroke:#67d7ff;stroke-width:2}.crossing-line{stroke:#ffe05b;stroke-dasharray:3 3}.crossing-dot{fill:#111;stroke:#ffe05b;stroke-width:2}.empty-band{fill:#8596a2;font-size:7px}';
+			style.textContent = 'text{font-family:Arial,sans-serif}.plot-bg,.band-bg{fill:#101b22;stroke:#29404d}.terrain-zone{fill:#17313a}.grid{stroke:#29404d}.axis{fill:#9fb0ba;font-size:8px}.section-label{fill:#dce8ee;font-size:7px;font-weight:700}.section-label tspan{fill:#72838d}.snowline-line{fill:none;stroke:#67d7ff;stroke-width:2.7}.terrain-line{stroke:#ffae56;stroke-width:1.5;stroke-dasharray:5 4}.terrain-tag{fill:#ffbd75;font-size:6px}.min24-line{stroke:#9fe9ff;stroke-dasharray:2 3}.min24-dot{fill:#0d151b;stroke:#9fe9ff;stroke-width:2}.min24-tag{fill:#bdefff;font-size:6px}.precip-bar{fill:#3794b8}.precip-bar.wet{fill:#64d4f5}.phase-snow{fill:#b2b2b2}.phase-wet-snow{fill:#569456}.phase-mix{fill:#95a109}.phase-rain{fill:#0099b6}.phase-ice-pellets{fill:#510c0f}.phase-freezing-rain{fill:#900096}.phase-block{opacity:.94}.phase-legend-svg text{fill:#d4dfe6;font-size:9px}.new-snow-line{fill:none;stroke:#82e398;stroke-width:2}.new-snow-area{fill:#82e398;opacity:.18}.now-line{stroke:#ff6759}.now-tag-bg{fill:#ff6759}.now-tag{fill:#fff;font-size:7px}.cursor{stroke:#dce8ee;stroke-dasharray:2 3}.current-dot{fill:#fff;stroke:#67d7ff;stroke-width:2}.crossing-line{stroke:#ffe05b;stroke-dasharray:3 3}.crossing-dot{fill:#111;stroke:#ffe05b;stroke-width:2}.empty-band{fill:#8596a2;font-size:7px}';
 			clone.insertBefore(style, clone.firstChild);
 
 			const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }),
@@ -21688,7 +21650,7 @@ function geocode(path, params, signal) {
 /* src\plugin.svelte generated by Svelte v4.2.20 */
 
 function add_css(target) {
-	append_styles(target, "svelte-1raysdx", ".guidance-key.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;gap:5px;margin-top:4px;color:#c0cbd3;font-size:10px;line-height:1.3}.guidance-key.svelte-1raysdx i.svelte-1raysdx.svelte-1raysdx{width:9px;height:9px;border-radius:2px;background:#718096;flex:none}.snowline-click-label>span>b{text-shadow:0 0 1px #fff}.snowline-point-place{font-size:12px;line-height:1.3;font-weight:750;color:#d9e7ef;overflow-wrap:anywhere;max-height:3.9em;overflow:auto;padding:0 2px}.wintry-point-pointer{background:transparent!important;border:0!important;pointer-events:none !important}.wintry-point-pointer>span{display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #fff;border-radius:50%;background:var(--probe-accent, #fff);box-shadow:0 0 0 2px rgba(0, 0, 0, 0.55)}.storm-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:9px;color:#f5df91;margin-top:5px}.wintry-storm-symbol{background:none!important;border:0!important;pointer-events:none !important}.wintry-storm-symbol span{font-size:23px;color:#ffe04b;text-shadow:0 1px 2px #111, 0 0 3px #111;line-height:28px}.wintry-precip-icon{background:none!important;border:0!important;pointer-events:none !important}.wintry-precip-icon span{display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}.wintry-precip-icon svg{width:25px;height:25px;padding:1.5px;filter:drop-shadow(0 0 0.75px #ffffffc0)}.layer-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:grid;grid-template-columns:repeat(2, 1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx{accent-color:#67d7ff;margin:0;width:15px;height:15px}.zoom-hint.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls.svelte-1raysdx label.unavailable.svelte-1raysdx.svelte-1raysdx{opacity:0.45;cursor:not-allowed}.layer-controls.svelte-1raysdx label.unavailable input.svelte-1raysdx.svelte-1raysdx{cursor:not-allowed}.prepare-map-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls.svelte-1raysdx small.svelte-1raysdx.svelte-1raysdx{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls.svelte-1raysdx .refresh-button.svelte-1raysdx.svelte-1raysdx{min-height:34px}.prepare-ring.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress), #324857 0)}.prepare-ring.svelte-1raysdx span.svelte-1raysdx.svelte-1raysdx{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.loading-stage.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}.data-status.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;flex-direction:column;gap:5px;padding:8px 0;font-size:10px;line-height:1.4;color:#b5cad8}#device-desktop #plugin-windy-plugin-snowline-map-100m{height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible !important}.refresh-error.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}.forecast-quality{margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}.hatch-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend.svelte-1raysdx span.svelte-1raysdx.svelte-1raysdx{color:#ef70cf;font-weight:700;margin-right:4px}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{box-sizing:border-box;width:240px;max-width:calc(100vw - 28px);padding:8px;border-radius:9px;background:rgba(38, 42, 46, 0.96);color:white;box-shadow:0 4px 16px rgba(0, 0, 0, 0.28)}.top-row.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;justify-content:space-between;gap:10px}.top-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;gap:6px}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:16px;font-weight:850;letter-spacing:-0.2px}.switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:1px solid rgba(255, 255, 255, 0.11);border-radius:7px;background:rgba(255, 255, 255, 0.035);font-size:9px;font-weight:850;white-space:nowrap;cursor:pointer}.switch.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx{appearance:none;-webkit-appearance:none;position:relative;margin:0;width:24px;height:14px;border:0;border-radius:8px;background:rgba(255, 255, 255, 0.16);cursor:pointer;transition:background 0.15s ease}.switch.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#aebbc2;transition:transform 0.15s ease, background 0.15s ease}.switch.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx:checked{background:rgba(80, 190, 255, 0.35)}.switch.svelte-1raysdx input.svelte-1raysdx.svelte-1raysdx:checked:after{transform:translateX(10px);background:#8ee2ff}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:24px;height:24px;padding:0;border:1px solid rgba(255, 255, 255, 0.1);border-radius:7px;background:rgba(255, 255, 255, 0.035);color:rgba(255, 255, 255, 0.74);font-size:15px;font-weight:800;cursor:pointer}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx:hover{background:rgba(255, 255, 255, 0.075);color:#fff}.show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{padding:7px 10px;border:1px solid rgba(255, 255, 255, 0.16);border-radius:8px;background:rgba(38, 42, 46, 0.96);color:#fff;box-shadow:0 3px 12px rgba(0, 0, 0, 0.24);font-size:11px;font-weight:800;cursor:pointer}.status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px;padding:4px 7px;border-radius:6px;background:rgba(10, 14, 18, 0.72);color:rgba(255, 255, 255, 0.92);font-size:10px;font-weight:700}.status-dot.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:7px;height:7px;border-radius:50%;background:#70d7ff;animation:svelte-1raysdx-snowline-pulse 1s ease-in-out infinite}@keyframes svelte-1raysdx-snowline-pulse{0%,100%{opacity:0.45;transform:scale(0.85)}50%{opacity:1;transform:scale(1)}}.info-overlay.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0, 0, 0, 0.3)}.info-window.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:min(360px, calc(100vw - 24px));max-height:min(74vh, 540px);overflow:hidden;border:1px solid rgba(80, 190, 255, 0.48);border-radius:10px;background:rgba(24, 28, 32, 0.99);color:white;box-shadow:0 8px 30px rgba(0, 0, 0, 0.48)}.info-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:flex;justify-content:space-between;align-items:center;padding:9px 10px 7px;border-bottom:1px solid rgba(255, 255, 255, 0.1);font-size:12px}.info-head.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{width:22px;height:22px;border:0;border-radius:6px;background:rgba(255, 255, 255, 0.08);color:white;font-size:17px;cursor:pointer}.info-body.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{max-height:calc(min(74vh, 540px) - 40px);overflow-y:auto;padding:9px 10px 10px;font-size:10px;line-height:1.4;color:rgba(255, 255, 255, 0.84)}.info-body.svelte-1raysdx>div.svelte-1raysdx+div.svelte-1raysdx{margin-top:8px}.info-caveat.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{padding-top:8px;border-top:1px solid rgba(255, 255, 255, 0.1);color:rgba(255, 228, 92, 0.9)}.snowline-label{text-align:center;pointer-events:none}.snowline-label,.snowline-click-label{background:transparent!important;border:0 !important}.snowline-label span{display:inline-block;padding:1px 4px 1px 6px;border-radius:3px;border-left:4px solid var(--snowline-color, white);background:rgba(15, 17, 20, 0.86);color:white;font-size:10px;font-weight:800;white-space:nowrap;text-shadow:0 1px 2px rgba(0, 0, 0, 0.8);box-shadow:0 0 0 1px rgba(255, 255, 255, 0.12)}.snowline-label-major span{padding-left:7px;border-left-width:5px;background:rgba(10, 13, 16, 0.92);font-weight:900;box-shadow:0 0 0 1px rgba(255, 255, 255, 0.18), 0 2px 5px rgba(0, 0, 0, 0.28)}.snowline-click-label{pointer-events:none !important}.snowline-click-label>span{position:absolute;bottom:20px;left:0;transform:translateX(-50%);pointer-events:auto;display:flex;flex-direction:column;gap:6px;width:228px;min-height:146px;box-sizing:border-box;padding:40px 9px 9px;border-radius:14px;border:1px solid rgba(255, 255, 255, 0.11);border-top:2px solid var(--probe-accent, rgba(255, 255, 255, 0.4));border-bottom:3px solid var(--snowline-color, white);background:linear-gradient(180deg, rgba(11, 17, 21, 0.985), rgba(7, 12, 16, 0.99));color:#fff;text-align:center;white-space:normal;text-shadow:none;box-shadow:0 10px 30px rgba(0, 0, 0, 0.54)}.snowline-card-kicker{position:absolute;top:12px;left:74px;right:74px;color:#7f929e;font-size:6px;line-height:1;font-weight:900;letter-spacing:1.15px;text-align:center;white-space:nowrap;pointer-events:none}.snowline-label-close,.snowline-label-share,.snowline-label-chart,.snowline-label-favourite{position:absolute;top:7px;height:27px;padding:0;border:1px solid rgba(255, 255, 255, 0.085);border-radius:8px;background:rgba(255, 255, 255, 0.045);color:#dfe9ee;font-size:12px;line-height:25px;font-weight:800;text-shadow:none;cursor:pointer;pointer-events:auto;transition:background 0.12s ease, border-color 0.12s ease}.snowline-label-close:hover,.snowline-label-share:hover,.snowline-label-chart:hover,.snowline-label-favourite:hover{background:rgba(255, 255, 255, 0.09);border-color:rgba(255, 255, 255, 0.16)}.snowline-label-close{right:7px;width:27px;font-size:17px}.snowline-label-share{right:40px;width:27px;font-size:0;background-repeat:no-repeat;background-position:center;background-size:14px;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3Ccircle cx='6' cy='12' r='3'/%3E%3Ccircle cx='18' cy='19' r='3'/%3E%3Cpath d='M8.6 10.5l6.8-4M8.6 13.5l6.8 4'/%3E%3C/svg%3E\")}.snowline-label-chart{left:7px;width:29px;font-size:15px}.snowline-label-favourite{left:42px;width:29px;font-size:16px;color:#aab6bd}.snowline-label-favourite.saved{color:#ffe45c;border-color:rgba(255, 228, 92, 0.42);background:rgba(255, 228, 92, 0.08)}.snowline-click-label b{display:block;padding:4px 7px 2px;border-radius:8px;background:transparent;color:var(--probe-accent, white);font-size:15px;line-height:1.05;font-weight:900;letter-spacing:0.25px}.snowline-card-dry>span>b{padding:3px 7px 1px;background:transparent;font-size:12px;letter-spacing:0.8px;opacity:0.95}.snowline-label-detail{width:100%}.snowline-position{padding:6px 8px;border-radius:8px;background:rgba(255, 255, 255, 0.055);color:var(--probe-accent, white);line-height:1.05}.snowline-position strong{display:block;font-size:11px;font-weight:900}.snowline-position small{display:block;margin-top:3px;color:rgba(255, 255, 255, 0.68);font-size:7.5px;font-weight:750}.snowline-label-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;width:100%}.snowline-label-grid span,.snowline-outlook-grid span{min-width:0;padding:6px 4px 5px;border-radius:8px;background:rgba(255, 255, 255, 0.028);border:1px solid rgba(255, 255, 255, 0.045);text-align:center}.snowline-label-grid small,.snowline-outlook-grid small{display:block;color:#7f919b;font-size:6.2px;line-height:1;text-transform:uppercase;letter-spacing:0.42px;font-weight:800}.snowline-label-grid strong,.snowline-outlook-grid strong{display:block;margin-top:4px;color:#eef5f8;font-size:10.5px;line-height:1;font-weight:900}.metric-terrain strong{color:#ffd39a}.metric-snowline strong{color:#dff6ff}.metric-precip strong{color:#9fe5ff}.snowline-label-grid.has-precip .metric-precip{grid-column:-1}.snowline-outlook{padding:5px;border:1px solid rgba(110, 203, 255, 0.08);border-radius:8px;background:rgba(60, 150, 205, 0.035)}.snowline-outlook-title{margin-bottom:4px;color:#79badc;font-size:6.5px;font-weight:900;letter-spacing:0.75px}.snowline-outlook-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}.snowline-outlook-grid span{padding:4px 3px;background:rgba(255, 255, 255, 0.028)}.snowline-outlook-grid strong{font-size:8.8px}.snowline-no-snow strong{color:#8f9da5;font-weight:700}.snowline-transition{margin-top:4px;padding:4px 5px;border-radius:6px;background:rgba(255, 255, 255, 0.035);color:#dce9ef;font-size:8px;line-height:1.12;font-weight:800}.snowline-valid{margin:-1px 0 1px;color:#8799a4;font-size:7.2px;line-height:1;font-weight:800;text-align:center}.snowline-compact-relation{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:5px 7px;border-radius:8px;background:rgba(255, 255, 255, 0.025);color:var(--probe-accent, white);font-size:8.2px;line-height:1.1;font-weight:850;text-align:left}.snowline-compact-relation strong{display:inline!important;padding:0!important;background:none!important;color:inherit!important;font-size:8px!important;letter-spacing:0 !important}.snowline-compact-relation small{display:none}.snowline-compact-relation span{color:#aebbc2;font-weight:750;white-space:nowrap}.snowline-event-line{width:100%;box-sizing:border-box;padding:6px 7px;border:0;border-radius:8px;background:rgba(110, 203, 255, 0.045);color:#d8e5eb;text-align:left;font-family:inherit;font-size:7.8px;line-height:1.2;font-weight:800}button.snowline-event-line{display:flex;align-items:center;justify-content:space-between;gap:6px;cursor:pointer;pointer-events:auto}button.snowline-event-line:hover{background:rgba(110, 203, 255, 0.11)}button.snowline-event-line span{flex:0 0 auto;color:#8edcff;font-size:14px;line-height:8px}.snowline-loading{padding:20px 0 14px;color:#9fb0ba;font-size:10px}.snowline-probe-above>span{background:linear-gradient(180deg, rgba(8, 25, 34, 0.99), rgba(8, 14, 18, 0.99))}.snowline-probe-below>span{background:linear-gradient(180deg, rgba(32, 21, 12, 0.99), rgba(18, 13, 10, 0.99))}.snowline-probe-near>span{background:linear-gradient(180deg, rgba(29, 27, 11, 0.99), rgba(17, 16, 9, 0.99))}.snowline-card-hazard>span{border-top-color:#c184ff !important;box-shadow:0 0 0 1px rgba(193, 132, 255, 0.35), 0 12px 32px rgba(77, 27, 107, 0.58)}.snowline-card-hazard>span>b{color:#e7c8ff !important;background:rgba(174, 91, 230, 0.12) !important}@media(max-width: 520px){.info-overlay.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{align-items:flex-start;padding-top:54px}.snowline-click-label>span{width:220px;min-height:142px;padding:40px 8px 8px}.snowline-card-kicker{left:72px;right:72px}.snowline-click-label b{font-size:13px}.snowline-card-dry>span>b{font-size:10.5px}.snowline-position strong{font-size:10.5px}.snowline-label-grid strong,.snowline-outlook-grid strong{font-size:8.5px}}.snowline-label-chart{left:7px;width:69px;font-size:10px}.snowline-label-favourite{left:81px;width:46px;font-size:10px}.snowline-label-share{right:40px;width:45px;background-image:none;font-size:10px}.snowline-card-kicker{display:none}.snowline-valid{font-size:10px;line-height:1.25}.snowline-label-grid small{font-size:9px;line-height:1.2}.snowline-label-grid strong{font-size:13px;line-height:1.2}.snowline-event-line{font-size:11px;line-height:1.4;padding:8px}.snowline-compact-relation,.snowline-compact-relation strong{font-size:10px!important;line-height:1.3}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:13px;white-space:nowrap}.top-row.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.top-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{gap:3px}.info-overlay.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{z-index:10030}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:fixed;left:max(16px, env(safe-area-inset-left, 0px));bottom:calc(var(--wintry-bottom-clearance, 84px) + env(safe-area-inset-bottom, 0px));z-index:10005;box-sizing:border-box;max-width:calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:280px;padding:10px;border:1px solid #355363;border-radius:12px;background:linear-gradient(155deg, #142b3b, #0c1822);max-height:calc(100vh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));max-height:calc(100dvh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}@media(max-width: 600px){.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{left:max(12px, env(safe-area-inset-left, 0px));right:max(12px, env(safe-area-inset-right, 0px));bottom:calc(var(--wintry-bottom-clearance, 88px) + env(safe-area-inset-bottom, 0px));margin-inline:auto;max-width:calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:440px;border-radius:16px;padding:10px 12px;max-height:min(45vh, calc(100vh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)));max-height:min(45dvh, calc(100dvh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)))}.show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:max-content;min-height:44px}.top-row.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{flex-wrap:wrap}}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:18px}.top-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{gap:4px}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:30px;height:34px}.switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{height:34px;font-size:11px}.hatch-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:11px;margin:9px 0}.point-tools.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools.svelte-1raysdx strong.svelte-1raysdx.svelte-1raysdx{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools.svelte-1raysdx>div.svelte-1raysdx.svelte-1raysdx{display:flex;gap:8px;margin-top:9px}.point-tools.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel.svelte-1raysdx button:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}.status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:12px;padding:8px}.info-body.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:13px;line-height:1.55}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:15px;white-space:nowrap}.top-row.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{gap:5px}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:30px;height:32px}.switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{height:32px;padding:0 5px;font-size:10px}.point-tools.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:7px;padding:0;background:none}.point-tools.svelte-1raysdx strong.svelte-1raysdx.svelte-1raysdx{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools.svelte-1raysdx>div.svelte-1raysdx.svelte-1raysdx{gap:6px;margin-top:6px}.point-tools.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{min-height:36px;font-size:12px}.hatch-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:10px;margin:6px 0}.help-link.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:10px;padding:4px}.panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:sticky;top:-10px;z-index:3;margin:-10px -10px 0;padding:10px 10px 6px;background:linear-gradient(155deg, #142b3b, #102330);border-bottom:1px solid #304655}@media(max-width: 600px){.panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-inline:-12px;padding-inline:12px}}.layer-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{gap:6px;margin-top:10px}.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls.svelte-1raysdx label.active.svelte-1raysdx.svelte-1raysdx{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx:focus-within{outline:2px solid #8de4ff;outline-offset:2px}.storm-legend.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:sticky;bottom:-10px;z-index:3;background:#102330;border-top:1px solid #304655;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx:disabled{opacity:0.45;cursor:default}.panel-footer.svelte-1raysdx .help-link.svelte-1raysdx.svelte-1raysdx{min-height:34px}.status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:11px;min-height:22px}.status-dot.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{flex-shrink:0}@media(prefers-reduced-motion: reduce){.status-dot.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{animation:none}}@media(pointer: coarse){.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx,.refresh-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.panel-footer.svelte-1raysdx .help-link.svelte-1raysdx.svelte-1raysdx{min-height:44px}.hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{min-height:40px}.point-tools.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{min-height:44px}}#device-mobile .snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,#device-mobile .show-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:relative;left:auto;right:auto;bottom:auto;z-index:auto;margin:0;width:100%;max-width:100%}#device-mobile .snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{border-radius:0;padding:8px 12px;max-height:38vh;max-height:38dvh;padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px))}#device-mobile .panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{top:-8px;margin-top:-8px;padding-top:8px}#device-mobile .layer-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}#device-mobile .layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx{min-height:44px;padding:6px 4px;justify-content:center;font-size:11px}#device-mobile .prepare-map-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin:6px 0;gap:3px}#device-mobile .panel-footer.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:relative;bottom:auto;padding-bottom:0}#device-mobile .title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:15px}#device-mobile .hide-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,#device-mobile .switch.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{min-height:44px}#device-mobile .panel-actions.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px}#device-mobile .prepare-map-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,#device-mobile .panel-footer.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:contents}#device-mobile .prepare-map-controls.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}#device-mobile .prepare-map-controls.svelte-1raysdx small.svelte-1raysdx.svelte-1raysdx{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}#device-mobile .panel-footer.svelte-1raysdx .refresh-button.svelte-1raysdx.svelte-1raysdx{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}#device-mobile .panel-footer.svelte-1raysdx .help-link.svelte-1raysdx.svelte-1raysdx{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}.snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{max-height:none;overflow:visible}.panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:static}.layer-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}.layer-controls.svelte-1raysdx label.svelte-1raysdx.svelte-1raysdx{padding-inline:4px;justify-content:center;font-size:11px}.settings-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:30px;height:32px;border:1px solid #304655;border-radius:7px;background:#152735;color:#dff5ff;font-size:17px;cursor:pointer}.title.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{font-size:14px}.panel-actions.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px;padding-top:7px}.prepare-map-controls.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,.panel-footer.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{display:contents}.prepare-map-controls.svelte-1raysdx button.svelte-1raysdx.svelte-1raysdx{grid-column:1;grid-row:1;min-height:34px;padding-inline:5px}.prepare-map-controls.svelte-1raysdx small.svelte-1raysdx.svelte-1raysdx{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}.panel-footer.svelte-1raysdx .refresh-button.svelte-1raysdx.svelte-1raysdx{grid-column:2;grid-row:1;padding-inline:6px}.panel-footer.svelte-1raysdx .help-link.svelte-1raysdx.svelte-1raysdx{grid-column:3;grid-row:1;padding-inline:3px}#device-mobile .snowline-panel.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{max-height:none;overflow:visible}#device-mobile #plugin-windy-plugin-snowline-map-100m{height:auto!important;max-height:none!important;overflow:visible!important;padding:0!important}#device-mobile .panel-head.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx,#device-mobile .panel-actions.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{position:static}#device-mobile .settings-button.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{min-height:44px;min-width:36px}#device-mobile .point-tools.svelte-1raysdx strong.svelte-1raysdx.svelte-1raysdx{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#device-mobile .status-pill.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{margin-top:4px;padding:3px;justify-content:flex-start}#device-mobile .prepare-ring.svelte-1raysdx.svelte-1raysdx.svelte-1raysdx{width:30px;height:30px;flex-basis:30px}#device-mobile .prepare-ring.svelte-1raysdx span.svelte-1raysdx.svelte-1raysdx{width:24px;height:24px;font-size:9px}");
+	append_styles(target, "svelte-1gu5mnn", ".snowline-click-label>span>b{text-shadow:0 0 1px #fff}.snowline-point-place{font-size:12px;line-height:1.3;font-weight:750;color:#d9e7ef;overflow-wrap:anywhere;max-height:3.9em;overflow:auto;padding:0 2px}.wintry-point-pointer{background:transparent!important;border:0!important;pointer-events:none !important}.wintry-point-pointer>span{display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #fff;border-radius:50%;background:var(--probe-accent, #fff);box-shadow:0 0 0 2px rgba(0, 0, 0, 0.55)}.storm-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:9px;color:#f5df91;margin-top:5px}.wintry-storm-symbol{background:none!important;border:0!important;pointer-events:none !important}.wintry-storm-symbol span{font-size:23px;color:#ffe04b;text-shadow:0 1px 2px #111, 0 0 3px #111;line-height:28px}.wintry-precip-icon{background:none!important;border:0!important;pointer-events:none !important}.wintry-precip-icon span{display:block;width:28px;height:28px;background:#102633db;border-radius:6px;box-shadow:0 1px 3px #0005}.wintry-precip-icon svg{width:25px;height:25px;padding:1.5px;filter:drop-shadow(0 0 0.75px #ffffffc0)}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;grid-template-columns:repeat(2, 1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn{accent-color:#67d7ff;margin:0;width:15px;height:15px}.zoom-hint.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls.svelte-1gu5mnn label.unavailable.svelte-1gu5mnn.svelte-1gu5mnn{opacity:0.45;cursor:not-allowed}.layer-controls.svelte-1gu5mnn label.unavailable input.svelte-1gu5mnn.svelte-1gu5mnn{cursor:not-allowed}.prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px}.prepare-ring.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress), #324857 0)}.prepare-ring.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.loading-stage.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}.data-status.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;flex-direction:column;gap:5px;padding:8px 0;font-size:10px;line-height:1.4;color:#b5cad8}#device-desktop #plugin-windy-plugin-snowline-map-100m{height:auto!important;width:auto!important;padding:0!important;background:transparent!important;overflow:visible !important}.refresh-error.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:7px;font-size:11px;line-height:1.4;color:#ffcb91}.refresh-error.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}.forecast-quality{margin-top:5px;color:#edc881;font-size:10px;line-height:1.3}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:9px;line-height:1.4;color:#b9d8e6;margin:5px 0}.hatch-legend.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{color:#ef70cf;font-weight:700;margin-right:4px}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{box-sizing:border-box;width:240px;max-width:calc(100vw - 28px);padding:8px;border-radius:9px;background:rgba(38, 42, 46, 0.96);color:white;box-shadow:0 4px 16px rgba(0, 0, 0, 0.28)}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;justify-content:space-between;gap:10px}.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:6px}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:16px;font-weight:850;letter-spacing:-0.2px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;gap:5px;height:24px;padding:0 7px 0 5px;border:1px solid rgba(255, 255, 255, 0.11);border-radius:7px;background:rgba(255, 255, 255, 0.035);font-size:9px;font-weight:850;white-space:nowrap;cursor:pointer}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn{appearance:none;-webkit-appearance:none;position:relative;margin:0;width:24px;height:14px;border:0;border-radius:8px;background:rgba(255, 255, 255, 0.16);cursor:pointer;transition:background 0.15s ease}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#aebbc2;transition:transform 0.15s ease, background 0.15s ease}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:checked{background:rgba(80, 190, 255, 0.35)}.switch.svelte-1gu5mnn input.svelte-1gu5mnn.svelte-1gu5mnn:checked:after{transform:translateX(10px);background:#8ee2ff}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:24px;height:24px;padding:0;border:1px solid rgba(255, 255, 255, 0.1);border-radius:7px;background:rgba(255, 255, 255, 0.035);color:rgba(255, 255, 255, 0.74);font-size:15px;font-weight:800;cursor:pointer}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn:hover{background:rgba(255, 255, 255, 0.075);color:#fff}.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{padding:7px 10px;border:1px solid rgba(255, 255, 255, 0.16);border-radius:8px;background:rgba(38, 42, 46, 0.96);color:#fff;box-shadow:0 3px 12px rgba(0, 0, 0, 0.24);font-size:11px;font-weight:800;cursor:pointer}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px;padding:4px 7px;border-radius:6px;background:rgba(10, 14, 18, 0.72);color:rgba(255, 255, 255, 0.92);font-size:10px;font-weight:700}.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:7px;height:7px;border-radius:50%;background:#70d7ff;animation:svelte-1gu5mnn-snowline-pulse 1s ease-in-out infinite}@keyframes svelte-1gu5mnn-snowline-pulse{0%,100%{opacity:0.45;transform:scale(0.85)}50%{opacity:1;transform:scale(1)}}.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0, 0, 0, 0.3)}.info-window.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:min(360px, calc(100vw - 24px));max-height:min(74vh, 540px);overflow:hidden;border:1px solid rgba(80, 190, 255, 0.48);border-radius:10px;background:rgba(24, 28, 32, 0.99);color:white;box-shadow:0 8px 30px rgba(0, 0, 0, 0.48)}.info-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;justify-content:space-between;align-items:center;padding:9px 10px 7px;border-bottom:1px solid rgba(255, 255, 255, 0.1);font-size:12px}.info-head.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{width:22px;height:22px;border:0;border-radius:6px;background:rgba(255, 255, 255, 0.08);color:white;font-size:17px;cursor:pointer}.info-body.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:calc(min(74vh, 540px) - 40px);overflow-y:auto;padding:9px 10px 10px;font-size:10px;line-height:1.4;color:rgba(255, 255, 255, 0.84)}.info-body.svelte-1gu5mnn>div.svelte-1gu5mnn+div.svelte-1gu5mnn{margin-top:8px}.info-caveat.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{padding-top:8px;border-top:1px solid rgba(255, 255, 255, 0.1);color:rgba(255, 228, 92, 0.9)}.snowline-label{text-align:center;pointer-events:none}.snowline-label,.snowline-click-label{background:transparent!important;border:0 !important}.snowline-label span{display:inline-block;padding:1px 4px 1px 6px;border-radius:3px;border-left:4px solid var(--snowline-color, white);background:rgba(15, 17, 20, 0.86);color:white;font-size:10px;font-weight:800;white-space:nowrap;text-shadow:0 1px 2px rgba(0, 0, 0, 0.8);box-shadow:0 0 0 1px rgba(255, 255, 255, 0.12)}.snowline-label-major span{padding-left:7px;border-left-width:5px;background:rgba(10, 13, 16, 0.92);font-weight:900;box-shadow:0 0 0 1px rgba(255, 255, 255, 0.18), 0 2px 5px rgba(0, 0, 0, 0.28)}.snowline-click-label{pointer-events:none !important}.snowline-click-label>span{position:absolute;bottom:20px;left:0;transform:translateX(-50%);pointer-events:auto;display:flex;flex-direction:column;gap:6px;width:228px;min-height:146px;box-sizing:border-box;padding:40px 9px 9px;border-radius:14px;border:1px solid rgba(255, 255, 255, 0.11);border-top:2px solid var(--probe-accent, rgba(255, 255, 255, 0.4));border-bottom:3px solid var(--snowline-color, white);background:linear-gradient(180deg, rgba(11, 17, 21, 0.985), rgba(7, 12, 16, 0.99));color:#fff;text-align:center;white-space:normal;text-shadow:none;box-shadow:0 10px 30px rgba(0, 0, 0, 0.54)}.snowline-card-kicker{position:absolute;top:12px;left:74px;right:74px;color:#7f929e;font-size:6px;line-height:1;font-weight:900;letter-spacing:1.15px;text-align:center;white-space:nowrap;pointer-events:none}.snowline-label-close,.snowline-label-share,.snowline-label-chart,.snowline-label-favourite{position:absolute;top:7px;height:27px;padding:0;border:1px solid rgba(255, 255, 255, 0.085);border-radius:8px;background:rgba(255, 255, 255, 0.045);color:#dfe9ee;font-size:12px;line-height:25px;font-weight:800;text-shadow:none;cursor:pointer;pointer-events:auto;transition:background 0.12s ease, border-color 0.12s ease}.snowline-label-close:hover,.snowline-label-share:hover,.snowline-label-chart:hover,.snowline-label-favourite:hover{background:rgba(255, 255, 255, 0.09);border-color:rgba(255, 255, 255, 0.16)}.snowline-label-close{right:7px;width:27px;font-size:17px}.snowline-label-share{right:40px;width:27px;font-size:0;background-repeat:no-repeat;background-position:center;background-size:14px;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3Ccircle cx='6' cy='12' r='3'/%3E%3Ccircle cx='18' cy='19' r='3'/%3E%3Cpath d='M8.6 10.5l6.8-4M8.6 13.5l6.8 4'/%3E%3C/svg%3E\")}.snowline-label-chart{left:7px;width:29px;font-size:15px}.snowline-label-favourite{left:42px;width:29px;font-size:16px;color:#aab6bd}.snowline-label-favourite.saved{color:#ffe45c;border-color:rgba(255, 228, 92, 0.42);background:rgba(255, 228, 92, 0.08)}.snowline-click-label b{display:block;padding:4px 7px 2px;border-radius:8px;background:transparent;color:var(--probe-accent, white);font-size:15px;line-height:1.05;font-weight:900;letter-spacing:0.25px}.snowline-card-dry>span>b{padding:3px 7px 1px;background:transparent;font-size:12px;letter-spacing:0.8px;opacity:0.95}.snowline-label-detail{width:100%}.snowline-position{padding:6px 8px;border-radius:8px;background:rgba(255, 255, 255, 0.055);color:var(--probe-accent, white);line-height:1.05}.snowline-position strong{display:block;font-size:11px;font-weight:900}.snowline-position small{display:block;margin-top:3px;color:rgba(255, 255, 255, 0.68);font-size:7.5px;font-weight:750}.snowline-label-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;width:100%}.snowline-label-grid span,.snowline-outlook-grid span{min-width:0;padding:6px 4px 5px;border-radius:8px;background:rgba(255, 255, 255, 0.028);border:1px solid rgba(255, 255, 255, 0.045);text-align:center}.snowline-label-grid small,.snowline-outlook-grid small{display:block;color:#7f919b;font-size:6.2px;line-height:1;text-transform:uppercase;letter-spacing:0.42px;font-weight:800}.snowline-label-grid strong,.snowline-outlook-grid strong{display:block;margin-top:4px;color:#eef5f8;font-size:10.5px;line-height:1;font-weight:900}.metric-terrain strong{color:#ffd39a}.metric-snowline strong{color:#dff6ff}.metric-precip strong{color:#9fe5ff}.snowline-label-grid.has-precip .metric-precip{grid-column:-1}.snowline-outlook{padding:5px;border:1px solid rgba(110, 203, 255, 0.08);border-radius:8px;background:rgba(60, 150, 205, 0.035)}.snowline-outlook-title{margin-bottom:4px;color:#79badc;font-size:6.5px;font-weight:900;letter-spacing:0.75px}.snowline-outlook-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}.snowline-outlook-grid span{padding:4px 3px;background:rgba(255, 255, 255, 0.028)}.snowline-outlook-grid strong{font-size:8.8px}.snowline-no-snow strong{color:#8f9da5;font-weight:700}.snowline-transition{margin-top:4px;padding:4px 5px;border-radius:6px;background:rgba(255, 255, 255, 0.035);color:#dce9ef;font-size:8px;line-height:1.12;font-weight:800}.snowline-valid{margin:-1px 0 1px;color:#8799a4;font-size:7.2px;line-height:1;font-weight:800;text-align:center}.snowline-compact-relation{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:5px 7px;border-radius:8px;background:rgba(255, 255, 255, 0.025);color:var(--probe-accent, white);font-size:8.2px;line-height:1.1;font-weight:850;text-align:left}.snowline-compact-relation strong{display:inline!important;padding:0!important;background:none!important;color:inherit!important;font-size:8px!important;letter-spacing:0 !important}.snowline-compact-relation small{display:none}.snowline-compact-relation span{color:#aebbc2;font-weight:750;white-space:nowrap}.snowline-event-line{width:100%;box-sizing:border-box;padding:6px 7px;border:0;border-radius:8px;background:rgba(110, 203, 255, 0.045);color:#d8e5eb;text-align:left;font-family:inherit;font-size:7.8px;line-height:1.2;font-weight:800}button.snowline-event-line{display:flex;align-items:center;justify-content:space-between;gap:6px;cursor:pointer;pointer-events:auto}button.snowline-event-line:hover{background:rgba(110, 203, 255, 0.11)}button.snowline-event-line span{flex:0 0 auto;color:#8edcff;font-size:14px;line-height:8px}.snowline-loading{padding:20px 0 14px;color:#9fb0ba;font-size:10px}.snowline-probe-above>span{background:linear-gradient(180deg, rgba(8, 25, 34, 0.99), rgba(8, 14, 18, 0.99))}.snowline-probe-below>span{background:linear-gradient(180deg, rgba(32, 21, 12, 0.99), rgba(18, 13, 10, 0.99))}.snowline-probe-near>span{background:linear-gradient(180deg, rgba(29, 27, 11, 0.99), rgba(17, 16, 9, 0.99))}.snowline-card-hazard>span{border-top-color:#c184ff !important;box-shadow:0 0 0 1px rgba(193, 132, 255, 0.35), 0 12px 32px rgba(77, 27, 107, 0.58)}.snowline-card-hazard>span>b{color:#e7c8ff !important;background:rgba(174, 91, 230, 0.12) !important}@media(max-width: 520px){.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{align-items:flex-start;padding-top:54px}.snowline-click-label>span{width:220px;min-height:142px;padding:40px 8px 8px}.snowline-card-kicker{left:72px;right:72px}.snowline-click-label b{font-size:13px}.snowline-card-dry>span>b{font-size:10.5px}.snowline-position strong{font-size:10.5px}.snowline-label-grid strong,.snowline-outlook-grid strong{font-size:8.5px}}.snowline-label-chart{left:7px;width:69px;font-size:10px}.snowline-label-favourite{left:81px;width:46px;font-size:10px}.snowline-label-share{right:40px;width:45px;background-image:none;font-size:10px}.snowline-card-kicker{display:none}.snowline-valid{font-size:10px;line-height:1.25}.snowline-label-grid small{font-size:9px;line-height:1.2}.snowline-label-grid strong{font-size:13px;line-height:1.2}.snowline-event-line{font-size:11px;line-height:1.4;padding:8px}.snowline-compact-relation,.snowline-compact-relation strong{font-size:10px!important;line-height:1.3}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:13px;white-space:nowrap}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:3px}.info-overlay.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{z-index:10030}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:fixed;left:max(16px, env(safe-area-inset-left, 0px));bottom:calc(var(--wintry-bottom-clearance, 84px) + env(safe-area-inset-bottom, 0px));z-index:10005;box-sizing:border-box;max-width:calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:280px;padding:10px;border:1px solid #355363;border-radius:12px;background:linear-gradient(155deg, #142b3b, #0c1822);max-height:calc(100vh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));max-height:calc(100dvh - var(--wintry-bottom-clearance, 84px) - 80px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#47677a #142b3b}@media(max-width: 600px){.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{left:max(12px, env(safe-area-inset-left, 0px));right:max(12px, env(safe-area-inset-right, 0px));bottom:calc(var(--wintry-bottom-clearance, 88px) + env(safe-area-inset-bottom, 0px));margin-inline:auto;max-width:calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:440px;border-radius:16px;padding:10px 12px;max-height:min(45vh, calc(100vh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)));max-height:min(45dvh, calc(100dvh - var(--wintry-bottom-clearance, 88px) - 64px - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px)))}.show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:max-content;min-height:44px}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{flex-wrap:wrap}}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:18px}.top-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:4px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:34px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{height:34px;font-size:11px}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:11px;margin:9px 0}.point-tools.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:12px;padding:12px;background:#192f3d;border-radius:10px}.point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{display:block;font-size:13px;overflow-wrap:anywhere}.point-tools.svelte-1gu5mnn>div.svelte-1gu5mnn.svelte-1gu5mnn{display:flex;gap:8px;margin-top:9px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{flex:1;min-height:40px;border:1px solid #487286;border-radius:8px;background:#244757;color:#fff;font-size:13px;cursor:pointer}.snowline-panel.svelte-1gu5mnn button:focus-visible{outline:2px solid #8de4ff;outline-offset:2px}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:12px;padding:8px}.info-body.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:13px;line-height:1.55}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:15px;white-space:nowrap}.top-row.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:5px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:32px}.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{height:32px;padding:0 5px;font-size:10px}.point-tools.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:7px;padding:0;background:none}.point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{font-size:12px;line-height:1.35;max-height:48px;overflow:auto}.point-tools.svelte-1gu5mnn>div.svelte-1gu5mnn.svelte-1gu5mnn{gap:6px;margin-top:6px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:36px;font-size:12px}.hatch-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;margin:6px 0}.help-link.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{background:none;border:0;color:#b3d7e8;font-size:11px;padding:5px 0;text-decoration:underline;cursor:pointer}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;padding:4px}.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;top:-10px;z-index:3;margin:-10px -10px 0;padding:10px 10px 6px;background:linear-gradient(155deg, #142b3b, #102330);border-bottom:1px solid #304655}@media(max-width: 600px){.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-inline:-12px;padding-inline:12px}}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{gap:6px;margin-top:10px}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{box-sizing:border-box;min-height:34px;padding:6px 8px;border:1px solid #304655;border-radius:7px;background:#152735;color:#afc3ce;font-size:12px}.layer-controls.svelte-1gu5mnn label.active.svelte-1gu5mnn.svelte-1gu5mnn{border-color:#49748a;background:#214153;color:#eefaff}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn:focus-within{outline:2px solid #8de4ff;outline-offset:2px}.storm-legend.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:10px;line-height:1.5;margin-top:7px}.panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;bottom:-10px;z-index:3;background:#102330;border-top:1px solid #304655;padding:6px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:5px}.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px;padding:0 10px;border:1px solid #446578;border-radius:7px;background:#203a4a;color:#dff5ff;font-size:11px;cursor:pointer}.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn:disabled{opacity:0.45;cursor:default}.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{min-height:34px}.status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:11px;min-height:22px}.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{flex-shrink:0}@media(prefers-reduced-motion: reduce){.status-dot.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{animation:none}}@media(pointer: coarse){.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn,.refresh-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}.hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:40px}.point-tools.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .show-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:relative;left:auto;right:auto;bottom:auto;z-index:auto;margin:0;width:100%;max-width:100%}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{border-radius:0;padding:8px 12px;max-height:38vh;max-height:38dvh;padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px))}#device-mobile .panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{top:-8px;margin-top:-8px;padding-top:8px}#device-mobile .layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}#device-mobile .layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px;padding:6px 4px;justify-content:center;font-size:11px}#device-mobile .prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin:6px 0;gap:3px}#device-mobile .panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:relative;bottom:auto;padding-bottom:0}#device-mobile .title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:15px}#device-mobile .hide-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .switch.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px}#device-mobile .panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px}#device-mobile .prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:contents}#device-mobile .prepare-map-controls.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}#device-mobile .prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}#device-mobile .panel-footer.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}#device-mobile .panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}.snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:visible}.panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:static}.layer-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{grid-template-columns:repeat(3, minmax(0, 1fr));gap:4px;margin-top:6px}.layer-controls.svelte-1gu5mnn label.svelte-1gu5mnn.svelte-1gu5mnn{padding-inline:4px;justify-content:center;font-size:11px}.settings-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:32px;border:1px solid #304655;border-radius:7px;background:#152735;color:#dff5ff;font-size:17px;cursor:pointer}.title.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{font-size:14px}.panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:4px;padding-top:7px}.prepare-map-controls.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,.panel-footer.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{display:contents}.prepare-map-controls.svelte-1gu5mnn button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:1;grid-row:1;min-height:34px;padding-inline:5px}.prepare-map-controls.svelte-1gu5mnn small.svelte-1gu5mnn.svelte-1gu5mnn{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}.panel-footer.svelte-1gu5mnn .refresh-button.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:2;grid-row:1;padding-inline:6px}.panel-footer.svelte-1gu5mnn .help-link.svelte-1gu5mnn.svelte-1gu5mnn{grid-column:3;grid-row:1;padding-inline:3px}#device-mobile .snowline-panel.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:visible}#device-mobile #plugin-windy-plugin-snowline-map-100m{height:auto!important;max-height:none!important;overflow:visible!important;padding:0!important}#device-mobile .panel-head.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn,#device-mobile .panel-actions.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{position:static}#device-mobile .settings-button.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{min-height:44px;min-width:36px}#device-mobile .point-tools.svelte-1gu5mnn strong.svelte-1gu5mnn.svelte-1gu5mnn{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#device-mobile .status-pill.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{margin-top:4px;padding:3px;justify-content:flex-start}#device-mobile .prepare-ring.svelte-1gu5mnn.svelte-1gu5mnn.svelte-1gu5mnn{width:30px;height:30px;flex-basis:30px}#device-mobile .prepare-ring.svelte-1gu5mnn span.svelte-1gu5mnn.svelte-1gu5mnn{width:24px;height:24px;font-size:9px}");
 }
 
 // (3:0) {:else}
@@ -21737,31 +21699,30 @@ function create_else_block(ctx) {
 	let t21;
 	let t22;
 	let t23;
-	let t24;
 	let div7;
 	let div5;
-	let t25;
+	let t24;
 	let small;
-	let t26_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "";
+	let t25_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "";
+	let t25;
 	let t26;
 	let t27;
-	let t28;
 	let div6;
 	let button2;
-	let t29;
+	let t28;
 	let button2_disabled_value;
 	let button3;
 	let current;
 	let mounted;
 	let dispose;
-	let if_block0 = !/*precipDetailAvailable*/ ctx[3] && create_if_block_16();
+	let if_block0 = !/*precipDetailAvailable*/ ctx[3] && create_if_block_15();
 	placesearch = new PlaceSearch({});
 	placesearch.$on("select", /*handlePlaceSelect*/ ctx[33]);
 	placesearch.$on("clear", /*handleSearchClear*/ ctx[34]);
-	let if_block1 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[19] && create_if_block_15(ctx);
-	let if_block2 = (/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[13] && create_if_block_14(ctx);
-	let if_block3 = /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3] && create_if_block_13(ctx);
-	let if_block4 = /*clickedPoint*/ ctx[24] && create_if_block_12(ctx);
+	let if_block1 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[19] && create_if_block_14(ctx);
+	let if_block2 = (/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[13] && create_if_block_13(ctx);
+	let if_block3 = /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3] && create_if_block_12(ctx);
+	let if_block4 = /*clickedPoint*/ ctx[24] && create_if_block_11(ctx);
 
 	function v21panel_unitSystem_binding(value) {
 		/*v21panel_unitSystem_binding*/ ctx[55](value);
@@ -21775,10 +21736,9 @@ function create_else_block(ctx) {
 
 	v21panel = new V21Panel({ props: v21panel_props });
 	binding_callbacks.push(() => bind(v21panel, 'unitSystem', v21panel_unitSystem_binding));
-	let if_block5 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && create_if_block_11();
-	let if_block6 = /*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[30] && create_if_block_10();
-	let if_block7 = /*refreshError*/ ctx[28] && create_if_block_9(ctx);
-	let if_block8 = /*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) && create_if_block_7(ctx);
+	let if_block5 = /*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[30] && create_if_block_10();
+	let if_block6 = /*refreshError*/ ctx[28] && create_if_block_9(ctx);
+	let if_block7 = /*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) && create_if_block_7(ctx);
 
 	function select_block_type_2(ctx, dirty) {
 		if (/*preparingMap*/ ctx[14]) return create_if_block_6;
@@ -21786,8 +21746,8 @@ function create_else_block(ctx) {
 	}
 
 	let current_block_type = select_block_type_2(ctx);
-	let if_block9 = current_block_type(ctx);
-	let if_block10 = /*videoDownloadUrl*/ ctx[17] && create_if_block_5(ctx);
+	let if_block8 = current_block_type(ctx);
+	let if_block9 = /*videoDownloadUrl*/ ctx[17] && create_if_block_5(ctx);
 
 	return {
 		c() {
@@ -21842,70 +21802,68 @@ function create_else_block(ctx) {
 			t22 = space();
 			if (if_block7) if_block7.c();
 			t23 = space();
-			if (if_block8) if_block8.c();
-			t24 = space();
 			div7 = element("div");
 			div5 = element("div");
-			if_block9.c();
-			t25 = space();
+			if_block8.c();
+			t24 = space();
 			small = element("small");
-			t26 = text(t26_value);
+			t25 = text(t25_value);
+			t26 = space();
+			if (if_block9) if_block9.c();
 			t27 = space();
-			if (if_block10) if_block10.c();
-			t28 = space();
 			div6 = element("div");
 			button2 = element("button");
-			t29 = text("↻ Refresh");
+			t28 = text("↻ Refresh");
 			button3 = element("button");
 			button3.textContent = "How it works";
-			attr(div0, "class", "title svelte-1raysdx");
-			attr(button0, "class", "settings-button svelte-1raysdx");
+			attr(div0, "class", "title svelte-1gu5mnn");
+			attr(button0, "class", "settings-button svelte-1gu5mnn");
 			attr(button0, "type", "button");
 			attr(button0, "aria-label", "Open Wintry settings");
 			attr(button0, "title", "Colours, units and data status");
-			attr(button1, "class", "hide-button svelte-1raysdx");
+			attr(button1, "class", "hide-button svelte-1gu5mnn");
 			attr(button1, "type", "button");
 			attr(button1, "aria-label", "Hide Wintry forecast panel");
 			attr(button1, "title", "Hide");
 			attr(input0, "type", "checkbox");
 			attr(input0, "aria-label", "Enable Wintry forecast");
-			attr(input0, "class", "svelte-1raysdx");
-			attr(label0, "class", "switch svelte-1raysdx");
-			attr(div1, "class", "top-controls svelte-1raysdx");
-			attr(div2, "class", "top-row svelte-1raysdx");
+			attr(input0, "class", "svelte-1gu5mnn");
+			attr(label0, "class", "switch svelte-1gu5mnn");
+			attr(div1, "class", "top-controls svelte-1gu5mnn");
+			attr(div2, "class", "top-row svelte-1gu5mnn");
 			attr(input1, "type", "checkbox");
-			attr(input1, "class", "svelte-1raysdx");
+			attr(input1, "class", "svelte-1gu5mnn");
 			attr(label1, "title", "Estimated snowline contours and dry-terrain hatching");
-			attr(label1, "class", "svelte-1raysdx");
+			attr(label1, "class", "svelte-1gu5mnn");
 			toggle_class(label1, "active", /*showContours*/ ctx[0]);
 			attr(input2, "type", "checkbox");
 			input2.disabled = input2_disabled_value = !/*precipDetailAvailable*/ ctx[3];
-			attr(input2, "class", "svelte-1raysdx");
+			attr(input2, "class", "svelte-1gu5mnn");
 			attr(label2, "title", "Precipitation type colours");
-			attr(label2, "class", "svelte-1raysdx");
+			attr(label2, "class", "svelte-1gu5mnn");
 			toggle_class(label2, "active", /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3]);
 			toggle_class(label2, "unavailable", !/*precipDetailAvailable*/ ctx[3]);
 			attr(input3, "type", "checkbox");
 			input3.disabled = input3_disabled_value = !/*precipDetailAvailable*/ ctx[3];
-			attr(input3, "class", "svelte-1raysdx");
+			attr(input3, "class", "svelte-1gu5mnn");
 			attr(label3, "title", "Precipitation-type symbols and ECMWF forecast lightning");
-			attr(label3, "class", "svelte-1raysdx");
+			attr(label3, "class", "svelte-1gu5mnn");
 			toggle_class(label3, "active", /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3]);
 			toggle_class(label3, "unavailable", !/*precipDetailAvailable*/ ctx[3]);
-			attr(div3, "class", "layer-controls svelte-1raysdx");
+			attr(div3, "class", "layer-controls svelte-1gu5mnn");
 			attr(div3, "role", "group");
 			attr(div3, "aria-label", "Map layers");
-			attr(div4, "class", "panel-head svelte-1raysdx");
-			attr(small, "class", "svelte-1raysdx");
-			attr(div5, "class", "prepare-map-controls svelte-1raysdx");
-			attr(button2, "class", "refresh-button svelte-1raysdx");
+			attr(div4, "class", "panel-head svelte-1gu5mnn");
+			attr(small, "class", "svelte-1gu5mnn");
+			attr(div5, "class", "prepare-map-controls svelte-1gu5mnn");
+			attr(button2, "class", "refresh-button svelte-1gu5mnn");
 			attr(button2, "type", "button");
 			button2.disabled = button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6];
-			attr(button3, "class", "help-link svelte-1raysdx");
+			attr(button3, "class", "help-link svelte-1gu5mnn");
 			attr(button3, "type", "button");
-			attr(div6, "class", "panel-footer svelte-1raysdx");
-			attr(div7, "class", "panel-actions svelte-1raysdx");
-			attr(div8, "class", "snowline-panel svelte-1raysdx");
+			attr(div6, "class", "panel-footer svelte-1gu5mnn");
+			attr(div7, "class", "panel-actions svelte-1gu5mnn");
+			attr(div8, "class", "snowline-panel svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div8, anchor);
@@ -21960,20 +21918,18 @@ function create_else_block(ctx) {
 			append(div8, t22);
 			if (if_block7) if_block7.m(div8, null);
 			append(div8, t23);
-			if (if_block8) if_block8.m(div8, null);
-			append(div8, t24);
 			append(div8, div7);
 			append(div7, div5);
-			if_block9.m(div5, null);
-			append(div5, t25);
+			if_block8.m(div5, null);
+			append(div5, t24);
 			append(div5, small);
-			append(small, t26);
-			append(div5, t27);
-			if (if_block10) if_block10.m(div5, null);
-			append(div7, t28);
+			append(small, t25);
+			append(div5, t26);
+			if (if_block9) if_block9.m(div5, null);
+			append(div7, t27);
 			append(div7, div6);
 			append(div6, button2);
-			append(button2, t29);
+			append(button2, t28);
 			append(div6, button3);
 			current = true;
 
@@ -22045,7 +22001,7 @@ function create_else_block(ctx) {
 
 			if (!/*precipDetailAvailable*/ ctx[3]) {
 				if (if_block0) ; else {
-					if_block0 = create_if_block_16();
+					if_block0 = create_if_block_15();
 					if_block0.c();
 					if_block0.m(div8, t14);
 				}
@@ -22058,7 +22014,7 @@ function create_else_block(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_15(ctx);
+					if_block1 = create_if_block_14(ctx);
 					if_block1.c();
 					if_block1.m(div8, t16);
 				}
@@ -22071,7 +22027,7 @@ function create_else_block(ctx) {
 				if (if_block2) {
 					if_block2.p(ctx, dirty);
 				} else {
-					if_block2 = create_if_block_14(ctx);
+					if_block2 = create_if_block_13(ctx);
 					if_block2.c();
 					if_block2.m(div8, t17);
 				}
@@ -22084,7 +22040,7 @@ function create_else_block(ctx) {
 				if (if_block3) {
 					if_block3.p(ctx, dirty);
 				} else {
-					if_block3 = create_if_block_13(ctx);
+					if_block3 = create_if_block_12(ctx);
 					if_block3.c();
 					if_block3.m(div8, t18);
 				}
@@ -22097,7 +22053,7 @@ function create_else_block(ctx) {
 				if (if_block4) {
 					if_block4.p(ctx, dirty);
 				} else {
-					if_block4 = create_if_block_12(ctx);
+					if_block4 = create_if_block_11(ctx);
 					if_block4.c();
 					if_block4.m(div8, t19);
 				}
@@ -22117,9 +22073,9 @@ function create_else_block(ctx) {
 
 			v21panel.$set(v21panel_changes);
 
-			if (/*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3]) {
+			if (/*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[30]) {
 				if (if_block5) ; else {
-					if_block5 = create_if_block_11();
+					if_block5 = create_if_block_10();
 					if_block5.c();
 					if_block5.m(div8, t21);
 				}
@@ -22128,9 +22084,11 @@ function create_else_block(ctx) {
 				if_block5 = null;
 			}
 
-			if (/*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[30]) {
-				if (if_block6) ; else {
-					if_block6 = create_if_block_10();
+			if (/*refreshError*/ ctx[28]) {
+				if (if_block6) {
+					if_block6.p(ctx, dirty);
+				} else {
+					if_block6 = create_if_block_9(ctx);
 					if_block6.c();
 					if_block6.m(div8, t22);
 				}
@@ -22139,11 +22097,11 @@ function create_else_block(ctx) {
 				if_block6 = null;
 			}
 
-			if (/*refreshError*/ ctx[28]) {
+			if (/*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
 				if (if_block7) {
 					if_block7.p(ctx, dirty);
 				} else {
-					if_block7 = create_if_block_9(ctx);
+					if_block7 = create_if_block_7(ctx);
 					if_block7.c();
 					if_block7.m(div8, t23);
 				}
@@ -22152,44 +22110,31 @@ function create_else_block(ctx) {
 				if_block7 = null;
 			}
 
-			if (/*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
-				if (if_block8) {
-					if_block8.p(ctx, dirty);
-				} else {
-					if_block8 = create_if_block_7(ctx);
-					if_block8.c();
-					if_block8.m(div8, t24);
-				}
-			} else if (if_block8) {
-				if_block8.d(1);
-				if_block8 = null;
-			}
-
-			if (current_block_type === (current_block_type = select_block_type_2(ctx)) && if_block9) {
-				if_block9.p(ctx, dirty);
+			if (current_block_type === (current_block_type = select_block_type_2(ctx)) && if_block8) {
+				if_block8.p(ctx, dirty);
 			} else {
-				if_block9.d(1);
-				if_block9 = current_block_type(ctx);
+				if_block8.d(1);
+				if_block8 = current_block_type(ctx);
 
-				if (if_block9) {
-					if_block9.c();
-					if_block9.m(div5, t25);
+				if (if_block8) {
+					if_block8.c();
+					if_block8.m(div5, t24);
 				}
 			}
 
-			if ((!current || dirty[0] & /*prepareMessage*/ 32768) && t26_value !== (t26_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "")) set_data(t26, t26_value);
+			if ((!current || dirty[0] & /*prepareMessage*/ 32768) && t25_value !== (t25_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "")) set_data(t25, t25_value);
 
 			if (/*videoDownloadUrl*/ ctx[17]) {
-				if (if_block10) {
-					if_block10.p(ctx, dirty);
+				if (if_block9) {
+					if_block9.p(ctx, dirty);
 				} else {
-					if_block10 = create_if_block_5(ctx);
-					if_block10.c();
-					if_block10.m(div5, null);
+					if_block9 = create_if_block_5(ctx);
+					if_block9.c();
+					if_block9.m(div5, null);
 				}
-			} else if (if_block10) {
-				if_block10.d(1);
-				if_block10 = null;
+			} else if (if_block9) {
+				if_block9.d(1);
+				if_block9 = null;
 			}
 
 			if (!current || dirty[0] & /*enabled, viewportLoading, probeLoading, terrainLoading, stormLoading, rasterLoading*/ 8389872 && button2_disabled_value !== (button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
@@ -22222,9 +22167,8 @@ function create_else_block(ctx) {
 			if (if_block5) if_block5.d();
 			if (if_block6) if_block6.d();
 			if (if_block7) if_block7.d();
-			if (if_block8) if_block8.d();
-			if_block9.d();
-			if (if_block10) if_block10.d();
+			if_block8.d();
+			if (if_block9) if_block9.d();
 			mounted = false;
 			run_all(dispose);
 		}
@@ -22241,7 +22185,7 @@ function create_if_block_4(ctx) {
 		c() {
 			button = element("button");
 			button.textContent = "❄ Wintry forecast";
-			attr(button, "class", "show-panel svelte-1raysdx");
+			attr(button, "class", "show-panel svelte-1gu5mnn");
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Show Wintry forecast panel");
 		},
@@ -22268,14 +22212,14 @@ function create_if_block_4(ctx) {
 }
 
 // (21:4) {#if !precipDetailAvailable}
-function create_if_block_16(ctx) {
+function create_if_block_15(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
 			div.textContent = "Zoom in to level 8 for shading and icons";
-			attr(div, "class", "zoom-hint svelte-1raysdx");
+			attr(div, "class", "zoom-hint svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -22289,7 +22233,7 @@ function create_if_block_16(ctx) {
 }
 
 // (23:4) {#if showShading && precipDetailAvailable && geographyError}
-function create_if_block_15(ctx) {
+function create_if_block_14(ctx) {
 	let div;
 	let t;
 
@@ -22297,7 +22241,7 @@ function create_if_block_15(ctx) {
 		c() {
 			div = element("div");
 			t = text(/*geographyError*/ ctx[19]);
-			attr(div, "class", "storm-legend svelte-1raysdx");
+			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22316,7 +22260,7 @@ function create_if_block_15(ctx) {
 }
 
 // (24:4) {#if (showShading || showIcons) && terrainDetailStatus}
-function create_if_block_14(ctx) {
+function create_if_block_13(ctx) {
 	let div;
 	let t;
 
@@ -22324,7 +22268,7 @@ function create_if_block_14(ctx) {
 		c() {
 			div = element("div");
 			t = text(/*terrainDetailStatus*/ ctx[13]);
-			attr(div, "class", "storm-legend svelte-1raysdx");
+			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22343,7 +22287,7 @@ function create_if_block_14(ctx) {
 }
 
 // (25:4) {#if showIcons && precipDetailAvailable}
-function create_if_block_13(ctx) {
+function create_if_block_12(ctx) {
 	let div;
 	let t;
 
@@ -22351,7 +22295,7 @@ function create_if_block_13(ctx) {
 		c() {
 			div = element("div");
 			t = text(/*stormStatus*/ ctx[12]);
-			attr(div, "class", "storm-legend svelte-1raysdx");
+			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22370,7 +22314,7 @@ function create_if_block_13(ctx) {
 }
 
 // (26:4) {#if clickedPoint}
-function create_if_block_12(ctx) {
+function create_if_block_11(ctx) {
 	let div1;
 	let strong;
 	let t0_value = (/*clickedPlaceName*/ ctx[26] || 'Selected point') + "";
@@ -22391,13 +22335,13 @@ function create_if_block_12(ctx) {
 			button0.textContent = "Forecast";
 			button1 = element("button");
 			button1.textContent = "Sounding";
-			attr(strong, "class", "svelte-1raysdx");
+			attr(strong, "class", "svelte-1gu5mnn");
 			attr(button0, "type", "button");
-			attr(button0, "class", "svelte-1raysdx");
+			attr(button0, "class", "svelte-1gu5mnn");
 			attr(button1, "type", "button");
-			attr(button1, "class", "svelte-1raysdx");
-			attr(div0, "class", "svelte-1raysdx");
-			attr(div1, "class", "point-tools svelte-1raysdx");
+			attr(button1, "class", "svelte-1gu5mnn");
+			attr(div0, "class", "svelte-1gu5mnn");
+			attr(div1, "class", "point-tools svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div1, anchor);
@@ -22430,28 +22374,7 @@ function create_if_block_12(ctx) {
 	};
 }
 
-// (30:4) {#if showShading && precipDetailAvailable}
-function create_if_block_11(ctx) {
-	let div;
-
-	return {
-		c() {
-			div = element("div");
-			div.innerHTML = `<i class="svelte-1raysdx"></i>Type unresolved · model guidance`;
-			attr(div, "class", "guidance-key svelte-1raysdx");
-		},
-		m(target, anchor) {
-			insert(target, div, anchor);
-		},
-		d(detaching) {
-			if (detaching) {
-				detach(div);
-			}
-		}
-	};
-}
-
-// (31:4) {#if enabled && !viewportLoading && mapDataMissing}
+// (30:4) {#if enabled && !viewportLoading && mapDataMissing}
 function create_if_block_10(ctx) {
 	let div;
 
@@ -22459,7 +22382,7 @@ function create_if_block_10(ctx) {
 		c() {
 			div = element("div");
 			div.textContent = "Some forecast data is missing · blank areas may be unknown";
-			attr(div, "class", "storm-legend svelte-1raysdx");
+			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22473,7 +22396,7 @@ function create_if_block_10(ctx) {
 	};
 }
 
-// (32:4) {#if refreshError}
+// (31:4) {#if refreshError}
 function create_if_block_9(ctx) {
 	let div;
 	let t0;
@@ -22490,8 +22413,8 @@ function create_if_block_9(ctx) {
 			button = element("button");
 			button.textContent = "Retry";
 			attr(button, "type", "button");
-			attr(button, "class", "svelte-1raysdx");
-			attr(div, "class", "refresh-error svelte-1raysdx");
+			attr(button, "class", "svelte-1gu5mnn");
+			attr(div, "class", "refresh-error svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22519,7 +22442,7 @@ function create_if_block_9(ctx) {
 	};
 }
 
-// (34:4) {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
+// (33:4) {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
 function create_if_block_7(ctx) {
 	let div;
 
@@ -22535,7 +22458,7 @@ function create_if_block_7(ctx) {
 		c() {
 			div = element("div");
 			if_block.c();
-			attr(div, "class", "status-pill svelte-1raysdx");
+			attr(div, "class", "status-pill svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
 		m(target, anchor) {
@@ -22565,7 +22488,7 @@ function create_if_block_7(ctx) {
 	};
 }
 
-// (39:8) {:else}
+// (38:8) {:else}
 function create_else_block_2(ctx) {
 	let span;
 	let t;
@@ -22574,7 +22497,7 @@ function create_else_block_2(ctx) {
 		c() {
 			span = element("span");
 			t = text("Reading point…");
-			attr(span, "class", "status-dot svelte-1raysdx");
+			attr(span, "class", "status-dot svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, span, anchor);
@@ -22590,7 +22513,7 @@ function create_else_block_2(ctx) {
 	};
 }
 
-// (36:8) {#if viewportLoading || terrainLoading || stormLoading || rasterLoading}
+// (35:8) {#if viewportLoading || terrainLoading || stormLoading || rasterLoading}
 function create_if_block_8(ctx) {
 	let div;
 	let span0;
@@ -22624,8 +22547,8 @@ function create_if_block_8(ctx) {
 			t3 = text("Updating…");
 			small = element("small");
 			t4 = text(t4_value);
-			attr(span0, "class", "svelte-1raysdx");
-			attr(div, "class", "prepare-ring svelte-1raysdx");
+			attr(span0, "class", "svelte-1gu5mnn");
+			attr(div, "class", "prepare-ring svelte-1gu5mnn");
 			attr(div, "role", "progressbar");
 			attr(div, "aria-label", "Map layer loading progress");
 			attr(div, "aria-valuemin", "0");
@@ -22633,7 +22556,7 @@ function create_if_block_8(ctx) {
 			attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[31]);
 			attr(div, "aria-valuetext", div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[31]}% of layer loading stages processed`);
 			attr(div, "style", div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[31]}%`);
-			attr(small, "class", "loading-stage svelte-1raysdx");
+			attr(small, "class", "loading-stage svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -22679,7 +22602,7 @@ function create_if_block_8(ctx) {
 	};
 }
 
-// (45:6) {:else}
+// (44:6) {:else}
 function create_else_block_1(ctx) {
 	let button;
 	let t;
@@ -22691,7 +22614,7 @@ function create_else_block_1(ctx) {
 		c() {
 			button = element("button");
 			t = text("Prepare & download MP4");
-			attr(button, "class", "refresh-button svelte-1raysdx");
+			attr(button, "class", "refresh-button svelte-1gu5mnn");
 			attr(button, "type", "button");
 			button.disabled = button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6];
 		},
@@ -22720,7 +22643,7 @@ function create_else_block_1(ctx) {
 	};
 }
 
-// (44:6) {#if preparingMap}
+// (43:6) {#if preparingMap}
 function create_if_block_6(ctx) {
 	let button;
 
@@ -22736,7 +22659,7 @@ function create_if_block_6(ctx) {
 		c() {
 			button = element("button");
 			t = text(t_value);
-			attr(button, "class", "refresh-button svelte-1raysdx");
+			attr(button, "class", "refresh-button svelte-1gu5mnn");
 			attr(button, "type", "button");
 		},
 		m(target, anchor) {
@@ -22764,7 +22687,7 @@ function create_if_block_6(ctx) {
 	};
 }
 
-// (47:6) {#if videoDownloadUrl}
+// (46:6) {#if videoDownloadUrl}
 function create_if_block_5(ctx) {
 	let a;
 	let t;
@@ -22797,7 +22720,7 @@ function create_if_block_5(ctx) {
 	};
 }
 
-// (54:0) {#if settingsOpen}
+// (53:0) {#if settingsOpen}
 function create_if_block_2(ctx) {
 	let div6;
 	let div5;
@@ -22868,18 +22791,18 @@ function create_if_block_2(ctx) {
 			t8 = text(t8_value);
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close settings");
-			attr(button, "class", "svelte-1raysdx");
-			attr(div0, "class", "info-head svelte-1raysdx");
-			attr(div1, "class", "svelte-1raysdx");
-			attr(div2, "class", "svelte-1raysdx");
-			attr(div3, "class", "data-status svelte-1raysdx");
+			attr(button, "class", "svelte-1gu5mnn");
+			attr(div0, "class", "info-head svelte-1gu5mnn");
+			attr(div1, "class", "svelte-1gu5mnn");
+			attr(div2, "class", "svelte-1gu5mnn");
+			attr(div3, "class", "data-status svelte-1gu5mnn");
 			attr(div3, "aria-label", "Map data status");
-			attr(div4, "class", "info-body svelte-1raysdx");
-			attr(div5, "class", "info-window svelte-1raysdx");
+			attr(div4, "class", "info-body svelte-1gu5mnn");
+			attr(div5, "class", "info-window svelte-1gu5mnn");
 			attr(div5, "role", "dialog");
 			attr(div5, "aria-modal", "true");
 			attr(div5, "aria-label", "Wintry settings");
-			attr(div6, "class", "info-overlay svelte-1raysdx");
+			attr(div6, "class", "info-overlay svelte-1gu5mnn");
 			attr(div6, "role", "presentation");
 		},
 		m(target, anchor) {
@@ -22963,15 +22886,15 @@ function create_if_block_2(ctx) {
 	};
 }
 
-// (61:8) {#if showContours}
+// (60:8) {#if showContours}
 function create_if_block_3(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
-			div.innerHTML = `<span class="svelte-1raysdx">╱╱╱</span> Dry terrain above estimated snowline`;
-			attr(div, "class", "hatch-legend svelte-1raysdx");
+			div.innerHTML = `<span class="svelte-1gu5mnn">╱╱╱</span> Dry terrain above estimated snowline`;
+			attr(div, "class", "hatch-legend svelte-1gu5mnn");
 		},
 		m(target, anchor) {
 			insert(target, div, anchor);
@@ -22984,7 +22907,7 @@ function create_if_block_3(ctx) {
 	};
 }
 
-// (68:0) {#if chartOpen && clickedPoint}
+// (67:0) {#if chartOpen && clickedPoint}
 function create_if_block_1(ctx) {
 	let snowlinechart;
 	let updating_tab;
@@ -23047,7 +22970,7 @@ function create_if_block_1(ctx) {
 	};
 }
 
-// (79:0) {#if infoOpen}
+// (78:0) {#if infoOpen}
 function create_if_block(ctx) {
 	let div16;
 	let div15;
@@ -23072,18 +22995,18 @@ function create_if_block(ctx) {
 			button.textContent = "×";
 			t3 = space();
 			div14 = element("div");
-			div14.innerHTML = `<div class="svelte-1raysdx"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1raysdx"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1raysdx"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1raysdx"><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, freezing rain and unresolved type. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1raysdx"><b>Unresolved type:</b> a slate-coloured area means precipitation is forecast but atmospheric detail does not support a specific type. It is not dry weather. Type labels marked “possible” flag borderline diagnostics; no label is a calibrated probability.</div> <div class="svelte-1raysdx"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1raysdx"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1raysdx"><b>Thermal snowline:</b> the wet-bulb zero level is an atmospheric proxy, not an exact rain/snow boundary. Values are rounded to 100 m (500 ft); this is display precision, not a validated error range. A value extrapolated below the lowest profile level is withheld.</div> <div class="svelte-1raysdx"><b>Next wintry period:</b> estimated timing and snowfall through +144 h. An unresolved type cannot establish a dry or non-wintry outlook.</div> <div class="svelte-1raysdx"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. Snowfall amounts are withheld where wet-period type is unresolved and displayed with coarse rounding, not uncertainty bounds. Remaining ground snow and wind–terrain exposure are excluded from the user interface because those experimental estimates are uncalibrated.</div> <div class="svelte-1raysdx"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1raysdx"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1raysdx">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
+			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Estimated types:</b> colours and icons show the estimated physical precipitation type. Limited-detail and borderline point labels say “possible”. This is model guidance, not a calibrated probability. If the profile cannot be classified, no type colour or icon is invented.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>Thermal snowline:</b> the wet-bulb zero level is an atmospheric proxy, not an exact rain/snow boundary. Values are rounded to 100 m (500 ft); this is display precision, not a validated error range. A value extrapolated below the lowest profile level is withheld.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> estimated timing and snowfall through +144 h. Limited atmospheric detail cannot establish a dry or non-wintry outlook.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. Snowfall amounts are withheld where wet-period atmospheric detail is insufficient and displayed with coarse rounding, not uncertainty bounds. Remaining ground snow and wind–terrain exposure are excluded from the user interface because those experimental estimates are uncalibrated.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close information");
 			attr(button, "title", "Close");
-			attr(button, "class", "svelte-1raysdx");
-			attr(div0, "class", "info-head svelte-1raysdx");
-			attr(div14, "class", "info-body svelte-1raysdx");
-			attr(div15, "class", "info-window svelte-1raysdx");
+			attr(button, "class", "svelte-1gu5mnn");
+			attr(div0, "class", "info-head svelte-1gu5mnn");
+			attr(div14, "class", "info-body svelte-1gu5mnn");
+			attr(div15, "class", "info-window svelte-1gu5mnn");
 			attr(div15, "role", "dialog");
 			attr(div15, "aria-modal", "true");
 			attr(div15, "aria-label", "How Wintry forecast works");
-			attr(div16, "class", "info-overlay svelte-1raysdx");
+			attr(div16, "class", "info-overlay svelte-1gu5mnn");
 			attr(div16, "role", "presentation");
 		},
 		m(target, anchor) {
@@ -24470,7 +24393,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			detail = `<div class="snowline-valid">${shortValid(clickedPoint.times[index])}</div><div class="snowline-label-grid">${metricTile('Terrain', formatElevation(clickedMapElevationM, unitSystem), 'metric-terrain')}${metricTile('Avg precip', formatPrecip(precip, unitSystem), '')}</div><div class="forecast-quality">${reason}</div>${event}`;
 		}
 
-		if (phase?.key === 'uncertain') detail += '<div class="forecast-quality">Insufficient atmospheric detail for a specific type</div>';
+		if (phase?.confidence === 'low') detail += '<div class="forecast-quality">Limited atmospheric detail · type is approximate</div>';
 
 		const main = phase
 		? `${phase.icon} ${precipitationLabel(phase).toUpperCase()}`
@@ -25045,8 +24968,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			['Ice pellets', 'ice-pellets'],
 			['Snow', 'snow'],
 			['Wet snow', 'wet-snow'],
-			['Rain/snow mix', 'mix'],
-			['Type unresolved', 'uncertain']
+			['Rain/snow mix', 'mix']
 		];
 
 		const columns = width < 600 ? 2 : 3,

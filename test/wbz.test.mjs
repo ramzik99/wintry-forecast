@@ -253,7 +253,7 @@ test('missing precipitation and unknown wet phase are never labelled dry',()=>{
   assert.equal(conditionLabel(null,null),'Precipitation unavailable');
   assert.equal(conditionLabel(NaN,null),'Precipitation unavailable');
   assert.equal(conditionLabel(0,null),'Dry');
-  assert.equal(conditionLabel(2,null),'Precipitation · type uncertain');
+  assert.equal(conditionLabel(2,null),'Precipitation type unavailable');
   assert.equal(conditionLabel(2,{label:'Snow'}),'Snow');
 });
 

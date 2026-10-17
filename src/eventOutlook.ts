@@ -63,7 +63,7 @@ export function nextWintryEvent(
     const precip = series.amounts[i];
     if (!isPrecipitating(precip)) continue;
     const phase = series.thermalPhases[i];
-    if (!phase || !WINTRY_KEYS.has(phase.key)) continue;
+    if (!phase || phase.confidence === 'low' || !WINTRY_KEYS.has(phase.key)) continue;
     const hours = Math.max(0, Math.min(horizonEnd, intervalEnd) - Math.max(fromTime, times[i])) / 3600_000;
     if (hours > 0) qualifying.push({ index: i, time: times[i], precip, phase, liquidMm: precip * hours / 3 });
   }
@@ -106,7 +106,7 @@ export function nextWintryEvent(
   const following = last.index + 1;
   const boundaryKnown = endTime >= horizonEnd || (following < times.length && times[following] === endTime &&
     series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) ||
-      (series.thermalPhases[following] !== null && series.thermalPhases[following]?.key !== 'uncertain')) &&
+      (series.thermalPhases[following] !== null && series.thermalPhases[following]?.confidence !== 'low')) &&
     supportedIntervalEnd(times,following,series.sourcePeriods) > endTime);
 
   return {
