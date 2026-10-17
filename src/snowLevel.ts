@@ -13,6 +13,8 @@ export interface ProfilePoint {
   tempC: number;
   dewpointC: number;
   wetBulbC: number;
+  /** Fraction of horizontal interpolation weight with a valid above-model-ground level. */
+  spatialSupport?: number;
 }
 
 export interface SnowLevelResult {

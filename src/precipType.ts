@@ -54,6 +54,7 @@ function interpolateAtHeight(a: ProfilePoint, b: ProfilePoint, heightM: number):
     tempC: lerp(a.tempC, b.tempC),
     dewpointC: lerp(a.dewpointC, b.dewpointC),
     wetBulbC: lerp(a.wetBulbC, b.wetBulbC),
+    spatialSupport: Math.min(a.spatialSupport ?? 1,b.spatialSupport ?? 1),
   };
 }
 
@@ -112,7 +113,7 @@ function integrateSigned(points: ProfilePoint[], sign: 'positive' | 'negative', 
 }
 
 function classifyConfidence(points: ProfilePoint[], extrapolated: boolean, warmDM: number, coldDM: number): TerrainPrecipConfidence {
-  if (extrapolated) return 'low';
+  if (extrapolated || points.some(p => (p.spatialSupport ?? 1) < 1 - 1e-8)) return 'low';
   let maxGap = 0;
   for (let i = 1; i < points.length; i++) maxGap = Math.max(maxGap, points[i].heightM - points[i - 1].heightM);
   if (maxGap > 1400) return 'low';
