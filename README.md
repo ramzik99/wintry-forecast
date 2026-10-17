@@ -1,13 +1,14 @@
 # Wintry forecast for Windy
 
-**Release candidate 1000.1.2** — terrain-aware winter-weather guidance from sampled
+**Release candidate 1000.1.3** — terrain-aware winter-weather guidance from sampled
 ECMWF profiles and local terrain. Six physical types are displayed; limited-detail point diagnoses are qualified
 with “possible”, while unsupported snow amounts remain unavailable. Independent forecast-skill validation
 is still required; this is not a calibrated high-confidence forecast.
 
 ## Use
 
-Enable the plugin, search for a place or select a point on the map. The point card
+Opening/enabling the plugin selects Windy's **Precipitation type** layer. You can
+choose another background afterward. Search for a place or select a map point. The point card
 shows the diagnosed precipitation type, terrain, estimated snowline and average
 precipitation. **Forecast** opens the timeline; **Sounding** keeps the atmospheric
 profile available without crowding the map controls.
@@ -16,6 +17,8 @@ profile available without crowding the map controls.
 - **Shading:** six physical precipitation types in their existing Windy colours.
   No extra unresolved-type colour or question-mark icon. Missing/unclassifiable
   profiles remain blank rather than receiving an invented type.
+  Warm levels available in valley columns are retained when neighbouring mountain
+  columns mask them; partial horizontal support remains a limited-detail estimate.
 - **Icons:** precipitation symbols and ECMWF forecast lightning.
 - Shading and icons become available from zoom level 8; contours are independent.
 - Search, saved locations, metric/imperial units and image export are retained.
@@ -62,18 +65,18 @@ usable. Windy's background and forecast lightning manage their loads separately.
   are not calibrated probabilities. Wider gaps may reduce coverage in this version.
 
 See [method, equations and scientific limits](METHODS.md),
-[release notes](RELEASE_1000_1_2.md) and [release history](docs/RELEASE_HISTORY.md).
+[release notes](RELEASE_1000_1_3.md) and [release history](docs/RELEASE_HISTORY.md).
 
 ## Development and publication
 
 Node.js 24; `npm install`, `npm test`, `npm run build`. Built files are in `dist`.
 The package and plugin configuration must contain the same three-part version.
 GitHub runs tests/build checks; publication uses the existing manual
-`publish-plugin` workflow. The published predecessor is 1000.1.1; 1000.1.2 remains
+`publish-plugin` workflow. The published predecessor is 1000.1.2; 1000.1.3 remains
 a candidate until the production merge and manual publication are completed.
 
 [Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Published 1000.1.1](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.1/plugin.min.js)
+[Published 1000.1.2](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.2/plugin.min.js)
 
 ## Sources and licences
 

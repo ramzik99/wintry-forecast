@@ -1,6 +1,6 @@
 const __pluginConfig =  {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.1.2",
+  "version": "1000.1.3",
   "icon": "❄️",
   "title": "Wintry forecast",
   "description": "Terrain-aware precipitation-type guidance with six physical types, qualified limited-detail estimates, ECMWF precipitation, approximate snowfall, forecast/sounding views and prepared-map MP4 export.",
@@ -10,8 +10,8 @@ const __pluginConfig =  {
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1792221437640,
-  "builtReadable": "2026-10-17T07:17:17.640Z"
+  "built": 1792226525865,
+  "builtReadable": "2026-10-17T08:42:05.865Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -2116,7 +2116,7 @@ class PlaceSearch extends SvelteComponent {
 
 const config = {
     name: 'windy-plugin-snowline-map-100m',
-    version: '1000.1.2'};
+    version: '1000.1.3'};
 
 const UNITS_STORAGE_KEY = 'wintry:units:v1';
 function loadUnitSystem() {
@@ -2825,7 +2825,8 @@ function interpolateAtHeight(a, b, heightM) {
         heightM,
         tempC: lerp(a.tempC, b.tempC),
         dewpointC: lerp(a.dewpointC, b.dewpointC),
-        wetBulbC: lerp(a.wetBulbC, b.wetBulbC)
+        wetBulbC: lerp(a.wetBulbC, b.wetBulbC),
+        spatialSupport: Math.min(a.spatialSupport ?? 1, b.spatialSupport ?? 1)
     };
 }
 function terrainProfile(profile, terrainM) {
@@ -2883,7 +2884,7 @@ function integrateSigned(points, sign, ceilingM = Infinity) {
     return sum;
 }
 function classifyConfidence(points, extrapolated, warmDM, coldDM) {
-    if (extrapolated) return 'low';
+    if (extrapolated || points.some((p)=>(p.spatialSupport ?? 1) < 1 - 1e-8)) return 'low';
     let maxGap = 0;
     for(let i = 1; i < points.length; i++)maxGap = Math.max(maxGap, points[i].heightM - points[i - 1].heightM);
     if (maxGap > 1400) return 'low';
@@ -8824,27 +8825,61 @@ function weightedScalar(values, read) {
         return n === null || !Number.isFinite(n) ? null : n > 0 ? 1 : 0;
     });
 }
-/** Interpolate continuous T/Td/height by pressure, then calculate Tw; never mix categorical colours. */ function blendedProfile(values, wetBulb) {
+// Each source profile is reused by thousands of raster pixels. Index its levels
+// once, without retaining old forecasts after their profile arrays are released.
+const profileLevels = new WeakMap();
+function indexedProfile(profile) {
+    let index = profileLevels.get(profile);
+    if (!index) {
+        index = new Map(profile.map((p)=>[
+                p.level,
+                p
+            ]));
+        profileLevels.set(profile, index);
+    }
+    return index;
+}
+/** Interpolate available above-model-ground samples at each pressure, then solve Tw.
+ * A high-terrain corner must not discard the valid lower-air levels from every
+ * valley corner. Partial support is tracked for conservative detail flags. Entire
+ * missing columns are not bridged; no below-ground field is reconstructed.
+ */ function blendedProfile(values, wetBulb) {
+    if (!values.length || values.some((v)=>!v.value.length)) return [];
     if (values.length === 1) return values[0].value;
     const result = [];
-    for (const first of values[0].value){
-        let temp = 0, dew = 0, height = 0, complete = true;
-        for (const v of values){
-            const p = v.value.find((p)=>p.level === first.level);
-            if (!p) {
-                complete = false;
-                break;
-            }
+    const columns = values.map((v)=>({
+            weight: v.weight,
+            levels: indexedProfile(v.value)
+        }));
+    const levels = new Map();
+    for (const column of columns)for (const [level, p] of column.levels)levels.set(level, p);
+    const total = values.reduce((sum, v)=>sum + v.weight, 0);
+    for (const first of levels.values()){
+        let temp = 0, dew = 0, height = 0, support = 0;
+        for (const v of columns){
+            const p = v.levels.get(first.level);
+            if (!p || ![
+                p.tempC,
+                p.dewpointC,
+                p.heightM
+            ].every(Number.isFinite)) continue;
+            support += v.weight;
             temp += v.weight * p.tempC;
             dew += v.weight * p.dewpointC;
             height += v.weight * p.heightM;
         }
-        if (complete) result.push({
+        if (support <= 1e-10 || total <= 0) continue;
+        temp /= support;
+        dew = Math.min(temp, dew / support);
+        height /= support;
+        const tw = wetBulb(temp, dew, first.pressureHpa);
+        if (Number.isFinite(tw)) result.push({
             ...first,
             tempC: temp,
-            dewpointC: Math.min(temp, dew),
+            dewpointC: dew,
             heightM: height,
-            wetBulbC: wetBulb(temp, Math.min(temp, dew), first.pressureHpa)
+            wetBulbC: tw,
+            spatialSupport: support / total
         });
     }
     return result.sort((a, b)=>a.heightM - b.heightM);
@@ -21725,7 +21760,7 @@ function create_else_block(ctx) {
 	let if_block4 = /*clickedPoint*/ ctx[24] && create_if_block_11(ctx);
 
 	function v21panel_unitSystem_binding(value) {
-		/*v21panel_unitSystem_binding*/ ctx[55](value);
+		/*v21panel_unitSystem_binding*/ ctx[56](value);
 	}
 
 	let v21panel_props = { activeRunTime: /*activeRunTime*/ ctx[27] };
@@ -21935,18 +21970,18 @@ function create_else_block(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "click", /*click_handler_1*/ ctx[47]),
-					listen(button1, "click", /*click_handler_2*/ ctx[48]),
-					listen(input0, "change", /*input0_change_handler*/ ctx[49]),
+					listen(button0, "click", /*click_handler_1*/ ctx[48]),
+					listen(button1, "click", /*click_handler_2*/ ctx[49]),
+					listen(input0, "change", /*input0_change_handler*/ ctx[50]),
 					listen(input0, "change", /*toggleEnabled*/ ctx[38]),
-					listen(input1, "change", /*input1_change_handler*/ ctx[50]),
+					listen(input1, "change", /*input1_change_handler*/ ctx[51]),
 					listen(input1, "change", /*toggleMapLayers*/ ctx[37]),
-					listen(input2, "change", /*input2_change_handler*/ ctx[51]),
+					listen(input2, "change", /*input2_change_handler*/ ctx[52]),
 					listen(input2, "change", /*toggleMapLayers*/ ctx[37]),
-					listen(input3, "change", /*input3_change_handler*/ ctx[52]),
+					listen(input3, "change", /*input3_change_handler*/ ctx[53]),
 					listen(input3, "change", /*toggleMapLayers*/ ctx[37]),
 					listen(button2, "click", /*refreshForecast*/ ctx[32]),
-					listen(button3, "click", /*click_handler_5*/ ctx[56])
+					listen(button3, "click", /*click_handler_5*/ ctx[57])
 				];
 
 				mounted = true;
@@ -22193,7 +22228,7 @@ function create_if_block_4(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*click_handler*/ ctx[46]);
+				dispose = listen(button, "click", /*click_handler*/ ctx[47]);
 				mounted = true;
 			}
 		},
@@ -22353,8 +22388,8 @@ function create_if_block_11(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "click", /*click_handler_3*/ ctx[53]),
-					listen(button1, "click", /*click_handler_4*/ ctx[54])
+					listen(button0, "click", /*click_handler_3*/ ctx[54]),
+					listen(button1, "click", /*click_handler_4*/ ctx[55])
 				];
 
 				mounted = true;
@@ -22748,7 +22783,7 @@ function create_if_block_2(ctx) {
 	precipitationlegend = new PrecipitationLegend({});
 
 	function v21panel_unitSystem_binding_1(value) {
-		/*v21panel_unitSystem_binding_1*/ ctx[58](value);
+		/*v21panel_unitSystem_binding_1*/ ctx[59](value);
 	}
 
 	let v21panel_props = {
@@ -22829,8 +22864,8 @@ function create_if_block_2(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button, "click", /*click_handler_6*/ ctx[57]),
-					listen(div6, "click", self$1(/*click_handler_7*/ ctx[59]))
+					listen(button, "click", /*click_handler_6*/ ctx[58]),
+					listen(div6, "click", self$1(/*click_handler_7*/ ctx[60]))
 				];
 
 				mounted = true;
@@ -22914,7 +22949,7 @@ function create_if_block_1(ctx) {
 	let current;
 
 	function snowlinechart_tab_binding(value) {
-		/*snowlinechart_tab_binding*/ ctx[60](value);
+		/*snowlinechart_tab_binding*/ ctx[61](value);
 	}
 
 	let snowlinechart_props = {
@@ -22930,7 +22965,7 @@ function create_if_block_1(ctx) {
 
 	snowlinechart = new SnowlineChart({ props: snowlinechart_props });
 	binding_callbacks.push(() => bind(snowlinechart, 'tab', snowlinechart_tab_binding));
-	snowlinechart.$on("close", /*close_handler*/ ctx[61]);
+	snowlinechart.$on("close", /*close_handler*/ ctx[62]);
 
 	return {
 		c() {
@@ -22995,7 +23030,7 @@ function create_if_block(ctx) {
 			button.textContent = "×";
 			t3 = space();
 			div14 = element("div");
-			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Estimated types:</b> colours and icons show the estimated physical precipitation type. Limited-detail and borderline point labels say “possible”. This is model guidance, not a calibrated probability. If the profile cannot be classified, no type colour or icon is invented.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>Thermal snowline:</b> the wet-bulb zero level is an atmospheric proxy, not an exact rain/snow boundary. Values are rounded to 100 m (500 ft); this is display precision, not a validated error range. A value extrapolated below the lowest profile level is withheld.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> estimated timing and snowfall through +144 h. Limited atmospheric detail cannot establish a dry or non-wintry outlook.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. Snowfall amounts are withheld where wet-period atmospheric detail is insufficient and displayed with coarse rounding, not uncertainty bounds. Remaining ground snow and wind–terrain exposure are excluded from the user interface because those experimental estimates are uncalibrated.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
+			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. Opening or enabling the plugin selects Windy&#39;s Precipitation type layer; you can then choose another background. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Above-model-ground pressure levels available from some neighbouring columns are retained with renormalized weights and a limited-detail flag, rather than discarding warm valley air because a mountain corner lacks those levels. This is an approximate spatial estimate, not restored observations. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Entire missing columns and missing precipitation remain unavailable. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Estimated types:</b> colours and icons show the estimated physical precipitation type. Limited-detail and borderline point labels say “possible”. This is model guidance, not a calibrated probability. If the profile cannot be classified, no type colour or icon is invented.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>Thermal snowline:</b> the wet-bulb zero level is an atmospheric proxy, not an exact rain/snow boundary. Values are rounded to 100 m (500 ft); this is display precision, not a validated error range. A value extrapolated below the lowest profile level is withheld.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> estimated timing and snowfall through +144 h. Limited atmospheric detail cannot establish a dry or non-wintry outlook.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. Snowfall amounts are withheld where wet-period atmospheric detail is insufficient and displayed with coarse rounding, not uncertainty bounds. Remaining ground snow and wind–terrain exposure are excluded from the user interface because those experimental estimates are uncalibrated.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close information");
 			attr(button, "title", "Close");
@@ -23021,8 +23056,8 @@ function create_if_block(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button, "click", /*click_handler_8*/ ctx[62]),
-					listen(div16, "click", self$1(/*click_handler_9*/ ctx[63]))
+					listen(button, "click", /*click_handler_8*/ ctx[63]),
+					listen(div16, "click", self$1(/*click_handler_9*/ ctx[64]))
 				];
 
 				mounted = true;
@@ -23722,7 +23757,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		refreshQueued = false;
 		const my = ++generation;
-		$$invalidate(41, weatherLoadProgress = 0);
+		$$invalidate(42, weatherLoadProgress = 0);
 		$$invalidate(10, viewportLoading = true);
 		const { points, rows, cols } = buildViewportPoints();
 		const progressive = Array.from({ length: rows }, () => Array(cols).fill(null));
@@ -23759,7 +23794,7 @@ function instance$1($$self, $$props, $$invalidate) {
 					}
 				}
 
-				if (my === generation) $$invalidate(41, weatherLoadProgress = ++settled / points.length);
+				if (my === generation) $$invalidate(42, weatherLoadProgress = ++settled / points.length);
 				return { ...p, result };
 			});
 
@@ -25124,12 +25159,12 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (terrainKey !== terrainJobKey) {
 			terrainJobKey = terrainKey;
 			const epoch = ++terrainGeneration;
-			$$invalidate(42, terrainLoadProgress = 0);
+			$$invalidate(43, terrainLoadProgress = 0);
 			$$invalidate(4, terrainLoading = true);
 			$$invalidate(13, terrainDetailStatus = '');
 
 			void terrainTiles.ensure(b, z, () => epoch === terrainGeneration && enabled && !destroyed, (done, total) => {
-				$$invalidate(42, terrainLoadProgress = total ? done / total : 1);
+				$$invalidate(43, terrainLoadProgress = total ? done / total : 1);
 				terrainRevision++;
 				frameCache.clear();
 				queueRasterPaint();
@@ -25143,7 +25178,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		const key = phaseFrameKey(target);
 
 		if (key !== pendingPhaseKey) {
-			$$invalidate(43, rasterLoadProgress = 0);
+			$$invalidate(44, rasterLoadProgress = 0);
 			rasterEpoch++;
 			pendingPhaseKey = key;
 
@@ -25228,7 +25263,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			geographyMasks = [];
 
 		const preparationEpoch = prepareGeneration;
-		if (!background) $$invalidate(43, rasterLoadProgress = 0);
+		if (!background) $$invalidate(44, rasterLoadProgress = 0);
 		const obsolete = () => epoch !== rasterEpoch || destroyed || !enabled || preparation && preparationEpoch !== prepareGeneration || background && !preparation && mainKey !== phaseFrameKey(getStoreTimestamp());
 
 		const record = {
@@ -25331,7 +25366,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 					for (let y = 0; y < RASTER_SAMPLES; y++) {
 						if (y > 0 && y % 12 === 0) {
-							if (!background) $$invalidate(43, rasterLoadProgress = .9 * (paintedTiles + y / RASTER_SAMPLES) / tiles.length);
+							if (!background) $$invalidate(44, rasterLoadProgress = .9 * (paintedTiles + y / RASTER_SAMPLES) / tiles.length);
 							await new Promise(resolve => setTimeout(resolve, 0));
 
 							if (obsolete()) {
@@ -25382,7 +25417,7 @@ function instance$1($$self, $$props, $$invalidate) {
 					}
 
 					paintedTiles++;
-					if (!background) $$invalidate(43, rasterLoadProgress = .9 * paintedTiles / tiles.length);
+					if (!background) $$invalidate(44, rasterLoadProgress = .9 * paintedTiles / tiles.length);
 					await new Promise(resolve => setTimeout(resolve, 0));
 				}
 			}
@@ -25421,7 +25456,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				return;
 			}
 
-			if (!background) $$invalidate(43, rasterLoadProgress = 1);
+			if (!background) $$invalidate(44, rasterLoadProgress = 1);
 			record.fallback = fallback;
 			record.bytes = geographyMasks.length * TILE_SIZE * TILE_SIZE * 8 + iconLayer.getLayers().length * 4096;
 
@@ -25512,7 +25547,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		clearStorms();
 		stormKey = key;
 		const epoch = stormEpoch, abort = stormAbort = new AbortController();
-		$$invalidate(44, stormLoadProgress = 0);
+		$$invalidate(45, stormLoadProgress = 0);
 		$$invalidate(5, stormLoading = true);
 		$$invalidate(12, stormStatus = '⚡ Forecast lightning');
 		const tiles = new Map();
@@ -25591,7 +25626,7 @@ function instance$1($$self, $$props, $$invalidate) {
 						})
 					}).addTo(next);
 				} finally {
-					if (epoch === stormEpoch && !abort.signal.aborted) $$invalidate(44, stormLoadProgress = ++processed / points.length);
+					if (epoch === stormEpoch && !abort.signal.aborted) $$invalidate(45, stormLoadProgress = ++processed / points.length);
 				}
 			});
 
@@ -25787,7 +25822,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		}
 
 		$$invalidate(11, unitSystem = loadUnitSystem());
-		$$invalidate(45, prefsReady = true);
+		$$invalidate(46, prefsReady = true);
 	}
 
 	function persistPreferences() {
@@ -25816,6 +25851,10 @@ function instance$1($$self, $$props, $$invalidate) {
 	}
 
 	let lastNavigationKey = '';
+
+	function activatePrecipitationLayer() {
+		if (enabled && store.get('overlay') !== 'ptype') store.set('overlay', 'ptype');
+	}
 
 	function handleMapNavigation() {
 		const size = map.getSize(),
@@ -25849,6 +25888,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		lastNavigationKey = '';
 
 		if (enabled) {
+			activatePrecipitationLayer();
 			register(config.name, 'high');
 			void renderStorms();
 			refreshViewport();
@@ -25877,6 +25917,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	onMount(() => {
 		loadPreferences();
+		activatePrecipitationLayer();
 		if (!enabled) release(config.name, 'high');
 		freshnessTimer = setInterval(checkAutomaticRefresh, 30_000);
 		document.addEventListener('visibilitychange', checkAutomaticRefresh);
@@ -25994,7 +26035,7 @@ function instance$1($$self, $$props, $$invalidate) {
 	const click_handler_9 = () => $$invalidate(20, infoOpen = false);
 
 	$$self.$$.update = () => {
-		if ($$self.$$.dirty[0] & /*viewportLoading, precipDetailAvailable, showShading, showIcons, terrainLoading, rasterLoading, stormLoading*/ 1150 | $$self.$$.dirty[1] & /*weatherLoadProgress, terrainLoadProgress, rasterLoadProgress, stormLoadProgress*/ 15360) {
+		if ($$self.$$.dirty[0] & /*viewportLoading, precipDetailAvailable, showShading, showIcons, terrainLoading, rasterLoading, stormLoading*/ 1150 | $$self.$$.dirty[1] & /*weatherLoadProgress, terrainLoadProgress, rasterLoadProgress, stormLoadProgress*/ 30720) {
 			$$invalidate(31, layerLoadPercent = Math.max(0, Math.min(99, Math.floor(100 * (.35 * (viewportLoading ? weatherLoadProgress : 1) + (precipDetailAvailable && (showShading || showIcons)
 			? .15 * (terrainLoading ? terrainLoadProgress : 1) + .4 * (rasterLoading ? rasterLoadProgress : 1)
 			: 0) + (precipDetailAvailable && showIcons
@@ -26004,13 +26045,13 @@ function instance$1($$self, $$props, $$invalidate) {
 			: 0) + (precipDetailAvailable && showIcons ? .1 : 0))))));
 		}
 
-		if ($$self.$$.dirty[0] & /*enabled, panelHidden, forecastTab, showContours, showShading, showIcons*/ 903 | $$self.$$.dirty[1] & /*prefsReady*/ 16384) {
+		if ($$self.$$.dirty[0] & /*enabled, panelHidden, forecastTab, showContours, showShading, showIcons*/ 903 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
 			if (prefsReady) {
 				persistPreferences();
 			}
 		}
 
-		if ($$self.$$.dirty[0] & /*unitSystem*/ 2048 | $$self.$$.dirty[1] & /*prefsReady*/ 16384) {
+		if ($$self.$$.dirty[0] & /*unitSystem*/ 2048 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
 			if (prefsReady) {
 				refreshUnitDependentUi();
 			}
@@ -26059,6 +26100,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		toggleEnabled,
 		isEnabled,
 		selectMapPoint,
+		activatePrecipitationLayer,
 		weatherLoadProgress,
 		terrainLoadProgress,
 		rasterLoadProgress,
@@ -26088,7 +26130,21 @@ function instance$1($$self, $$props, $$invalidate) {
 class Plugin extends SvelteComponent {
 	constructor(options) {
 		super();
-		init(this, options, instance$1, create_fragment$1, safe_not_equal, { isEnabled: 39, selectMapPoint: 40 }, add_css, [-1, -1, -1, -1, -1, -1]);
+
+		init(
+			this,
+			options,
+			instance$1,
+			create_fragment$1,
+			safe_not_equal,
+			{
+				isEnabled: 39,
+				selectMapPoint: 40,
+				activatePrecipitationLayer: 41
+			},
+			add_css,
+			[-1, -1, -1, -1, -1, -1]
+		);
 	}
 
 	get isEnabled() {
@@ -26097,6 +26153,10 @@ class Plugin extends SvelteComponent {
 
 	get selectMapPoint() {
 		return this.$$.ctx[40];
+	}
+
+	get activatePrecipitationLayer() {
+		return this.$$.ctx[41];
 	}
 }
 
@@ -26155,6 +26215,7 @@ function instance($$self, $$props, $$invalidate) {
 	}
 
 	const onopen = params => {
+		plugin?.activatePrecipitationLayer?.();
 		selectLocation(params);
 	};
 

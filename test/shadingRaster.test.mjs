@@ -5,6 +5,7 @@ import ts from 'typescript';
 const compile=name=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(readFileSync(new URL(`../src/${name}.ts`,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
 const rasterURL=compile('shadingRaster');
 const {weatherInterpolator,weightedScalar,wetCoverage,blendedProfile,tileLocation,tilePosition,visibleRasterTiles,viewportRasterZoom,RASTER_SAMPLES}=await import(rasterURL);
+const {supportedPrecipitationType}=await import(compile('precipType'));
 const terrainJS=ts.transpileModule(readFileSync(new URL('../src/terrainTiles.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace("'./shadingRaster'",JSON.stringify(rasterURL));
 const {decodeTerrarium,terrainTileZoom,TerrainTiles}=await import('data:text/javascript;base64,'+Buffer.from(terrainJS).toString('base64'));
 
@@ -30,10 +31,25 @@ test('wet coverage fades smoothly into dry cells and preserves unknown coverage'
   assert.equal(wetCoverage([{value:null,weight:1}],p=>p),null);
 });
 
-test('interpolate T/Td before Tw and retain only pressure levels shared by all corners',()=>{
+test('interpolate T/Td before Tw and qualify pressure levels with partial horizontal support',()=>{
   const p=(t,td,h,level='850h')=>({level,pressureHpa:850,heightM:h,tempC:t,dewpointC:td,wetBulbC:-99});
   const result=blendedProfile([{value:[p(2,1,1500),p(1,0,1000,'900h')],weight:.25},{value:[p(6,3,1700)],weight:.75}],(t,td)=>t+td);
-  assert.equal(result.length,1);assert.equal(result[0].tempC,5);assert.equal(result[0].dewpointC,2.5);assert.equal(result[0].heightM,1650);assert.equal(result[0].wetBulbC,7.5);
+  assert.equal(result.length,2);
+  const shared=result.find(p=>p.level==='850h'),partial=result.find(p=>p.level==='900h');
+  assert.equal(shared.tempC,5);assert.equal(shared.dewpointC,2.5);assert.equal(shared.heightM,1650);assert.equal(shared.wetBulbC,7.5);assert.equal(shared.spatialSupport,1);
+  assert.equal(partial.tempC,1);assert.equal(partial.spatialSupport,.25);
+});
+
+test('a mountain corner cannot erase the warm valley column and turn an entire wet cell into snow',()=>{
+  const p=(level,z,t)=>({level,pressureHpa:Number(level.slice(0,-1)),heightM:z,tempC:t,dewpointC:t,wetBulbC:t});
+  const upper=[p('400h',7000,-20),p('300h',9000,-35)];
+  const valley=[p('850h',1500,10),p('700h',3000,3),p('500h',5500,-10),...upper];
+  const corners=[{value:valley,weight:.75},{value:upper,weight:.25}];
+  const mixed=blendedProfile(corners,t=>t),rain=supportedPrecipitationType(mixed,2000);
+  assert.equal(rain.key,'rain');assert.equal(rain.confidence,'low');
+  assert.equal(supportedPrecipitationType(mixed,8000).key,'snow');
+  assert.deepEqual(blendedProfile([...corners].reverse(),t=>t),mixed);
+  assert.deepEqual(blendedProfile([{value:valley,weight:.75},{value:[],weight:.25}],t=>t),[]);
 });
 test('raster tiles are globally anchored and cover the date line without an oversized viewport grid',()=>{
   for(const z of [0,4,9,17]){const p=tilePosition(32,182,z),a=tileLocation(p.x,p.y,z);assert.ok(Math.abs(a.lat-32)<1e-10);assert.ok(Math.abs(a.lon-182)<1e-10);}

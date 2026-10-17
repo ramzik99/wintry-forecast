@@ -41,14 +41,39 @@ export function weightedScalar<T>(values:Weighted<T>[],read:(p:T)=>number|null){
 /** Fractional wet coverage softens wet/dry edges without blending phase colours or intensity bands. */
 export function wetCoverage<T>(values:Weighted<T>[],read:(p:T)=>number|null){return weightedScalar(values,p=>{const n=read(p);return n===null||!Number.isFinite(n)?null:n>0?1:0;});}
 
-/** Interpolate continuous T/Td/height by pressure, then calculate Tw; never mix categorical colours. */
+// Each source profile is reused by thousands of raster pixels. Index its levels
+// once, without retaining old forecasts after their profile arrays are released.
+const profileLevels=new WeakMap<ProfilePoint[],Map<ProfilePoint['level'],ProfilePoint>>();
+function indexedProfile(profile:ProfilePoint[]){
+  let index=profileLevels.get(profile);
+  if(!index){index=new Map(profile.map(p=>[p.level,p]));profileLevels.set(profile,index);}
+  return index;
+}
+
+/** Interpolate available above-model-ground samples at each pressure, then solve Tw.
+ * A high-terrain corner must not discard the valid lower-air levels from every
+ * valley corner. Partial support is tracked for conservative detail flags. Entire
+ * missing columns are not bridged; no below-ground field is reconstructed.
+ */
 export function blendedProfile(values:Weighted<ProfilePoint[]>[],wetBulb:(t:number,td:number,p:number)=>number):ProfilePoint[]{
+  if(!values.length||values.some(v=>!v.value.length))return [];
   if(values.length===1)return values[0].value;
   const result:ProfilePoint[]=[];
-  for(const first of values[0].value){
-    let temp=0,dew=0,height=0,complete=true;
-    for(const v of values){const p=v.value.find(p=>p.level===first.level);if(!p){complete=false;break;}temp+=v.weight*p.tempC;dew+=v.weight*p.dewpointC;height+=v.weight*p.heightM;}
-    if(complete)result.push({...first,tempC:temp,dewpointC:Math.min(temp,dew),heightM:height,wetBulbC:wetBulb(temp,Math.min(temp,dew),first.pressureHpa)});
+  const columns=values.map(v=>({weight:v.weight,levels:indexedProfile(v.value)}));
+  const levels=new Map<ProfilePoint['level'],ProfilePoint>();
+  for(const column of columns)for(const [level,p] of column.levels)levels.set(level,p);
+  const total=values.reduce((sum,v)=>sum+v.weight,0);
+  for(const first of levels.values()){
+    let temp=0,dew=0,height=0,support=0;
+    for(const v of columns){
+      const p=v.levels.get(first.level);
+      if(!p||![p.tempC,p.dewpointC,p.heightM].every(Number.isFinite))continue;
+      support+=v.weight;temp+=v.weight*p.tempC;dew+=v.weight*p.dewpointC;height+=v.weight*p.heightM;
+    }
+    if(support<=1e-10||total<=0)continue;
+    temp/=support;dew=Math.min(temp,dew/support);height/=support;
+    const tw=wetBulb(temp,dew,first.pressureHpa);
+    if(Number.isFinite(tw))result.push({...first,tempC:temp,dewpointC:dew,heightM:height,wetBulbC:tw,spatialSupport:support/total});
   }
   return result.sort((a,b)=>a.heightM-b.heightM);
 }

@@ -1,4 +1,4 @@
-# Method and interpretation — 1000.1.2 candidate
+# Method and interpretation — 1000.1.3 candidate
 
 ## What the product estimates
 
@@ -25,6 +25,18 @@ below model ground before diagnostics. This is separate from clipping the
 remaining atmospheric profile at the local site height. Missing model terrain
 does not justify inventing a ground mask. Below-profile site values remain
 approximations and retain the existing limited-detail warning.
+
+For map shading/icons, horizontal interpolation uses the union of valid pressure
+levels in the surrounding columns. At each level, T, Td and height are weighted
+over the available above-model-ground contributors and divided by their summed
+weight before solving Tw. Previously, requiring every corner to contain a level
+could remove warm valley air whenever one mountain corner masked that level;
+the surviving cold upper levels could then produce large rectangular snow areas.
+Partial horizontal support sets a low-detail flag in the analysed column. This
+is an approximate spatial interpolation across terrain-masked samples, not an
+independently validated recovery of valley temperatures. It does not reuse
+below-model-ground fields, bridge an entirely missing column, infer missing
+precipitation or change point-profile precipitation amounts.
 
 The classifier integrates positive and negative wet-bulb areas in **°C·m**.
 The plugin's thresholds are heuristic, not a verified implementation of the
