@@ -27,11 +27,11 @@ const sparsePoint=()=>({times:Array.from({length:9},(_,i)=>i*3*h),forecast:{
   'temp-850h':Array(9).fill(-5),'dewpoint-850h':Array(9).fill(-5),'gh-850h':Array(9).fill(1000),
   'temp-700h':Array(9).fill(-10),'dewpoint-700h':Array(9).fill(-10),'gh-700h':Array(9).fill(3000)}});
 
-test('sparse and below-profile public guidance abstains while retaining the raw research diagnosis',()=>{
+test('sparse and below-profile guidance shows a qualified physical type while withholding snow amounts',()=>{
   for(const [profile,z] of [[[node(1000,-5),node(3000,-10)],1000],[[node(1000,-5),node(1800,-10)],500]]){
     assert.equal(terrainPrecipitationType(profile,z).key,'snow');
     const guidance=supportedPrecipitationType(profile,z);
-    assert.equal(guidance.key,'uncertain');assert.equal(precipitationLabel(guidance),'Precipitation · type unresolved');
+    assert.equal(guidance.key,'snow');assert.equal(precipitationLabel(guidance),'Snow possible');
     assert.notEqual(conditionLabel(6,guidance),'Dry');assert.equal(snowfallInput(6,guidance,3),null);
   }
 });
@@ -45,17 +45,17 @@ test('a site exactly on a sampled level is not extrapolation, and supported cold
   assert.equal(borderline.confidence,'medium');assert.match(precipitationLabel(borderline),/possible$/);
 });
 
-test('unresolved wet phase withholds snow amounts without losing known liquid totals or implying no wintry weather',()=>{
+test('limited-detail wet phase withholds snow amounts without losing known liquid totals or implying no wintry weather',()=>{
   const point=sparsePoint(),series=buildSnowForecast(point,1000);
-  assert.equal(series.thermalPhases[0].key,'uncertain');assert.equal(series.prefix,0);
+  assert.equal(series.thermalPhases[0].key,'snow');assert.equal(series.thermalPhases[0].confidence,'low');assert.equal(series.prefix,0);
   assert.equal(snowForecastWindow(series,0,24*h).snowfallCm,null);
   assert.equal(precipitationAccumulation(point.times,series.amounts,0,24*h,series.sourcePeriods).mm,48);
   assert.equal(nextWintryEvent(point,1000,0),null);
-  assert.equal(noEventMessage(point,1000,0),'Wintry outlook uncertain · precipitation type unresolved');
+  assert.equal(noEventMessage(point,1000,0),'Limited atmospheric detail · wintry outlook unavailable');
   assert.equal(forecastCoverage([6],[series.thermalPhases[0]],[0]).complete,false);
 });
 
-test('an event is not merged across an unresolved wet interval or called complete at its boundary',()=>{
+test('an event is not merged across a limited-detail wet interval or called complete at its boundary',()=>{
   const point=sparsePoint(),n=point.times.length;
   point.forecast['temp-800h']=Array(n).fill(-7.5);point.forecast['dewpoint-800h']=Array(n).fill(-7.5);point.forecast['gh-800h']=Array(n).fill(2000);
   point.forecast['temp-800h'][1]=null;
@@ -72,9 +72,9 @@ test('all-cold extrapolated WBZ is not shown as a resolved numeric snowline; sno
   assert.equal(resolvedSnowlineM([node(0,2),node(5000,-2)]),null);
 });
 
-test('known precipitation with no usable profile remains unresolved, never a zero-snow forecast',()=>{
+test('known precipitation with no usable profile has no fabricated type or zero-snow forecast',()=>{
   const phase=supportedPrecipitationType([],1000);
-  assert.equal(phase.key,'uncertain');assert.equal(snowfallInput(6,phase,3),null);
+  assert.equal(phase,null);assert.equal(snowfallInput(6,phase,3),null);assert.equal(conditionLabel(6,phase),'Precipitation type unavailable');
   assert.equal(supportedPrecipitationType([],NaN),null);
 });
 
@@ -96,5 +96,5 @@ test('coarse estimates preserve positive traces and distinguish unknown values f
   assert.equal(formatSnow(.01,'metric'),'<1 cm');assert.equal(formatSnow(.7,'metric'),'<1 cm');
   assert.equal(formatSnow(7.4,'metric'),'≈ 7 cm');assert.equal(formatSnow(1,'imperial'),'<1 in');
   assert.equal(formatSnowline(2620,'metric'),'≈ 2600 m');assert.equal(formatSnowline(null,'metric'),'Unresolved');
-  assert.ok(!Object.entries(PRECIP_TYPE_COLOURS).some(([key,value])=>key!=='uncertain'&&value===PRECIP_TYPE_COLOURS.uncertain));
+  assert.deepEqual(Object.keys(PRECIP_TYPE_COLOURS).sort(),['freezing-rain','ice-pellets','mix','rain','snow','wet-snow']);
 });

@@ -6,8 +6,7 @@ export type TerrainPrecipTypeKey =
   | 'mix'
   | 'rain'
   | 'ice-pellets'
-  | 'freezing-rain'
-  | 'uncertain';
+  | 'freezing-rain';
 
 export type TerrainPrecipConfidence = 'high' | 'medium' | 'low';
 
@@ -24,21 +23,16 @@ export interface TerrainPrecipType {
 
 /** Internal detail flags are not calibrated probabilities of forecast accuracy. */
 export function precipitationLabel(phase: Pick<TerrainPrecipType, 'label' | 'confidence'>, confidence = phase.confidence): string {
-  if (phase.label === 'Precipitation · type unresolved') return phase.label;
   return confidence === 'low' || confidence === 'medium' ? `${phase.label} possible` : phase.label;
 }
 
-/** Public guidance withholds a specific phase when the profile-detail flag is low.
- * This abstention rule is a product guardrail, not evidence of calibrated skill.
- * Keep the raw classifier available for research and method regression checks.
+/** Show the estimated physical type, qualifying limited-detail diagnoses in labels.
+ * Snow amounts and event timing have separate detail checks. No extra category
+ * is fabricated when the atmospheric profile cannot be classified at all.
  */
 export function supportedPrecipitationType(profile: ProfilePoint[], terrainM: number): TerrainPrecipType | null {
   if (!Number.isFinite(terrainM)) return null;
-  const phase = terrainPrecipitationType(profile, terrainM);
-  if (phase && phase.confidence !== 'low') return phase;
-  return { surfaceWetBulbC: NaN, meltingDegreeMetres: NaN, refreezingDegreeMetres: NaN,
-    confidence: 'low', ...phase, key: 'uncertain', label: 'Precipitation · type unresolved', icon: '?',
-    detail: 'Insufficient vertical detail or site below the resolved profile; no specific type assigned' };
+  return terrainPrecipitationType(profile, terrainM);
 }
 
 const WARM_NODE_C = 0.2;

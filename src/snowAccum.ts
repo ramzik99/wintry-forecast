@@ -76,7 +76,7 @@ export function snowfallInput(precipMm3h: number | null, phase: TerrainPrecipTyp
   if (!Number.isFinite(hours) || hours <= 0 || hours > 3 || precipMm3h === null ||
     !Number.isFinite(precipMm3h) || precipMm3h < 0) return null;
   if (precipMm3h === 0) return { sweMm: 0, depthCm: 0 };
-  if (!phase || phase.key === 'uncertain' || phase.confidence === 'low' || !Number.isFinite(phase.surfaceWetBulbC)) return null;
+  if (!phase || phase.confidence === 'low' || !Number.isFinite(phase.surfaceWetBulbC)) return null;
   const fraction = snowFraction(phase), ratio = snowToLiquidRatio(phase);
   if (![fraction, ratio].every(Number.isFinite)) return null;
   const sweMm = precipMm3h * hours / 3 * fraction;

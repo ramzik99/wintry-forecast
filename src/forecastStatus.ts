@@ -9,7 +9,7 @@ export type ForecastPoint = { times: number[]; forecast: Record<string, unknown>
 export function conditionLabel(precip: number | null, phase: TerrainPrecipType | null): string {
   if (precip === null || !Number.isFinite(precip) || precip < 0) return 'Precipitation unavailable';
   if (precip === 0) return 'Dry';
-  return phase ? precipitationLabel(phase) : 'Precipitation · type uncertain';
+  return phase ? precipitationLabel(phase) : 'Precipitation type unavailable';
 }
 
 /** Absence of an event is only meaningful over intervals we could classify. */
@@ -30,8 +30,8 @@ export function noEventMessage(point: ForecastPoint, terrainM: number | null, fr
     if (intervalEnd <= fromTime) continue;
     const precip = precipMmAt(point.forecast, i);
     const phase = isPrecipitating(precip) ? supportedPrecipitationType(buildProfile(point.forecast, i), terrainM) : null;
-    if (start <= coveredUntil && isPrecipitating(precip) && phase?.key === 'uncertain') {
-      return 'Wintry outlook uncertain · precipitation type unresolved';
+    if (start <= coveredUntil && isPrecipitating(precip) && phase?.confidence === 'low') {
+      return 'Limited atmospheric detail · wintry outlook unavailable';
     }
     if (start > coveredUntil || intervalEnd <= start || precip === null ||
       (isPrecipitating(precip) && !phase)) {

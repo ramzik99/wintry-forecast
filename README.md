@@ -1,8 +1,8 @@
 # Wintry forecast for Windy
 
-**Release candidate 1000.1.1** — terrain-aware winter-weather guidance from sampled
-ECMWF profiles and local terrain. Specific types and snow amounts are withheld
-when atmospheric detail is insufficient. Independent forecast-skill validation
+**Release candidate 1000.1.2** — terrain-aware winter-weather guidance from sampled
+ECMWF profiles and local terrain. Six physical types are displayed; limited-detail point diagnoses are qualified
+with “possible”, while unsupported snow amounts remain unavailable. Independent forecast-skill validation
 is still required; this is not a calibrated high-confidence forecast.
 
 ## Use
@@ -13,8 +13,9 @@ precipitation. **Forecast** opens the timeline; **Sounding** keeps the atmospher
 profile available without crowding the map controls.
 
 - **Contours:** estimated snowline and dry-terrain hatching.
-- **Shading:** one fixed Windy colour per estimated type; slate means precipitation
-  with unresolved type. Missing precipitation stays blank.
+- **Shading:** six physical precipitation types in their existing Windy colours.
+  No extra unresolved-type colour or question-mark icon. Missing/unclassifiable
+  profiles remain blank rather than receiving an invented type.
 - **Icons:** precipitation symbols and ECMWF forecast lightning.
 - Shading and icons become available from zoom level 8; contours are independent.
 - Search, saved locations, metric/imperial units and image export are retained.
@@ -46,8 +47,8 @@ usable. Windy's background and forecast lightning manage their loads separately.
 - **Snowfall total** is estimated gross fresh snowfall. It does not decrease when
   later melt occurs and does not represent total snow already on the ground.
 - **Snowfall amounts** remain heuristic, are rounded to whole centimetres/inches
-  (positive sub-unit amounts use `<1`) and become unavailable across unresolved
-  wet intervals. Rounding is display precision, not a calibrated error range.
+  (positive sub-unit amounts use `<1`) and become unavailable across wet intervals
+  with insufficient atmospheric detail. Rounding is display precision, not a calibrated error range.
 - **Remaining ground snow and wind–terrain exposure** are removed from the user
   interface. Their experimental research functions remain in source.
 - **Thermal snowline** is a wet-bulb-zero proxy, rounded to 100 m / 500 ft. A
@@ -56,23 +57,23 @@ usable. Windy's background and forecast lightning manage their loads separately.
   precipitation-type boundary.
 - Fine terrain detail does not create a finer atmospheric forecast. The point
   precipitation feed can differ in coverage from Windy's native weather layer.
-- Phase rules and snow ratios need independent calibration. Low-detail diagnoses
-  become unresolved; borderline diagnoses use “possible”. Internal detail flags
+- Phase rules and snow ratios need independent calibration. Low-detail and
+  borderline point diagnoses use “possible”. Internal detail flags
   are not calibrated probabilities. Wider gaps may reduce coverage in this version.
 
 See [method, equations and scientific limits](METHODS.md),
-[release notes](RELEASE_1000_1_1.md) and [release history](docs/RELEASE_HISTORY.md).
+[release notes](RELEASE_1000_1_2.md) and [release history](docs/RELEASE_HISTORY.md).
 
 ## Development and publication
 
 Node.js 24; `npm install`, `npm test`, `npm run build`. Built files are in `dist`.
 The package and plugin configuration must contain the same three-part version.
 GitHub runs tests/build checks; publication uses the existing manual
-`publish-plugin` workflow. The published predecessor is 1000.1.0; 1000.1.1 remains
+`publish-plugin` workflow. The published predecessor is 1000.1.1; 1000.1.2 remains
 a candidate until the production merge and manual publication are completed.
 
 [Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Published 1000.1.0](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.0/plugin.min.js)
+[Published 1000.1.1](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.1/plugin.min.js)
 
 ## Sources and licences
 

@@ -1,4 +1,4 @@
-# Method and interpretation — 1000.1.1 candidate
+# Method and interpretation — 1000.1.2 candidate
 
 ## What the product estimates
 
@@ -34,19 +34,23 @@ methods are motivated by [Bourgouin (2000)](https://journals.ametsoc.org/view/jo
 
 ## Public guidance guardrails
 
-The raw research classifier remains available. The public path abstains from a
-specific type when the existing vertical-detail flag is low: the site requires
-downward extrapolation or analysis-level spacing exceeds 1400 m. A profile too
-short to classify also becomes unresolved when site terrain is known. Exactly
-matching the lowest sampled height is not extrapolation. Medium-detail/borderline
-types use “possible”; surface Tw within 0.2°C of a surface decision threshold also
-sets this flag. These are provisional engineering rules, not validated probabilities.
+The public map and point views use the classifier's six physical precipitation
+types. A low-detail diagnosis retains its estimated physical key and colour;
+point/forecast/sounding labels qualify it with “possible”. There is no seventh
+unresolved-type category, slate overlay, question-mark icon or exported legend
+entry. A profile too short to classify remains unavailable; no replacement type
+is invented. Exactly matching the lowest sampled height is not extrapolation.
 
-Known wet/unresolved samples receive a distinct slate map colour and question-mark
-icon. They cannot imply dry weather, a no-wintry-weather outlook, or zero snowfall.
-Liquid precipitation totals remain available if their own temporal coverage is
-complete. Snow totals become unavailable if any wet interval in the requested
-window has unresolved type. Events are not joined across unresolved intervals.
+The existing low-detail flag still applies to site extrapolation or analysis-level
+spacing above 1400 m. Medium-detail/borderline labels also say “possible”; surface
+Tw within 0.2°C of a surface threshold sets this flag. These provisional rules
+are not validated probabilities. Map colours alone do not encode these flags.
+
+Liquid totals remain available independently of type. Wet intervals with low
+detail or no classifiable profile cannot support snowfall totals, zero-snow
+claims or a no-wintry-weather outlook. Event timing still excludes low-detail
+intervals and events do not bridge them. The change restores estimated type
+display without removing quantitative guards.
 
 The displayed thermal snowline is the resolved atmospheric wet-bulb-zero proxy.
 Public views/contours omit all-cold-column extrapolations and zero crossings wider

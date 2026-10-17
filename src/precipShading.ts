@@ -4,7 +4,6 @@ import type { TerrainPrecipTypeKey } from './precipType';
 export const PRECIP_TYPE_COLOURS: Record<TerrainPrecipTypeKey, string> = {
   snow: '#b2b2b2', 'wet-snow': '#569456', mix: '#95a109',
   rain: '#0099b6', 'ice-pellets': '#510c0f', 'freezing-rain': '#900096',
-  uncertain: '#718096',
 };
 export const PRECIP_SHADES = [{ label: 'Precipitation', tone: 0 }] as const;
 export const PRECIP_SHADING_OPACITY = 1;
