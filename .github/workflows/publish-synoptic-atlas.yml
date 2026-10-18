@@ -1,0 +1,72 @@
+name: Publish Synoptic Atlas 1.2.0
+on:
+  push:
+    branches: [publish-synoptic-atlas-1.2.0]
+    paths: ['.github/workflows/publish-synoptic-atlas.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish-synoptic-atlas-1.2.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download the tested release
+        env:
+          RELEASE_BASE: https://cdn.jsdelivr.net/gh/ramzik99/jordan-dust-fog@6c629fa9d9a74c588a43a05bb0b9c5e6957311b0
+        run: |
+          set -euo pipefail
+          mkdir dist
+          curl -fsS --retry 3 "$RELEASE_BASE/synoptic-atlas.js" -o dist/plugin.js
+          curl -fsS --retry 3 "$RELEASE_BASE/synoptic-atlas.min.js" -o dist/plugin.min.js
+          curl -fsS --retry 3 "$RELEASE_BASE/synoptic-atlas.json" -o dist/plugin.json
+          curl -fsS --retry 3 "$RELEASE_BASE/package.json" -o dist/package.json
+      - name: Verify identity and prepare upload
+        run: |
+          node --input-type=module - <<'JS'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const config=JSON.parse(readFileSync('dist/plugin.json','utf8'));
+          const pkg=JSON.parse(readFileSync('dist/package.json','utf8'));
+          if(config.name!=='windy-plugin-synoptic-atlas'||config.title!=='Synoptic Atlas'||config.version!=='1.2.0'||pkg.name!==config.name||pkg.version!==config.version)throw Error('Unexpected release identity');
+          for(const file of ['plugin.js','plugin.min.js']) {
+            const body=readFileSync('dist/'+file,'utf8');
+            if(!body.includes('windy-plugin-synoptic-atlas')||body.length<10000)throw Error('Incomplete compiled plugin');
+          }
+          Object.assign(config,{private:false,repositoryName:'ramzik99/jordan-dust-fog',repositoryOwner:'ramzik99',commitSha:'64bde0f5bf8a5375e9d4df7261682d264b565ce6'});
+          writeFileSync('dist/plugin.json',JSON.stringify(config));
+          console.log('Verified Synoptic Atlas 1.2.0 from the successful desktop/mobile test build.');
+          JS
+          tar -C dist -cf synoptic-atlas-1.2.0.tar .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synoptic-atlas-1.2.0-release
+          path: synoptic-atlas-1.2.0.tar
+      - name: Publish Synoptic Atlas to Windy
+        env:
+          WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WINDY_API_KEY" ]; then
+            echo "::error::WINDY_API_KEY is not configured in the publishing repository."
+            exit 1
+          fi
+          curl --silent --show-error --fail-with-body --max-time 120 \
+            -X POST 'https://node.windy.com/plugins/v1.0/upload' \
+            -H "x-windy-api-key: ${WINDY_API_KEY}" \
+            -F "plugin_archive=@synoptic-atlas-1.2.0.tar" \
+            -o windy-publication.json
+          cat windy-publication.json
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat windy-publication.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synoptic-atlas-windy-response
+          path: windy-publication.json
+          if-no-files-found: ignore
