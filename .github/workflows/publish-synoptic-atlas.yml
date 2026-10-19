@@ -1,13 +1,13 @@
-name: Publish Synoptic Atlas 1.2.2
+name: Publish Synoptic Atlas 1.2.3
 on:
   push:
-    branches: [publish-synoptic-atlas-1.2.2]
+    branches: [publish-synoptic-atlas-1.2.3]
     paths: ['.github/workflows/publish-synoptic-atlas.yml']
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: publish-synoptic-atlas-1.2.2
+  group: publish-synoptic-atlas-1.2.3
   cancel-in-progress: false
 jobs:
   publish:
@@ -19,7 +19,7 @@ jobs:
           node-version: '22'
       - name: Download the tested release
         env:
-          RELEASE_BASE: https://cdn.jsdelivr.net/gh/ramzik99/jordan-dust-fog@489ba38a5482cf27e64356211acfe04fb5292a30
+          RELEASE_BASE: https://cdn.jsdelivr.net/gh/ramzik99/jordan-dust-fog@75ba20842ed4a83c21df3cc2e8a985513bfef5c1
         run: |
           set -euo pipefail
           mkdir dist
@@ -33,20 +33,20 @@ jobs:
           import {readFileSync,writeFileSync} from 'node:fs';
           const config=JSON.parse(readFileSync('dist/plugin.json','utf8'));
           const pkg=JSON.parse(readFileSync('dist/package.json','utf8'));
-          if(config.name!=='windy-plugin-synoptic-atlas'||config.title!=='Synoptic Atlas'||config.version!=='1.2.2'||pkg.name!==config.name||pkg.version!==config.version)throw Error('Unexpected release identity');
+          if(config.name!=='windy-plugin-synoptic-atlas'||config.title!=='Synoptic Atlas'||config.version!=='1.2.3'||pkg.name!==config.name||pkg.version!==config.version)throw Error('Unexpected release identity');
           for(const file of ['plugin.js','plugin.min.js']) {
             const body=readFileSync('dist/'+file,'utf8');
             if(!body.includes('windy-plugin-synoptic-atlas')||body.length<10000)throw Error('Incomplete compiled plugin');
           }
-          Object.assign(config,{private:false,repositoryName:'ramzik99/jordan-dust-fog',repositoryOwner:'ramzik99',commitSha:'5592e38b8af9cce957dd486f5cbd286f9bd7810c'});
+          Object.assign(config,{private:false,repositoryName:'ramzik99/jordan-dust-fog',repositoryOwner:'ramzik99',commitSha:'63abbbc76a01fba63d41fffe5c9e128be905f1f6'});
           writeFileSync('dist/plugin.json',JSON.stringify(config));
-          console.log('Verified Synoptic Atlas 1.2.2 from the successful desktop/mobile test build.');
+          console.log('Verified Synoptic Atlas 1.2.3 from the successful desktop/mobile test build.');
           JS
-          tar -C dist -cf synoptic-atlas-1.2.2.tar .
+          tar -C dist -cf synoptic-atlas-1.2.3.tar .
       - uses: actions/upload-artifact@v4
         with:
-          name: synoptic-atlas-1.2.2-release
-          path: synoptic-atlas-1.2.2.tar
+          name: synoptic-atlas-1.2.3-release
+          path: synoptic-atlas-1.2.3.tar
       - name: Publish Synoptic Atlas to Windy
         env:
           WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
@@ -59,7 +59,7 @@ jobs:
           curl --silent --show-error --fail-with-body --max-time 120 \
             -X POST 'https://node.windy.com/plugins/v1.0/upload' \
             -H "x-windy-api-key: ${WINDY_API_KEY}" \
-            -F "plugin_archive=@synoptic-atlas-1.2.2.tar" \
+            -F "plugin_archive=@synoptic-atlas-1.2.3.tar" \
             -o windy-publication.json
           cat windy-publication.json
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
