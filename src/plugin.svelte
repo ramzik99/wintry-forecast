@@ -105,7 +105,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import PrecipitationLegend from './PrecipitationLegend.svelte';
-  import { map, layerOrder, getMapTiles } from '@windy/map';
+  import { map, getMapTiles } from '@windy/map';
   import store from '@windy/store';
   import { createFullRenderingParams, getDataZoom } from '@windy/renderUtils';
   import { TileLayerInterpolator } from '@windy/tileInterpolator';
@@ -121,7 +121,7 @@
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
   import { weatherInterpolator, weightedScalar, blendedProfile, rasterSampleLocation, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles, terrainTileZoom } from './terrainTiles';
-  import { precipRasterLayer, terrainBackgroundLayer, terrainMapTemplate, PRECIP_RASTER_OPACITY } from './precipRasterLayer';
+  import { precipRasterLayer, terrainMapTemplate, PRECIP_RASTER_OPACITY } from './precipRasterLayer';
   import { GeographicTiles } from './geographicTiles';
   import { buildProfile, wetBulbZeroHeight, resolvedSnowlineM, wetBulbFromDewpoint } from './snowLevel';
   import { precipMmAt, precipMmAtTime, isPrecipitating } from './precip';
@@ -164,7 +164,7 @@
   let stormInterpolator:any=null;
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
   let shadingLayer:any=null, precipIconLayer:any=null;
-  let terrainBackground:any=null,terrainBackgroundKey='',mapStyleListener:any=null;
+  let terrainBackground:any=null,terrainBackgroundKey='',backgroundEpoch=0,mapStyleListener:any=null;
   const terrainTiles=new TerrainTiles();
   let terrainComplete=false;
   let terrainDetailStatus='', rasterEpoch=0, rasterTarget:number|null=null, rasterTimer:ReturnType<typeof setTimeout>|null=null;
@@ -514,7 +514,7 @@
   function restorePreparedFrame(record:StoredFrame):RasterFrame{
     const shading=L.layerGroup(),icons=L.layerGroup();
     const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
-    for(const t of record.tiles)precipRasterLayer(L,t.url,t.nw,t.se,layerOrder?.BASE_MAP??400,PRECIP_PANE).addTo(shading);
+    for(const t of record.tiles)precipRasterLayer(L,t.url,t.nw,t.se,PRECIP_PANE).addTo(shading);
     for(const s of record.symbols)L.marker([s.lat,s.lon],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html:s.html,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(icons);
     return {shading,icons,fallback:record.fallback,bytes:record.bytes,record};
   }
@@ -676,7 +676,10 @@
       frameCache.delete(oldest);
     }
   }
-  function applyFrame(key:string,frame:RasterFrame){
+  async function applyFrame(key:string,frame:RasterFrame){
+    const ready=await Promise.all(frame.shading.getLayers().map((layer:any)=>layer.ready??true));
+    if(destroyed||!enabled||key!==phaseFrameKey(getStoreTimestamp()))return;
+    if(ready.some(value=>!value)){rasterLoading=false;terrainDetailStatus='Shading image unavailable · retry refresh';return;}
     const previous=[shadingLayer,precipIconLayer];
     frame.shading.addTo(map);if(showIcons)frame.icons.addTo(map);
     shadingLayer=frame.shading;precipIconLayer=showIcons?frame.icons:null;activePhaseKey=key;pendingPhaseKey=key;
@@ -696,17 +699,32 @@
     rasterTimer=setTimeout(()=>{rasterTimer=null;void paintShading(getStoreTimestamp());},80);
   }
   function clearTerrainBackground(){
-    if(terrainBackground)try{map.removeLayer(terrainBackground)}catch{}
+    backgroundEpoch++;if(terrainBackground)try{map.removeLayer(terrainBackground)}catch{}
     terrainBackground=null;terrainBackgroundKey='';
   }
-  function syncTerrainBackground(){
+  async function syncTerrainBackground(){
     if(!enabled||!showShading||!precipDetailAvailable){clearTerrainBackground();return;}
-    const tiles=typeof getMapTiles==='function'?getMapTiles():{};
-    const url=terrainMapTemplate(tiles as any,String(store.get('map')??'sznmap'));
-    if(url===terrainBackgroundKey&&terrainBackground)return;
+    const tiles=typeof getMapTiles==='function'?getMapTiles():{},b=currentBounds(),z=rasterZoom();
+    const template=terrainMapTemplate(tiles as any,String(store.get('map')??'sznmap'));
+    const key=JSON.stringify([template,z,b]);if(key===terrainBackgroundKey)return;
+    terrainBackgroundKey=key;const epoch=++backgroundEpoch,next=L.layerGroup();
     const pane=map.getPane('wintry-terrain-background')||map.createPane('wintry-terrain-background');pane.style.zIndex='389';pane.style.pointerEvents='none';
-    const next=terrainBackgroundLayer(L,url,layerOrder?.BASE_MAP??400,'wintry-terrain-background').addTo(map);
-    clearTerrainBackground();terrainBackground=next;terrainBackgroundKey=url;
+    const current=()=>epoch===backgroundEpoch&&!destroyed&&enabled&&showShading&&precipDetailAvailable;
+    try{
+      await mapLimit(visibleRasterTiles(b,z),4,async tile=>{
+        if(!current())return;
+        const n=2**z,url=template.replace('{z}',String(z)).replace('{x}',String(((tile.x%n)+n)%n)).replace('{y}',String(tile.y));
+        const image=await geographicTiles.get(url);if(!current())return;
+        const nw=tileLocation(tile.x,tile.y,z),se=tileLocation(tile.x+1,tile.y+1,z);
+        const copy=image.cloneNode() as HTMLImageElement;await copy.decode();if(!current())return;
+        L.imageOverlay(copy,[[se.lat,nw.lon],[nw.lat,se.lon]],{pane:'wintry-terrain-background',interactive:false,opacity:1,className:'wintry-terrain-tile'}).addTo(next);
+      });
+      if(!current()){next.clearLayers();return;}
+      next.addTo(map);const previous=terrainBackground;terrainBackground=next;
+      if(previous)map.removeLayer(previous);
+    }catch(error){
+      next.clearLayers();if(current()){terrainBackgroundKey='';console.warn('Wintry terrain background could not load',error);}
+    }
   }
   function renderPrecipitation(target:number){
     syncTerrainBackground();
@@ -783,7 +801,7 @@
             ctx.putImageData(image,0,0);const full=document.createElement('canvas');full.width=TILE_SIZE;full.height=TILE_SIZE;const fc=full.getContext('2d');
             if(fc){fc.imageSmoothingEnabled=false;fc.drawImage(canvas,0,0,TILE_SIZE,TILE_SIZE);const nw=tileLocation(tile.x,tile.y,z),se=tileLocation(tile.x+1,tile.y+1,z);
               const url=full.toDataURL('image/png');record.tiles.push({url,nw,se});
-              precipRasterLayer(L,url,nw,se,layerOrder?.BASE_MAP??400,PRECIP_PANE).addTo(next);}
+              precipRasterLayer(L,url,nw,se,PRECIP_PANE).addTo(next);}
           }
           paintedTiles++;if(!background)rasterLoadProgress=.9*paintedTiles/tiles.length;
           // Yield between small tiles so dragging and the forecast controls stay responsive.
