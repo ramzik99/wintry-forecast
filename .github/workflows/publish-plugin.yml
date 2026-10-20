@@ -2,6 +2,9 @@ name: publish-plugin
 
 on:
   workflow_dispatch:
+  push:
+    branches: [publish-wintry-forecast-1000.1.5]
+    paths: ['.github/workflows/publish-plugin.yml']
 
 jobs:
   publish-plugin:
@@ -10,6 +13,8 @@ jobs:
       WINDY_API_KEY: '${{ secrets.WINDY_API_KEY }}'
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: 5e8b4fb288b7d0cd5ffaab8ba455e8b7f9b132c6
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -44,7 +49,7 @@ jobs:
 
           cd dist
           echo "Creating plugin archive..."
-          echo "{\"repositoryName\": \"${{ github.repository }}\", \"commitSha\": \"${{ github.sha }}\", \"repositoryOwner\": \"${{ github.repository_owner }}\"}" > /tmp/plugin-info.json
+          echo "{\"repositoryName\": \"${{ github.repository }}\", \"commitSha\": \"5e8b4fb288b7d0cd5ffaab8ba455e8b7f9b132c6\", \"repositoryOwner\": \"${{ github.repository_owner }}\"}" > /tmp/plugin-info.json
           mv plugin.json /tmp/plugin.json
           jq -s '.[0] * .[1]' /tmp/plugin.json /tmp/plugin-info.json > plugin.json
           tar --exclude='*.map' -cf ../plugin.tar .
