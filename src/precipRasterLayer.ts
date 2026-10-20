@@ -1,4 +1,11 @@
-export const PRECIP_RASTER_OPACITY=.55;
+export const PRECIP_RASTER_OPACITY=1;
+export const PRECIP_RASTER_BLEND='color' as const;
+/** Keep weather hues opaque while retaining the existing map's light and shade. */
+export function precipitationPane(map:any,name:string){
+  const pane=map.getPane(name)||map.createPane(name);
+  pane.style.zIndex='390';pane.style.pointerEvents='none';pane.style.mixBlendMode=PRECIP_RASTER_BLEND;
+  return pane;
+}
 export function terrainMapTemplate(tiles:Record<string,string>,kind:string){
   return tiles[kind]??tiles.sznmap??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
 }

@@ -84,7 +84,7 @@
       <div class="info-body">
         <div><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div>
         <div><b>Download MP4:</b> renders and encodes the visible area one frame at a time through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer and lightning are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Video export keeps one raster frame at a time and does not store the full animation on disk. A download link is available if the automatic download is blocked.</div>
-        <div><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, and freezing rain. Each precipitation type retains its legend hue over your selected Windy layer. Translucency keeps the underlying Windy weather and map visible. Wet/dry edges fade between surrounding forecast samples to avoid grid-shaped borders; this edge opacity is not an intensity scale or a probability. No decorative terrain brightness or hatching is added; numerical amounts remain in point forecasts. Opening or enabling the plugin selects Windy's Precipitation type layer. Translucent plugin shading sits above it while terrain remains visible underneath. Contours, markers and the Windy interface remain above the shading. You can choose another Windy layer while the plugin is open. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Above-model-ground pressure levels available from some neighbouring columns are retained with renormalized weights and a limited-detail flag, rather than discarding warm valley air because a mountain corner lacks those levels. This is an approximate spatial estimate, not restored observations. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Entire missing columns and missing precipitation remain unavailable. Contours, shading and icons can be hidden independently. Icons are optional and off by default; the switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
+        <div><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, and freezing rain. Each precipitation type retains its legend hue over your selected Windy layer. Full-opacity type colours use colour blending to retain the underlying map's light and shade. Wet/dry edges fade between surrounding forecast samples to avoid grid-shaped borders; this edge opacity is not an intensity scale or a probability. No decorative terrain brightness or hatching is added; numerical amounts remain in point forecasts. Opening or enabling the plugin selects Windy's Precipitation type layer. Full-opacity plugin shading sits above it, using colour blending so the underlying terrain relief remains visible. Contours, markers and the Windy interface remain above the shading. You can choose another Windy layer while the plugin is open. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Above-model-ground pressure levels available from some neighbouring columns are retained with renormalized weights and a limited-detail flag, rather than discarding warm valley air because a mountain corner lacks those levels. This is an approximate spatial estimate, not restored observations. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Entire missing columns and missing precipitation remain unavailable. Contours, shading and icons can be hidden independently. Icons are optional and off by default; the switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Estimated types:</b> colours and icons show the estimated physical precipitation type. Limited-detail and borderline point labels say “possible”. This is model guidance, not a calibrated probability. If the profile cannot be classified, no type colour or icon is invented.</div>
         <div><b>Elevation data:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div>
         <details><summary>Terrain data credits</summary>
@@ -121,7 +121,7 @@
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
   import { weatherInterpolator, weightedScalar, wetCoverage, blendedProfile, rasterSampleLocation, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles, terrainTileZoom } from './terrainTiles';
-  import { precipRasterLayer, terrainMapTemplate, PRECIP_RASTER_OPACITY } from './precipRasterLayer';
+  import { precipRasterLayer, terrainMapTemplate, precipitationPane, PRECIP_RASTER_OPACITY, PRECIP_RASTER_BLEND } from './precipRasterLayer';
   import { GeographicTiles } from './geographicTiles';
   import { buildProfile, wetBulbZeroHeight, resolvedSnowlineM, wetBulbFromDewpoint } from './snowLevel';
   import { precipMmAt, precipMmAtTime, isPrecipitating } from './precip';
@@ -514,7 +514,7 @@
   function resetMapPreparation(){cancelMapPreparation();preparedKeys.clear();preparedReadKey='';prepareMessage='';}
   function restorePreparedFrame(record:StoredFrame):RasterFrame{
     const shading=L.layerGroup(),icons=L.layerGroup();
-    const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
+    precipitationPane(map,PRECIP_PANE);
     for(const t of record.tiles)precipRasterLayer(L,t.url,t.nw,t.se,PRECIP_PANE).addTo(shading);
     for(const s of record.symbols)L.marker([s.lat,s.lon],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html:s.html,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(icons);
     return {shading,icons,fallback:record.fallback,bytes:record.bytes,record};
@@ -606,9 +606,9 @@
         ctx.drawImage(base,0,header*sy);
         ctx.save();ctx.setTransform(sx,0,0,sy,0,header*sy);
         ctx.beginPath();ctx.rect(0,0,size.x,size.y);ctx.clip();
-        ctx.imageSmoothingEnabled=false;ctx.globalAlpha=PRECIP_RASTER_OPACITY;
+        ctx.imageSmoothingEnabled=false;ctx.globalAlpha=PRECIP_RASTER_OPACITY;ctx.globalCompositeOperation=PRECIP_RASTER_BLEND;
         for(const tile of record.tiles){const image=await videoImage(tile.url,abort.signal);requireCurrent();drawTile(ctx,image,tile);}
-        ctx.globalAlpha=1;ctx.imageSmoothingEnabled=true;
+        ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.imageSmoothingEnabled=true;
         if(showContours)drawVideoContours(ctx,time);
         if(showIcons)for(const symbol of record.symbols){
           const svg=symbol.html.match(/<svg[\s\S]*<\/svg>/)?.[0];if(!svg)continue;
@@ -703,7 +703,7 @@
   function renderPrecipitation(target:number){
     
     if(!precipDetailAvailable||(!showShading&&!showIcons)){clearShading();return;}
-    const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
+    precipitationPane(map,PRECIP_PANE);
     rasterTarget=target;
     const b=currentBounds(),z=rasterZoom(),terrainKey=[z,b.south,b.north,b.west,b.east].join(':');
     if(terrainKey!==terrainJobKey){

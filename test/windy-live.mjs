@@ -33,36 +33,40 @@ async function mount(){
  assert.equal(await page.locator('.wintry-terrain-tile').count(),0,'Plugin must not cover Windy with an extra base map');
  assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype','Opening must select Windy precipitation type');
 }
-async function colour(x,y){
+async function colour(x,y,blend=null){
  const png=await page.screenshot({clip:{x,y,width:12,height:12}});
- return page.evaluate(async data=>{
+ return page.evaluate(async ({data,blend})=>{
   const img=new Image();img.src='data:image/png;base64,'+data;await img.decode();
   const c=document.createElement('canvas');c.width=c.height=12;const ctx=c.getContext('2d');ctx.drawImage(img,0,0);
+  if(blend){ctx.globalCompositeOperation='color';ctx.fillStyle=blend;ctx.fillRect(0,0,12,12);}
   const rgba=ctx.getImageData(0,0,12,12).data,sum=[0,0,0];
   for(let i=0;i<rgba.length;i+=4)for(let j=0;j<3;j++)sum[j]+=rgba[i+j]/144;
   return sum;
- },png.toString('base64'));
+ },{data:png.toString('base64'),blend});
 }
 try{
  await loadWindy();await page.screenshot({path:'test-output/windy-background.png'});
  // Verify actual visible colours, including at close zoom; layer existence cannot catch black textures.
  await page.evaluate(async url=>{
-  const {precipRasterLayer}=await import(url),m=W.map.map,b=m.getBounds(),c=document.createElement('canvas');c.width=c.height=256;
+  const {precipRasterLayer,precipitationPane}=await import(url),m=W.map.map,b=m.getBounds(),c=document.createElement('canvas');c.width=c.height=256;
   const ctx=c.getContext('2d');ctx.fillStyle='#00c6ff';ctx.fillRect(0,0,128,256);
-  m.createPane('wintry-test-shading').style.zIndex='390';
+  precipitationPane(m,'wintry-test-shading');
   window.testRaster=precipRasterLayer(L,c.toDataURL(),{lat:b.getNorth(),lon:b.getWest()},{lat:b.getSouth(),lon:b.getEast()},'wintry-test-shading');
   await testRaster.ready;
  },rasterURL);
  for(const zoom of [9,12]){
   await page.evaluate(z=>W.map.map.setZoom(z,{animate:false}),zoom);await page.waitForTimeout(3000);
-  const before=await colour(600,500);
+  const before=await colour(600,500),expected=await colour(600,500,'#00c6ff');
   await page.evaluate(()=>testRaster.addTo(W.map.map));await page.waitForTimeout(100);
-  const after=await colour(600,500),expected=before.map((v,i)=>v*.45+[0,198,255][i]*.55);
-  assert.ok(after.every((v,i)=>Math.abs(v-expected[i])<32),JSON.stringify({zoom,before,after,expected}));
+  const after=await colour(600,500);
+  assert.equal(await page.evaluate(()=>testRaster.options.opacity),1);
+  const luminance=rgb=>rgb[0]*.3+rgb[1]*.59+rgb[2]*.11;
+  assert.ok(Math.abs(luminance(after)-luminance(before))<12,'Terrain light and shade must remain visible at full opacity');
+  assert.ok(after.every((v,i)=>Math.abs(v-expected[i])<12),JSON.stringify({zoom,before,after,expected}));
   await page.screenshot({path:'test-output/windy-raster-zoom-'+zoom+'.png'});
   await page.evaluate(()=>W.map.map.removeLayer(testRaster));
  }
- console.log('Visible shading colour and terrain blending passed at zoom 9 and 12.');
+ console.log('Full-opacity colour and retained terrain luminance passed at zoom 9 and 12.');
  await page.evaluate(()=>W.map.map.setView([46.5,10],9,{animate:false}));await page.waitForTimeout(1000);
  const wet=await page.evaluate(async({precipURL,timelineURL,selectedURL})=>{
   const {precipMmAt}=await import(precipURL),{buildForecastTimes}=await import(timelineURL),{loadSelectedPrecipFields,alignSelectedPrecipFields}=await import(selectedURL);
