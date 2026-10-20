@@ -33,40 +33,43 @@ async function mount(){
  assert.equal(await page.locator('.wintry-terrain-tile').count(),0,'Plugin must not cover Windy with an extra base map');
  assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype','Opening must select Windy precipitation type');
 }
-async function colour(x,y,blend=null){
+async function colour(x,y){
  const png=await page.screenshot({clip:{x,y,width:12,height:12}});
- return page.evaluate(async ({data,blend})=>{
+ return page.evaluate(async data=>{
   const img=new Image();img.src='data:image/png;base64,'+data;await img.decode();
   const c=document.createElement('canvas');c.width=c.height=12;const ctx=c.getContext('2d');ctx.drawImage(img,0,0);
-  if(blend){ctx.globalCompositeOperation='color';ctx.fillStyle=blend;ctx.fillRect(0,0,12,12);}
   const rgba=ctx.getImageData(0,0,12,12).data,sum=[0,0,0];
   for(let i=0;i<rgba.length;i+=4)for(let j=0;j<3;j++)sum[j]+=rgba[i+j]/144;
   return sum;
- },{data:png.toString('base64'),blend});
+ },png.toString('base64'));
 }
 try{
  await loadWindy();await page.screenshot({path:'test-output/windy-background.png'});
  // Verify actual visible colours, including at close zoom; layer existence cannot catch black textures.
  await page.evaluate(async url=>{
-  const {precipRasterLayer,precipitationPane}=await import(url),m=W.map.map,b=m.getBounds(),c=document.createElement('canvas');c.width=c.height=256;
+  const {precipRasterLayer,colourTerrainTile}=await import(url),m=W.map.map,b=m.getBounds(),c=document.createElement('canvas');c.width=c.height=256;
   const ctx=c.getContext('2d');ctx.fillStyle='#00c6ff';ctx.fillRect(0,0,128,256);
-  precipitationPane(m,'wintry-test-shading');
-  window.testRaster=precipRasterLayer(L,c.toDataURL(),{lat:b.getNorth(),lon:b.getWest()},{lat:b.getSouth(),lon:b.getEast()},'wintry-test-shading');
+  m.createPane('wintry-test-shading').style.zIndex='390';
+  const terrain=document.createElement('canvas');terrain.width=terrain.height=256;const tc=terrain.getContext('2d');
+  tc.fillStyle='#808080';tc.fillRect(0,0,256,256);tc.fillStyle='#404040';tc.fillRect(0,0,256,64);
+  const coloured=colourTerrainTile(c,terrain),cc=coloured.getContext('2d'),light=cc.getImageData(64,128,1,1).data,dark=cc.getImageData(64,32,1,1).data,clear=cc.getImageData(192,128,1,1).data;
+  const lum=p=>p[0]*.3+p[1]*.59+p[2]*.11;
+  if(light[3]!==255||dark[3]!==255||clear[3]!==0||Math.abs(lum(light)-128)>2||Math.abs(lum(dark)-64)>2)throw new Error('Opaque terrain composition must preserve luminance and dry gaps');
+  window.expectedRasterColour=[...light].slice(0,3);
+  window.testRaster=precipRasterLayer(L,coloured.toDataURL(),{lat:b.getNorth(),lon:b.getWest()},{lat:b.getSouth(),lon:b.getEast()},'wintry-test-shading');
   await testRaster.ready;
  },rasterURL);
  for(const zoom of [9,12]){
   await page.evaluate(z=>W.map.map.setZoom(z,{animate:false}),zoom);await page.waitForTimeout(3000);
-  const before=await colour(600,500),expected=await colour(600,500,'#00c6ff');
+  const before=await colour(600,500);
   await page.evaluate(()=>testRaster.addTo(W.map.map));await page.waitForTimeout(100);
-  const after=await colour(600,500);
+  const after=await colour(600,500),expected=await page.evaluate(()=>expectedRasterColour);
   assert.equal(await page.evaluate(()=>testRaster.options.opacity),1);
-  const luminance=rgb=>rgb[0]*.3+rgb[1]*.59+rgb[2]*.11;
-  assert.ok(Math.abs(luminance(after)-luminance(before))<12,'Terrain light and shade must remain visible at full opacity');
   assert.ok(after.every((v,i)=>Math.abs(v-expected[i])<12),JSON.stringify({zoom,before,after,expected}));
   await page.screenshot({path:'test-output/windy-raster-zoom-'+zoom+'.png'});
   await page.evaluate(()=>W.map.map.removeLayer(testRaster));
  }
- console.log('Full-opacity colour and retained terrain luminance passed at zoom 9 and 12.');
+ console.log('Full-opacity terrain-textured shading and dry-gap preservation passed at zoom 9 and 12.');
  await page.evaluate(()=>W.map.map.setView([46.5,10],9,{animate:false}));await page.waitForTimeout(1000);
  const wet=await page.evaluate(async({precipURL,timelineURL,selectedURL})=>{
   const {precipMmAt}=await import(precipURL),{buildForecastTimes}=await import(timelineURL),{loadSelectedPrecipFields,alignSelectedPrecipFields}=await import(selectedURL);

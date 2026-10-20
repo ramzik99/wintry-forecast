@@ -1,9 +1,9 @@
 export const PRECIP_RASTER_OPACITY=1;
-export const PRECIP_RASTER_BLEND='color' as const;
-/** Keep weather hues opaque while retaining the existing map's light and shade. */
+
+/** Geographic pane below contours and interface. */
 export function precipitationPane(map:any,name:string){
   const pane=map.getPane(name)||map.createPane(name);
-  pane.style.zIndex='390';pane.style.pointerEvents='none';pane.style.mixBlendMode=PRECIP_RASTER_BLEND;
+  pane.style.zIndex='390';pane.style.pointerEvents='none';
   return pane;
 }
 export function terrainMapTemplate(tiles:Record<string,string>,kind:string){
@@ -17,4 +17,14 @@ export function precipRasterLayer(L:any,url:string,nw:{lat:number;lon:number},se
   });
   layer.ready=image.decode().then(()=>true,()=>false);
   return layer;
+}
+
+/** Bake geographic luminance into full-opacity phase colours; preserve dry/missing alpha. */
+export function colourTerrainTile(phase:HTMLCanvasElement,terrain:CanvasImageSource){
+  const result=document.createElement('canvas');result.width=phase.width;result.height=phase.height;
+  const ctx=result.getContext('2d');if(!ctx)throw new Error('Canvas unavailable');
+  ctx.drawImage(terrain,0,0,result.width,result.height);
+  ctx.globalCompositeOperation='color';ctx.drawImage(phase,0,0);
+  ctx.globalCompositeOperation='destination-in';ctx.drawImage(phase,0,0);
+  ctx.globalCompositeOperation='source-over';return result;
 }

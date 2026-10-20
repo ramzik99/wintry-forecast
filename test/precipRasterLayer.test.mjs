@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const js=ts.transpileModule(readFileSync(new URL('../src/precipRasterLayer.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
-const {precipRasterLayer,terrainMapTemplate,PRECIP_RASTER_OPACITY,PRECIP_RASTER_BLEND,precipitationPane}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+const {precipRasterLayer,terrainMapTemplate,PRECIP_RASTER_OPACITY,precipitationPane}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
 test('categorical shading uses geographic image bounds and decodes before display without changing WebGL state',async()=>{
  const previousImage=globalThis.Image;globalThis.Image=class{decode(){return Promise.resolve()}};
  let args;const expected={};
@@ -24,6 +24,6 @@ test('full-opacity colour pane retains the underlying terrain luminance',()=>{
  const pane={style:{}};let created=0;
  const map={getPane:()=>created?pane:null,createPane:()=>{created++;return pane}};
  assert.equal(precipitationPane(map,'precip'),pane);assert.equal(precipitationPane(map,'precip'),pane);
- assert.equal(created,1);assert.equal(pane.style.mixBlendMode,PRECIP_RASTER_BLEND);
- assert.equal(PRECIP_RASTER_BLEND,'color');assert.equal(pane.style.zIndex,'390');assert.equal(pane.style.pointerEvents,'none');
+ assert.equal(created,1);assert.equal(pane.style.mixBlendMode,undefined);
+assert.equal(pane.style.zIndex,'390');assert.equal(pane.style.pointerEvents,'none');
 });
