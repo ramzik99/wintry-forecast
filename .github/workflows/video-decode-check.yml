@@ -12,7 +12,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wintry-shading-browser
-          run-id: 39432072363
+          run-id: 39433580152
           github-token: ${{ github.token }}
           path: frames
       - run: |
@@ -22,6 +22,10 @@ jobs:
           ffprobe -v error -show_entries stream=codec_name,width,height,nb_frames,duration -of json frames/wintry-live.mp4
           ffmpeg -hide_banner -loglevel error -i frames/wintry-live.mp4 -frames:v 1 frames/decoded-first.png
           ffmpeg -hide_banner -loglevel error -ss 14 -i frames/wintry-live.mp4 -frames:v 1 frames/decoded-middle.png
+      - name: Check every frame for black output
+        run: |
+          ffmpeg -hide_banner -i frames/wintry-live.mp4 -vf 'blackdetect=d=0.1:pix_th=0.02' -f null - 2> frames/decode.log
+          if grep -q 'black_start:' frames/decode.log; then cat frames/decode.log; exit 1; fi
       - uses: actions/upload-artifact@v4
         with:
           name: wintry-video-decoded
