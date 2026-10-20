@@ -24,8 +24,10 @@ async function settled(){
 }
 async function mount(){
  await page.evaluate(async url=>{
-  const host=document.createElement('div');host.id='windy-plugin-snowline-map-100m';document.body.append(host);
-  const mod=await import(url);window.wintryTest=new mod.default({target:host});
+  const mod=await import(url),config=mod.__pluginConfig;
+  const host=new W.ExternalSveltePlugin.ExternalSveltePlugin({ident:config.name},{...config,url});
+  W.plugins[config.name]=host;window.wintryHost=host;
+  await host.open({params:{},disableOpeningAnimation:true});window.wintryTest=host.svelteApp;
  },pluginURL);
  await settled();
  await page.waitForFunction(()=>document.querySelectorAll('.wintry-terrain-tile').length>0);
@@ -95,7 +97,8 @@ try{
  await page.locator('.layer-controls input').nth(1).check();await settled();
  await page.evaluate(t=>W.store.set('timestamp',t+3*3600000),wet.time);await settled();
  await page.evaluate(()=>W.map.map.panBy([100,40],{animate:false}));await page.waitForTimeout(800);await settled();
- await page.evaluate(()=>wintryTest.$destroy());
+ await page.evaluate(()=>wintryHost.close());
+ await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
  assert.equal(await page.locator('.wintry-raster-tile,.wintry-terrain-tile').count(),0);
  console.log('Desktop controls, graph, sounding, timeline, pan and cleanup passed.');
  page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'});
@@ -118,7 +121,8 @@ try{
   Object.assign(c.style,{position:'fixed',inset:'0',zIndex:999999,width:'100%',height:'auto'});document.body.append(c);
  },videoBytes.toString('base64'));
  await page.screenshot({path:'test-output/windy-mp4-first-frame.png'});
- await page.evaluate(()=>{document.querySelector('#download-preview').remove();wintryTest.$destroy()});
+ await page.evaluate(()=>{document.querySelector('#download-preview').remove();wintryHost.close()});
+ await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
  assert.equal(await page.locator('.wintry-raster-tile,.wintry-terrain-tile').count(),0);
  console.log('Actual mobile touch controls, complete MP4 download and cleanup passed.');
 }catch(error){
