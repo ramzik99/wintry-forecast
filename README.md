@@ -1,6 +1,6 @@
 # Wintry forecast for Windy
 
-**Published 1000.1.8** — terrain-aware winter-weather guidance from sampled
+**Published 1000.1.9** — terrain-aware winter-weather guidance from sampled
 ECMWF profiles and local terrain. Six physical types are displayed; limited-detail point diagnoses are qualified
 with “possible”, while unsupported snow amounts remain unavailable. Independent forecast-skill validation
 is still required; this is not a calibrated high-confidence forecast.
@@ -8,7 +8,7 @@ is still required; this is not a calibrated high-confidence forecast.
 ## Use
 
 Opening/enabling the plugin selects Windy's **Precipitation type** layer.
-Plugin shading uses 55% opacity to keep the underlying weather and terrain visible. Contours, markers
+Plugin shading uses **100% opacity with elevation relief**: the diagnosed phase supplies the colour, while slopes in the loaded elevation data supply label-free light and shade. Terrain relief stays visible without transparent type colours. Contours, markers
 and the Windy interface remain above it. No additional base-map overlay is added. Search for a place or select a map point. The point card
 shows the diagnosed precipitation type, terrain, estimated snowline and average
 precipitation. **Forecast** opens the timeline; **Sounding** keeps the atmospheric
@@ -16,9 +16,9 @@ profile available without crowding the map controls.
 
 - **Contours:** estimated snowline contours.
 - **Shading:** six physical precipitation types in their existing Windy colours.
-  Type hues stay fixed. Translucency keeps the underlying Windy layer visible, and wet/dry support fades at the edges to avoid hard grid-shaped borders.
+  Type hues stay categorical. Elevation-based hillshade is built into the opaque shading tiles, and wet/dry support fades at the edges to avoid hard grid-shaped borders. Displayed brightness follows the background; it is not precipitation intensity.
   Edge opacity is not an intensity scale or a probability. Windy's own weather and map supply the live background.
-  No decorative terrain brightness or hatching is applied.
+  Relief follows actual elevation slopes; it adds no extra place labels, roads or hatching.
   Weather and terrain inputs finish loading, and every image decodes, before the previous complete shading frame is replaced.
   Stale frames are discarded after navigation or settings changes.
   Elevation detail follows raster zoom, up to DEM zoom 14, while adapting large views to a 64-tile / 16 MiB cache.
@@ -40,7 +40,7 @@ through available forecast times up to 144 hours, and starts the download automa
 The full animation is not stored on disk, so it cannot hit the former 512 MB preparation limit.
 H.264 support is required; browsers without it retain optional timeline preparation.
 
-The video uses a geographic background with the same shading opacity and wet/dry edges as the map, plus enabled type
+The video uses a geographic background with the same opaque terrain-textured shading and wet/dry edges as the map, plus enabled type
 icons and snowline contours, timestamps and a colour legend. It excludes Windy's
 weather layer and forecast lightning. Five forecast hours
 correspond to one video second. The longest video dimension is bounded at 1280 px.
@@ -75,21 +75,21 @@ Geographic tiles and forecast lightning can load independently of the weather pr
   are not calibrated probabilities. Wider gaps may reduce coverage in this version.
 
 See [method, equations and scientific limits](METHODS.md),
-[release notes](RELEASE_1000_1_8.md) and [release history](docs/RELEASE_HISTORY.md).
+[release notes](RELEASE_1000_1_9.md) and [release history](docs/RELEASE_HISTORY.md).
 
 ## Development and publication
 
 Node.js 24; `npm install`, `npm test`, `npm run build`. Built files are in `dist`.
 The package and plugin configuration must contain the same three-part version.
-GitHub runs unit, build and browser MP4 checks. This release passed 117 unit tests and live Windy desktop / Android mobile-emulation checks,
+GitHub runs unit, build and browser MP4 checks. This release passed 119 unit tests and live Windy desktop / Android mobile-emulation checks,
 including normal clicks/taps, timeline changes, panning, point forecast and sounding views, layer cleanup and a complete MP4 download.
 The downloaded H.264 file was decoded independently with FFmpeg; all 142 available hourly frames passed the black-frame check.
-[Live checks and independent video decode](https://github.com/ramzik99/wintry-forecast/actions/runs/39438707442).
- Version 1000.1.8 was published from
-tested source using the isolated `publish-wintry-forecast-1000.1.8` publishing branch.
+[Live checks and independent video decode](https://github.com/ramzik99/wintry-forecast/actions/runs/39444765575).
+ Version 1000.1.9 was published from
+tested source using the isolated `publish-wintry-forecast-1000.1.9` publishing branch.
 
 [Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Published 1000.1.8](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.8/plugin.min.js)
+[Published 1000.1.9](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.9/plugin.min.js)
 
 ## Sources and licences
 
