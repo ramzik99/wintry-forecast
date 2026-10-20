@@ -1,7 +1,7 @@
 {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.1.11",
-  "description": "Terrain-aware precipitation-type guidance with six physical types, qualified limited-detail estimates, ECMWF precipitation totals, approximate snowfall, forecast/sounding views and prepared-map MP4 export.",
+  "version": "1000.1.12",
+  "description": "Precipitation type from melting and refreezing, with point forecasts, terrain shading and MP4 download.",
   "main": "dist/plugin.min.js",
   "type": "module",
   "scripts": {

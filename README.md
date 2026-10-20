@@ -4,7 +4,7 @@ A simple Windy plugin that estimates precipitation type from melting and refreez
 
 - Six types: snow, wet snow, rain/snow mix, rain, ice pellets and freezing rain.
 - Terrain remains visible in full-opacity precipitation shading; Windy's layers remain underneath.
-- Click a point for its type and selected time. Windy's timeline controls forecast time.
+- Click a point for its type and selected time. Choose Forecast for a precipitation chart and type timeline; select a forecast interval to update Windy's map. Windy's timeline controls forecast time.
 - On/off, search, refresh, information and MP4 download. No snowline contours, sounding, snowfall totals or event outlook.
 - Blank areas can be dry or unavailable. Missing profiles are never converted to a made-up type.
 

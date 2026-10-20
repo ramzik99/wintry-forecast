@@ -122,6 +122,22 @@ try{
  const label=await page.locator('.snowline-click-label').innerText();
  assert.ok(!/thermal snowline|limited atmospheric|snowfall|wintry period/i.test(label),label);
  await page.screenshot({path:'test-output/precip-type-point.png'});
+ await page.getByRole('button',{name:'Open point forecast',exact:true}).click();
+ const pointDialog=page.getByRole('dialog',{name:'Point forecast',exact:true});
+ await pointDialog.waitFor();
+ await pointDialog.getByRole('img',{name:'Precipitation amounts coloured by type'}).waitFor();
+ assert.ok(await pointDialog.locator('.forecast-rows button').count()>24);
+ assert.ok(!/thermal snowline|limited atmospheric|snowfall|wintry period/i.test(await pointDialog.innerText()));
+ const timeButton=pointDialog.locator('.forecast-rows button').nth(3);
+ const selectedTime=Number(await timeButton.getAttribute('data-time'));
+ await timeButton.click();
+ await page.waitForFunction(time=>W.store.get('timestamp')===time,selectedTime);
+ await settled();
+ assert.equal(await pointDialog.locator('.forecast-rows button[aria-pressed="true"]').count(),1);
+ await page.screenshot({path:'test-output/point-forecast-desktop.png'});
+ await page.getByRole('button',{name:'Close point forecast',exact:true}).click();
+ await pointDialog.waitFor({state:'detached'});
+
  await page.getByRole('button',{name:'Close precipitation type label',exact:true}).click();
  await page.evaluate(t=>W.store.set('timestamp',t+3*3600000),wet.time);await settled();
  await page.evaluate(()=>W.map.map.panBy([100,40],{animate:false}));await page.waitForTimeout(800);await settled();
@@ -135,6 +151,18 @@ try{
  await page.getByRole('button',{name:'Info',exact:true}).tap();
  await page.getByRole('button',{name:'Close information'}).tap();
  await page.screenshot({path:'test-output/windy-wintry-mobile.png'});
+ await page.evaluate(()=>wintryTest.onopen({lat:46.5,lon:10}));
+ await page.getByRole('button',{name:'Open point forecast',exact:true}).waitFor({timeout:45000});
+ await page.getByRole('button',{name:'Open point forecast',exact:true}).tap();
+ const mobileForecast=page.getByRole('dialog',{name:'Point forecast',exact:true});
+ await mobileForecast.waitFor();
+ const mobileBox=await mobileForecast.boundingBox();
+ assert.ok(mobileBox.x>=0&&mobileBox.x+mobileBox.width<=391&&mobileBox.y>=0&&mobileBox.y+mobileBox.height<=844);
+ await page.screenshot({path:'test-output/point-forecast-mobile.png'});
+ await page.getByRole('button',{name:'Close point forecast',exact:true}).tap();
+ await mobileForecast.waitFor({state:'detached'});
+ await page.getByRole('button',{name:'Close precipitation type label',exact:true}).tap();
+
  const downloadButton=page.getByRole('button',{name:'Download MP4',exact:true});
  await page.waitForFunction(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='Download MP4');return b&&!b.disabled;},null,{timeout:120000});
  const downloaded=page.waitForEvent('download',{timeout:600000});

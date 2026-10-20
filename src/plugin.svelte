@@ -48,8 +48,13 @@
   </div>
 {/if}
 
+{#if chartOpen && enabled && clickedLatLon}
+  <PointForecast point={clickedPoint} terrainM={clickedMapElevationM} placeName={clickedPlaceName || formatCoordinate(clickedLatLon[0],clickedLatLon[1])} loading={probeLoading} on:close={() => chartOpen = false} />
+{/if}
+
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import PointForecast from './PointForecast.svelte';
   import PrecipitationLegend from './PrecipitationLegend.svelte';
   import { map, getMapTiles } from '@windy/map';
   import store from '@windy/store';
@@ -251,7 +256,7 @@
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null;activePhaseKey=''}
   function clearShading(){reliefCache.clear();resetMapPreparation();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}terrainLoading=false;terrainDetailStatus='';terrainComplete=false;rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
-  function clearPointState(closeChart=true){placeAbort?.abort();placeAbort=null;clickGeneration++;probeLoading=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
+  function clearPointState(closeChart=true){if(closeChart)chartOpen=false;placeAbort?.abort();placeAbort=null;clickGeneration++;probeLoading=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function shortValid(t:number){return new Date(t).toLocaleString(undefined,{weekday:'short',hour:'2-digit',minute:'2-digit'})}
   function formatCoordinate(lat:number,lon:number){return`${Math.abs(lat).toFixed(4)}°${lat>=0?'N':'S'}, ${Math.abs(lon).toFixed(4)}°${lon>=0?'E':'W'}`}
   function formatLocal(t:number){return new Date(t).toLocaleString(undefined,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'})}
@@ -284,8 +289,8 @@
     clearClickLayer();clickLayer=L.layerGroup().addTo(map);
     const accent=phaseKey?(PRECIP_TYPE_COLOURS as Record<string,string>)[phaseKey]??'#dff5ff':'#dff5ff';
     L.marker([lat,lon],{interactive:false,keyboard:false,zIndexOffset:2100,icon:L.divIcon({className:'wintry-point-pointer',html:`<span style="--probe-accent:${accent}"></span>`,iconSize:[14,14],iconAnchor:[7,7]})}).addTo(clickLayer);
-    const marker=L.marker([lat,lon],{interactive:true,bubblingMouseEvents:false,zIndexOffset:2200,icon:L.divIcon({className:'snowline-click-label',html:`<span style="--probe-accent:${accent};--snowline-color:${accent}"><button class="snowline-label-close" type="button" aria-label="Close precipitation type label" title="Close">×</button><div class="snowline-point-place">${escapeLabelText(clickedPlaceName||formatCoordinate(lat,lon))}</div><small class="type-estimate">Estimated type</small><b>${escapeLabelText(mainText)}</b>${detailHtml}</span>`,iconSize:[0,0],iconAnchor:[0,0]})}).addTo(clickLayer);
-    marker.on('click',(event:any)=>{const original=event?.originalEvent;if(original?.target?.closest?.('.snowline-label-close')){try{L.DomEvent.stop(original)}catch{}clearPointState()}});
+    const marker=L.marker([lat,lon],{interactive:true,bubblingMouseEvents:false,zIndexOffset:2200,icon:L.divIcon({className:'snowline-click-label',html:`<span style="--probe-accent:${accent};--snowline-color:${accent}"><button class="snowline-label-close" type="button" aria-label="Close precipitation type label" title="Close">×</button><div class="snowline-point-place">${escapeLabelText(clickedPlaceName||formatCoordinate(lat,lon))}</div><small class="type-estimate">Estimated type</small><b>${escapeLabelText(mainText)}</b>${detailHtml}${clickedPoint?'<button class="point-forecast-open" type="button" aria-label="Open point forecast">Forecast</button>':''}</span>`,iconSize:[0,0],iconAnchor:[0,0]})}).addTo(clickLayer);
+    marker.on('click',(event:any)=>{const original=event?.originalEvent;if(original?.target?.closest?.('.point-forecast-open')){try{L.DomEvent.stop(original)}catch{}chartOpen=true;return}if(original?.target?.closest?.('.snowline-label-close')){try{L.DomEvent.stop(original)}catch{}clearPointState()}});
   }
   function updatePersistentClickLabel(){
     if(!enabled){clearClickLayer();return}
@@ -661,6 +666,8 @@
 </script>
 
 <style lang="less">
+  :global(.point-forecast-open){display:block;min-height:36px;margin:8px auto 0;padding:6px 14px;border:1px solid #547180;border-radius:6px;background:#213f50;color:#eaf5ff;font-size:12px;cursor:pointer}
+
   :global(.snowline-click-label>span>b){text-shadow:0 0 1px #fff}
   :global(.snowline-point-place){font-size:12px;line-height:1.3;font-weight:750;color:#d9e7ef;overflow-wrap:anywhere;max-height:3.9em;overflow:auto;padding:0 2px}
   :global(.wintry-point-pointer){background:transparent!important;border:0!important;pointer-events:none!important}:global(.wintry-point-pointer>span){display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #fff;border-radius:50%;background:var(--probe-accent,#fff);box-shadow:0 0 0 2px rgba(0,0,0,.55)}
