@@ -1,14 +1,14 @@
 # Wintry forecast for Windy
 
-**Published 1000.1.7** — terrain-aware winter-weather guidance from sampled
+**Published 1000.1.8** — terrain-aware winter-weather guidance from sampled
 ECMWF profiles and local terrain. Six physical types are displayed; limited-detail point diagnoses are qualified
 with “possible”, while unsupported snow amounts remain unavailable. Independent forecast-skill validation
 is still required; this is not a calibrated high-confidence forecast.
 
 ## Use
 
-Opening/enabling the plugin preserves your selected Windy weather layer.
-Windy weather stays beneath the translucent plugin shading. Contours, markers
+Opening/enabling the plugin selects Windy's **Precipitation type** layer.
+Plugin shading uses 55% opacity to keep the underlying weather and terrain visible. Contours, markers
 and the Windy interface remain above it. No additional base-map overlay is added. Search for a place or select a map point. The point card
 shows the diagnosed precipitation type, terrain, estimated snowline and average
 precipitation. **Forecast** opens the timeline; **Sounding** keeps the atmospheric
@@ -31,7 +31,7 @@ profile available without crowding the map controls.
 - Shading and icons become available from zoom level 8; contours are independent.
 - Search, saved locations, metric/imperial units and image export are retained.
 - Controls remain compact on desktop and mobile; forecast windows stay on screen
-  after resizing. Your selected Windy layer stays active when opening, enabling or closing the plugin.
+  after resizing. You can select a different Windy layer while the plugin is open; reopening or enabling selects Precipitation type again.
 
 ## Download MP4
 
@@ -75,7 +75,7 @@ Geographic tiles and forecast lightning can load independently of the weather pr
   are not calibrated probabilities. Wider gaps may reduce coverage in this version.
 
 See [method, equations and scientific limits](METHODS.md),
-[release notes](RELEASE_1000_1_7.md) and [release history](docs/RELEASE_HISTORY.md).
+[release notes](RELEASE_1000_1_8.md) and [release history](docs/RELEASE_HISTORY.md).
 
 ## Development and publication
 
@@ -84,12 +84,12 @@ The package and plugin configuration must contain the same three-part version.
 GitHub runs unit, build and browser MP4 checks. This release passed 117 unit tests and live Windy desktop / Android mobile-emulation checks,
 including normal clicks/taps, timeline changes, panning, point forecast and sounding views, layer cleanup and a complete MP4 download.
 The downloaded H.264 file was decoded independently with FFmpeg; all 142 available hourly frames passed the black-frame check.
-[Live checks and independent video decode](https://github.com/ramzik99/wintry-forecast/actions/runs/39436537745).
- Version 1000.1.7 was published from
-tested source using the isolated `publish-wintry-forecast-1000.1.7` publishing branch.
+[Live checks and independent video decode](https://github.com/ramzik99/wintry-forecast/actions/runs/39438707442).
+ Version 1000.1.8 was published from
+tested source using the isolated `publish-wintry-forecast-1000.1.8` publishing branch.
 
 [Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Published 1000.1.7](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.7/plugin.min.js)
+[Published 1000.1.8](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.8/plugin.min.js)
 
 ## Sources and licences
 
