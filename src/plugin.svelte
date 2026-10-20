@@ -589,7 +589,7 @@
           if(!frame){await new Promise(resolve=>setTimeout(resolve,150));continue;}
           try{
             if(storageAvailable){
-              try{if(await preparedMapCache.put(phaseFrameKey(times[i]),frame.record))preparedKeys.add(phaseFrameKey(times[i]));else storageAvailable=false;}
+              try{if(await preparedMapCache.put(phaseFrameKey(times[i]),frame.record)&&current())preparedKeys.add(phaseFrameKey(times[i]));else storageAvailable=false;}
               catch{storageAvailable=false;preparedMapCache.close();}
             }
           }finally{releaseExportFrame(frame);}

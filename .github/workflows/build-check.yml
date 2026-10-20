@@ -32,6 +32,12 @@ jobs:
       - name: Build plugin
         run: npm run build
 
+      - name: Test streaming MP4 export in browser
+        run: |
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps chromium
+          node test/map-export-browser.mjs
+
       - name: Verify packaged plugin version
         run: |
           PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
