@@ -38,8 +38,8 @@ function interp(
  * Marching-squares line segments for one contour level.
  * Grid is rows x cols; rows increase northward and columns eastward.
  *
- * Saddle cases (5 and 10) use a centre-value decider rather than a fixed
- * connection. This reduces artificial contour flips and broken-looking lines.
+ * Saddle cases (5 and 10) use the bilinear asymptotic decider. Its determinant
+ * chooses the correct connected diagonal; averaging corners can reverse topology.
  */
 export function contourSegments(
   grid: GridPoint[][],
@@ -89,18 +89,9 @@ export function contourSegments(
       let pairs: number[][];
 
       if (code === 5 || code === 10) {
-        const centre = (v[0] + v[1] + v[2] + v[3]) / 4;
-        const centreHigh = centre >= level;
-
-        if (code === 5) {
-          pairs = centreHigh
-            ? [[3, 0], [1, 2]]
-            : [[3, 2], [0, 1]];
-        } else {
-          pairs = centreHigh
-            ? [[0, 1], [2, 3]]
-            : [[0, 3], [1, 2]];
-        }
+        const determinant = (v[0]-level)*(v[2]-level) - (v[1]-level)*(v[3]-level);
+        // Positive determinant connects the SW/NE sign region; ties use a stable pairing.
+        pairs = determinant >= 0 ? [[0,1],[2,3]] : [[3,0],[1,2]];
       } else {
         const table: Record<number, number[][]> = {
           0: [],

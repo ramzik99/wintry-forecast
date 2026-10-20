@@ -44,6 +44,9 @@ jobs:
       - name: Test live Windy desktop, mobile and MP4 download
         run: node test/windy-live.mjs
 
+      - name: Check corrected contours at high latitude and the date line
+        run: node test/contour-geography-browser.mjs
+
       - name: Independently decode exported video
         run: |
           sudo apt-get update
