@@ -1,0 +1,28 @@
+name: video-decode-check
+on:
+  push:
+    branches: [verify-wintry-video-1000.1.6]
+    paths: ['.github/workflows/video-decode-check.yml']
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wintry-shading-browser
+          run-id: 39432072363
+          github-token: ${{ github.token }}
+          path: frames
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - run: |
+          ffprobe -v error -show_entries stream=codec_name,width,height,nb_frames,duration -of json frames/wintry-live.mp4
+          ffmpeg -hide_banner -loglevel error -i frames/wintry-live.mp4 -frames:v 1 frames/decoded-first.png
+          ffmpeg -hide_banner -loglevel error -ss 14 -i frames/wintry-live.mp4 -frames:v 1 frames/decoded-middle.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wintry-video-decoded
+          path: frames/decoded-*.png
