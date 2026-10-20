@@ -287,8 +287,7 @@
     if(viewportLoading){refreshQueued=true;return}
     refreshQueued=false;const my=++generation;weatherLoadProgress=0;viewportLoading=true;
     const{points,rows,cols}=buildViewportPoints();
-    const progressive:(CachedPoint|null)[][]=Array.from({length:rows},()=>Array(cols).fill(null));
-    let completed=0,settled=0,paintedAt=0;
+    let settled=0;
     try{
       const results=await mapLimit(points,MAX_CONCURRENT,async p=>{
         const result=my===generation&&enabled&&!destroyed?await loadPoint(p.lat,p.lon,CONTOUR_STEP_H):null;
@@ -300,11 +299,6 @@
               Object.assign(result.forecast,alignSelectedPrecipFields(fields,result.times,result.runTime));
             }
           }
-        }
-        if(my===generation&&result&&profileIsFresh(result.fetchedAt,result.runTime,activeRunTime)){
-          progressive[p.r][p.c]=result;completed++;
-          // One early preview, then the complete frame: repeated partial redraws waste CPU.
-          if(completed>=12&&paintedAt===0){cache=progressive;weatherRevision++;frameCache.clear();paintedAt=Date.now();renderFromCache();}
         }
         if(my===generation)weatherLoadProgress=++settled/points.length;
         return {...p,result};
@@ -704,11 +698,15 @@
     rasterTarget=target;
     const b=currentBounds(),z=rasterZoom(),terrainKey=[z,b.south,b.north,b.west,b.east].join(':');
     if(terrainKey!==terrainJobKey){
-      terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoadProgress=0;terrainLoading=true;terrainDetailStatus='';
-      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;terrainRevision++;frameCache.clear();queueRasterPaint()}).then(()=>{
-        if(epoch!==terrainGeneration||destroyed||!enabled)return;terrainLoading=false;queueRasterPaint();
-      });
+      terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoadProgress=0;terrainLoading=true;terrainDetailStatus='';rasterEpoch++;
+      const ready=()=>{
+        if(epoch!==terrainGeneration||destroyed||!enabled)return;
+        terrainLoading=false;terrainRevision++;frameCache.clear();renderPrecipitation(getStoreTimestamp());
+      };
+      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;}).then(ready,ready);
     }
+    // Keep the previous complete frame while inputs load; never paint a partly loaded mosaic.
+    if(terrainLoading)return;
     const key=phaseFrameKey(target);
     if(key!==pendingPhaseKey){rasterLoadProgress=0;rasterEpoch++;pendingPhaseKey=key;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}}
     if(key===activePhaseKey&&shadingLayer){const current=frameCache.get(key);if(current&&showIcons!==!!precipIconLayer)applyFrame(key,current);else if(showIcons&&!precipIconLayer){rasterLoading=true;queueRasterPaint();return;}rasterLoading=false;scheduleNextFrame();return;}
@@ -726,7 +724,7 @@
     rasterLoading=true;queueRasterPaint();
   }
   async function paintShading(target:number,background=false,preparation=false):Promise<RasterFrame|undefined>{
-    if(!enabled||!precipDetailAvailable||(!showShading&&!showIcons)||destroyed||!cache.length)return;
+    if(!enabled||!precipDetailAvailable||(!showShading&&!showIcons)||destroyed||!cache.length||terrainLoading)return;
     const key=phaseFrameKey(target),mainKey=phaseFrameKey(getStoreTimestamp());
     if(background&&frameCache.has(key)){const cached=frameCache.get(key)!;return cached;}
     const epoch=background?rasterEpoch:++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup();
