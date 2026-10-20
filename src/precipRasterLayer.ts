@@ -1,4 +1,4 @@
-export const PRECIP_RASTER_OPACITY=.68;
+export const PRECIP_RASTER_OPACITY=.55;
 export function terrainMapTemplate(tiles:Record<string,string>,kind:string){
   return tiles[kind]??tiles.sznmap??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
 }

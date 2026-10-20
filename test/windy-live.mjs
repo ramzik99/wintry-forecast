@@ -31,7 +31,7 @@ async function mount(){
  },pluginURL);
  await settled();
  assert.equal(await page.locator('.wintry-terrain-tile').count(),0,'Plugin must not cover Windy with an extra base map');
- assert.equal(await page.evaluate(()=>W.store.get('overlay')),'temp','Opening must preserve the selected Windy weather layer');
+ assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype','Opening must select Windy precipitation type');
 }
 async function colour(x,y){
  const png=await page.screenshot({clip:{x,y,width:12,height:12}});
@@ -57,7 +57,7 @@ try{
   await page.evaluate(z=>W.map.map.setZoom(z,{animate:false}),zoom);await page.waitForTimeout(3000);
   const before=await colour(600,500);
   await page.evaluate(()=>testRaster.addTo(W.map.map));await page.waitForTimeout(100);
-  const after=await colour(600,500),expected=before.map((v,i)=>v*.32+[0,198,255][i]*.68);
+  const after=await colour(600,500),expected=before.map((v,i)=>v*.45+[0,198,255][i]*.55);
   assert.ok(after.every((v,i)=>Math.abs(v-expected[i])<32),JSON.stringify({zoom,before,after,expected}));
   await page.screenshot({path:'test-output/windy-raster-zoom-'+zoom+'.png'});
   await page.evaluate(()=>W.map.map.removeLayer(testRaster));
@@ -93,12 +93,16 @@ try{
  assert.ok(await page.locator('.wintry-raster-tile').count()>0);
  assert.equal(await page.locator('.wintry-terrain-tile').count(),0);
  await page.screenshot({path:'test-output/windy-wintry-rain-beneath.png'});
- console.log('Windy temperature selection preserved on desktop/mobile; rain selection remains beneath shading.');
+ console.log('Windy precipitation type selected on desktop/mobile; another layer can still be chosen beneath shading.');
  await page.getByRole('button',{name:'Open Wintry settings'}).click();
  await page.getByRole('dialog',{name:'Wintry settings'}).waitFor();
  await page.getByRole('button',{name:'Close settings'}).click();
  await page.getByRole('button',{name:'Hide Wintry forecast panel'}).click();
  await page.getByRole('button',{name:'Show Wintry forecast panel'}).click();
+ await page.getByRole('checkbox',{name:'Enable Wintry forecast'}).uncheck();
+ await page.evaluate(()=>W.store.set('overlay','temp'));
+ await page.getByRole('checkbox',{name:'Enable Wintry forecast'}).check();await settled();
+ assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype','Enabling must select precipitation type');
  await page.evaluate(()=>wintryTest.onopen({lat:46.5,lon:10}));
  await page.waitForFunction(()=>!!document.querySelector('.point-tools'),null,{timeout:45000});
  await page.locator('.point-tools button').filter({hasText:'Forecast'}).click();
