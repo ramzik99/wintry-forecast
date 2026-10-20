@@ -1,6 +1,6 @@
 # Wintry forecast for Windy
 
-**Release candidate 1000.1.3** — terrain-aware winter-weather guidance from sampled
+**Published 1000.1.4** — terrain-aware winter-weather guidance from sampled
 ECMWF profiles and local terrain. Six physical types are displayed; limited-detail point diagnoses are qualified
 with “possible”, while unsupported snow amounts remain unavailable. Independent forecast-skill validation
 is still required; this is not a calibrated high-confidence forecast.
@@ -25,11 +25,12 @@ profile available without crowding the map controls.
 - Controls remain compact on desktop and mobile; forecast windows stay on screen
   after resizing. The plugin works over Windy's available background layers.
 
-## Prepare map forecast and MP4
+## Download MP4
 
-**Prepare & download MP4** prepares the current map area through available times,
-up to 144 hours, then encodes a video in browsers with H.264 support. If the encoder
-is unavailable, map preparation still completes for faster timeline playback.
+**Download MP4** renders and encodes the current map area one frame at a time,
+through available forecast times up to 144 hours, and starts the download automatically.
+The full animation is not stored on disk, so it cannot hit the former 512 MB preparation limit.
+H.264 support is required; browsers without it retain optional timeline preparation.
 
 The video includes a geographic background, precipitation shading, enabled type
 icons and snowline contours, timestamps and a colour legend. It excludes Windy's
@@ -37,11 +38,12 @@ weather layer, forecast lightning and dry-terrain hatching. Five forecast hours
 correspond to one video second. The longest video dimension is bounded at 1280 px.
 Encoding happens in the browser without uploading the frames.
 
-Progress, cancellation and a repeat-download link are available. Moving/zooming,
-new data or changing relevant settings invalidates the prepared area. Preparation
-can take several minutes; normal map viewing does not require it. Missing forecast
-periods stay blank. Local storage failures and timeouts leave the normal timeline
-usable. Windy's background and forecast lightning manage their loads separately.
+A single progress indicator, cancellation and a repeat-download link are available.
+The repeat link saves the finished video without re-rendering it. Moving/zooming,
+new data or changing relevant settings cancels an in-progress export. Large views
+can take several minutes; normal map viewing does not require exporting. Missing forecast
+periods stay blank. Filling the optional timeline cache does not interrupt preparation.
+Windy's background and forecast lightning manage their loads separately.
 
 ## Quantities and interpretation
 
@@ -65,18 +67,17 @@ usable. Windy's background and forecast lightning manage their loads separately.
   are not calibrated probabilities. Wider gaps may reduce coverage in this version.
 
 See [method, equations and scientific limits](METHODS.md),
-[release notes](RELEASE_1000_1_3.md) and [release history](docs/RELEASE_HISTORY.md).
+[release notes](RELEASE_1000_1_4.md) and [release history](docs/RELEASE_HISTORY.md).
 
 ## Development and publication
 
 Node.js 24; `npm install`, `npm test`, `npm run build`. Built files are in `dist`.
 The package and plugin configuration must contain the same three-part version.
-GitHub runs tests/build checks; publication uses the existing manual
-`publish-plugin` workflow. The published predecessor is 1000.1.2; 1000.1.3 remains
-a candidate until the production merge and manual publication are completed.
+GitHub runs unit, build and browser MP4 checks. Version 1000.1.4 was published from
+tested source using the isolated `publish-wintry-forecast-1000.1.4` publishing branch.
 
 [Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Published 1000.1.2](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.2/plugin.min.js)
+[Published 1000.1.4](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.4/plugin.min.js)
 
 ## Sources and licences
 
