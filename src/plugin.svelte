@@ -677,14 +677,15 @@
     }
   }
   async function applyFrame(key:string,frame:RasterFrame){
+    const epoch=rasterEpoch;
     const ready=await Promise.all(frame.shading.getLayers().map((layer:any)=>layer.ready??true));
-    if(destroyed||!enabled||key!==phaseFrameKey(getStoreTimestamp()))return;
+    if(destroyed||!enabled||epoch!==rasterEpoch||key!==phaseFrameKey(getStoreTimestamp()))return;
     if(ready.some(value=>!value)){rasterLoading=false;terrainDetailStatus='Shading image unavailable · retry refresh';return;}
     const previous=[shadingLayer,precipIconLayer];
     frame.shading.addTo(map);if(showIcons)frame.icons.addTo(map);
     shadingLayer=frame.shading;precipIconLayer=showIcons?frame.icons:null;activePhaseKey=key;pendingPhaseKey=key;
     for(const layer of previous)if(layer&&layer!==shadingLayer&&layer!==precipIconLayer)try{map.removeLayer(layer)}catch{}
-    terrainDetailStatus=frame.fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';rasterLoading=false;
+    terrainDetailStatus=frame.fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';rasterLoading=false;scheduleNextFrame();
   }
   function scheduleNextFrame(){
     if(preparingMap||prefetchTimer||prefetchBusy||viewportLoading||terrainLoading||destroyed||!enabled)return;
