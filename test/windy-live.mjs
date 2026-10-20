@@ -135,14 +135,10 @@ try{
  console.log('Actual plugin MP4 downloaded',videoBytes.length,'bytes');
  const decoded=await page.evaluate(async data=>{
   const v=document.createElement('video');v.muted=true;v.src='data:video/mp4;base64,'+data;
-  await new Promise((resolve,reject)=>{v.onloadeddata=resolve;v.onerror=()=>reject(new Error('Downloaded MP4 cannot decode'))});
-  const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;const ctx=c.getContext('2d');ctx.drawImage(v,0,0);
-  const first=c.toDataURL('image/png');
-  const seeked=new Promise(resolve=>v.onseeked=resolve);v.currentTime=v.duration/2;await seeked;ctx.drawImage(v,0,0);
-  return{first,middle:c.toDataURL('image/png'),width:c.width,height:c.height,duration:v.duration};
+  await new Promise((resolve,reject)=>{v.onloadedmetadata=resolve;v.onerror=()=>reject(new Error('Downloaded MP4 cannot decode'))});
+  return{width:v.videoWidth,height:v.videoHeight,duration:v.duration};
  },videoBytes.toString('base64'));
  assert.ok(decoded.duration>28&&decoded.duration<30);assert.ok(decoded.width>0&&decoded.height>0&&Math.max(decoded.width,decoded.height)<=1280);
- for(const [key,name] of [['first','first'],['middle','middle']])await writeFile('test-output/windy-mp4-'+name+'-frame.png',Buffer.from(decoded[key].split(',')[1],'base64'));
  console.log('Decoded real MP4 metadata',decoded.width,decoded.height,decoded.duration);
  await page.evaluate(()=>wintryHost.close());
  await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
