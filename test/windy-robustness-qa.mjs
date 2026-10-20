@@ -7,7 +7,7 @@ assert.ok(code.includes('1000.1.9'));
 await mkdir('test-output',{recursive:true});
 const browser=await chromium.launch({headless:true,args:['--enable-unsafe-swiftshader','--use-angle=swiftshader']});
 const page=await browser.newPage({viewport:{width:1280,height:900}});
-const results=[],errors=[];let phase='startup',blockDem=false,blockForecast=false,demBlocked=0,forecastBlocked=0;
+const results=[],errors=[],closeLatencies=[];let phase='startup',blockDem=false,blockForecast=false,demBlocked=0,forecastBlocked=0;
 page.on('pageerror',e=>errors.push({phase,message:e.message,plugin:/data:text\/javascript/.test(e.stack??'')}));
 await page.route('**/*',route=>{
  const url=route.request().url();
@@ -21,7 +21,9 @@ async function idle(){
  await page.waitForTimeout(400);
 }
 async function close(){
- await page.evaluate(()=>window.qaHost?.close());await page.waitForTimeout(500);
+ const started=Date.now();await page.evaluate(()=>window.qaHost?.close());
+ await page.waitForFunction(()=>!document.querySelector('.snowline-panel,.wintry-raster-tile,.wintry-precip-icon'),null,{timeout:15000});
+ closeLatencies.push(Date.now()-started);
  assert.equal(await page.locator('.snowline-panel,.wintry-raster-tile,.wintry-precip-icon').count(),0,'Close must remove plugin UI and overlays');
 }
 async function mount(lat=46.5,lon=10,zoom=9){
@@ -98,7 +100,7 @@ try{
  });
  await check('unhandled-plugin-errors',async()=>{assert.deepEqual(errors.filter(e=>e.plugin),[]);return{pluginErrors:0,nativeWindyErrors:errors.filter(e=>!e.plugin).length}});
 }finally{
- await writeFile('test-output/robustness-results.json',JSON.stringify({version:'1000.1.9',results,errors},null,2));
+ await writeFile('test-output/robustness-results.json',JSON.stringify({version:'1000.1.9',results,errors,closeLatencies},null,2));
  await browser.close();
 }
 assert.equal(results.filter(r=>!r.passed).length,0,'Robustness failures: '+JSON.stringify(results.filter(r=>!r.passed)));
