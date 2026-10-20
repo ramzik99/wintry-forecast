@@ -93,3 +93,16 @@ test('incomplete terrain coverage is reported after loading rather than presente
   assert.equal(ready,false);assert.ok(completed>0);assert.equal(dem.sample(32,36,9),null);
  }finally{dem.destroy();globalThis.fetch=oldFetch;}
 });
+
+test('terrain resolution adapts broad viewports to keep all DEM tiles in memory',()=>{
+ const local={south:46.3,north:46.7,west:9.8,east:10.2},wide={south:25,north:60,west:-30,east:60};
+ assert.equal(terrainTileZoom(9,local),9);
+ const z=terrainTileZoom(9,wide);assert.ok(z<9);
+ // Padding can only add tiles, so this unpadded count must also fit.
+ assert.ok(visibleRasterTiles(wide,z).length<=64);
+});
+test('floating-point map bounds cannot accidentally double the raster resolution',()=>{
+ const width=1365,west=10,span=width*360/(256*2**9);
+ assert.equal(viewportRasterZoom(width,west,west+span*(1-1e-12),2),9);
+ assert.equal(viewportRasterZoom(width,west,west+span*.99,2),10);
+});

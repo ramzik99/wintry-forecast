@@ -6,7 +6,7 @@ export const TILE_SIZE=256, RASTER_SAMPLES=128;
 export function viewportRasterZoom(width:number,west:number,east:number,fallback:number){
   const span=east-west;
   const zoom=width>0&&span>0?Math.log2(width*360/(TILE_SIZE*span)):fallback;
-  return Math.max(0,Math.min(22,Math.ceil(Number.isFinite(zoom)?zoom:fallback)));
+  return Math.max(0,Math.min(22,Math.ceil((Number.isFinite(zoom)?zoom:fallback)-1e-9)));
 }
 export function mercatorY(lat:number){return Math.log(Math.tan(Math.PI/4+Math.max(-85,Math.min(85,lat))*Math.PI/360));}
 export function tilePosition(lat:number,lon:number,z:number){const n=2**z;return{x:(lon+180)/360*n,y:(1-mercatorY(lat)/Math.PI)/2*n};}

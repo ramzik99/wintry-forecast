@@ -3,6 +3,14 @@ import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import ts from 'typescript';
 import assert from 'node:assert/strict';
 const rasterURL='data:text/javascript;base64,'+Buffer.from(ts.transpileModule(await readFile('src/precipRasterLayer.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
+async function sourceURL(name){
+ const js=ts.transpileModule(await readFile('src/'+name+'.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+ let result=js;
+ for(const match of js.matchAll(/from ['"](\.\/[^'"]+)['"]/g))result=result.replace(match[0],'from '+JSON.stringify(await sourceURL(match[1].slice(2))));
+ result=result.replace(/import \{ getPointForecastData \} from ['"]@windy\/fetch['"];/,'const {getPointForecastData}=W.fetch;');
+ return 'data:text/javascript;base64,'+Buffer.from(result).toString('base64');
+}
+const precipURL=await sourceURL('precip'),timelineURL=await sourceURL('forecastTimeline'),selectedURL=await sourceURL('selectedPrecip');
 const pluginURL='data:text/javascript;base64,'+(await readFile('dist/plugin.js')).toString('base64');
 await mkdir('test-output',{recursive:true});
 const browser=await chromium.launch({headless:true,args:['--enable-unsafe-swiftshader','--use-angle=swiftshader']});
@@ -31,6 +39,19 @@ try{
  await page.screenshot({path:'test-output/windy-raster-close-zoom.png'});
  await page.evaluate(()=>{W.map.map.removeLayer(testRaster);W.map.map.removeLayer(testBackground);W.map.map.setView([46.5,10],9,{animate:false});});
  await page.waitForTimeout(3000);
+ const wetTime=await page.evaluate(async({precipURL,timelineURL,selectedURL})=>{
+  const {precipMmAt}=await import(precipURL),{buildForecastTimes}=await import(timelineURL),{loadSelectedPrecipFields,alignSelectedPrecipFields}=await import(selectedURL);
+  const response=await W.fetch.getMeteogramForecastData('ecmwf',{lat:46.5,lon:10,step:1});
+  const forecast=response.data.data,ref=new Date(response.data.header.refTime).getTime(),times=buildForecastTimes(forecast,ref);
+  if(!times.some((_,i)=>precipMmAt(forecast,i)>0)){
+   const fields=await loadSelectedPrecipFields(46.5,10);Object.assign(forecast,alignSelectedPrecipFields(fields,times,ref));
+  }
+  let i=-1,best=0;
+  times.forEach((t,k)=>{const v=precipMmAt(forecast,k);if(t>=Date.now()&&v>best){best=v;i=k;}});
+  if(i<0)throw new Error('Live Alps fixture has no wet forecast period; choose another location.');
+  W.store.set('timestamp',times[i]);return{time:times[i],amount:best};
+ },{precipURL,timelineURL,selectedURL});
+ console.log('LIVE ECMWF WET PERIOD',wetTime);
  await page.evaluate(async pluginURL=>{
   const host=document.createElement('div');host.id='windy-plugin-snowline-map-100m';document.body.append(host);
   const mod=await import(pluginURL);window.wintryTest=new mod.default({target:host});
@@ -41,11 +62,22 @@ try{
  },null,{timeout:180000});
  console.log('PLUGIN PANEL',await page.locator('.snowline-panel').innerText());
  assert.equal(await page.locator('.zoom-hint').count(),0);
+ assert.ok(await page.evaluate(()=>W.map.map.maplibreMap.getStyle().layers.some(l=>l.id.startsWith('wintry-precip-'))),'Live wet forecast must generate native precipitation tiles');
  console.log('PLUGIN NATIVE LAYERS',await page.evaluate(()=>W.map.map.maplibreMap.getStyle().layers.map(l=>({id:l.id,type:l.type}))));
  await page.screenshot({path:'test-output/windy-wintry-desktop.png'});
  await page.getByRole('button',{name:'Open Wintry settings'}).click({force:true});assert.equal(await page.getByRole('dialog',{name:'Wintry settings'}).count(),1);
  await page.getByRole('button',{name:'Close settings'}).click({force:true});
  await page.getByRole('button',{name:'Hide Wintry forecast panel'}).click({force:true});await page.getByRole('button',{name:'Show Wintry forecast panel'}).click({force:true});
+ await page.evaluate(()=>wintryTest.selectMapPoint(46.5,10));
+ await page.waitForFunction(()=>!!document.querySelector('.point-tools'),null,{timeout:45000});
+ await page.locator('.point-tools button').filter({hasText:'Forecast'}).click({force:true});
+ await page.getByRole('img',{name:'Terrain-aware wintry forecast through 144 hours'}).waitFor();
+ await page.getByRole('tab',{name:'Sounding',exact:true}).click({force:true});
+ await page.screenshot({path:'test-output/windy-wintry-sounding.png'});
+ await page.getByRole('button',{name:'Close graph'}).click({force:true});
+ await page.getByRole('button',{name:'How it works',exact:true}).click({force:true});
+ await page.getByRole('dialog',{name:'How Wintry forecast works'}).waitFor();
+ await page.getByRole('button',{name:'Close information'}).click({force:true});
  await page.locator('.layer-controls input').nth(1).uncheck({force:true});await page.waitForTimeout(500);
  assert.ok(await page.evaluate(()=>!W.map.map.maplibreMap.getStyle().layers.some(l=>l.id.startsWith('wintry-precip-')||l.id.startsWith('wintry-background-'))));
  await page.locator('.layer-controls input').nth(1).check({force:true});
@@ -63,4 +95,8 @@ try{
  await page.evaluate(()=>wintryTest.$destroy());
  assert.ok(await page.evaluate(()=>!W.map.map.maplibreMap.getStyle().layers.some(l=>l.id.startsWith('wintry-'))));
  console.log('Live Windy desktop/mobile controls, timeline, pan and native resource cleanup passed.');
+}catch(error){
+ await page.screenshot({path:'test-output/windy-live-failure.png'}).catch(()=>{});
+ console.log('Wintry failure panel',await page.locator('.snowline-panel').innerText().catch(()=>'(not mounted)'));
+ throw error;
 }finally{await browser.close()}
