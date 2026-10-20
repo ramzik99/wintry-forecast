@@ -6,7 +6,7 @@ import ts from 'typescript';
 const source=ts.transpileModule(readFileSync(new URL('../src/mapForecastVideo.ts',import.meta.url),'utf8'),{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext},
 }).outputText.replace("'mediabunny'",JSON.stringify(import.meta.resolve('mediabunny')));
-const {movieTimeline,forecastMovieTimes,videoSize,checkMp4Support,canExportMapForecast,videoImage}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const {movieTimeline,forecastMovieTimes,videoSize,checkMp4Support,canExportMapForecast,videoImage,sequentialFrameReader}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 
 test('movie includes missing-interval boundaries and hourly contours without extending a short forecast',()=>{
   const hour=3600_000;
@@ -53,4 +53,24 @@ test('cancelling an image decode settles promptly and releases the image source'
     await assert.rejects(pending,{name:'AbortError'});assert.equal(image.src,'');assert.equal(image.onload,null);
     await assert.rejects(videoImage('unused',abort.signal),{name:'AbortError'});
   }finally{globalThis.Image=previous;}
+});
+
+test('large animations stream one source frame instead of accumulating the full map',async()=>{
+  let live=0,maximum=0,loads=0,releases=0;
+  const reader=sequentialFrameReader(async time=>{loads++;live++;maximum=Math.max(maximum,live);return {time,bytes:12*1024*1024};},
+    time=>String(Math.floor(time/3)),()=>{releases++;live--;});
+  // 145 hours at 12 MiB per raster would exceed the former 512 MiB disk limit.
+  for(let time=0;time<=144;time++){
+    const frame=await reader.get(time);assert.equal(Math.floor(frame.time/3),Math.floor(time/3));
+  }
+  assert.equal(maximum,1);assert.equal(loads,49);assert.equal(live,1);
+  reader.clear();reader.clear();assert.equal(live,0);assert.equal(releases,loads);
+});
+
+test('a failed or cancelled frame load releases the previous raster',async()=>{
+  let releases=0;
+  const reader=sequentialFrameReader(async time=>{if(time===2)throw new DOMException('Cancelled','AbortError');return {time};},
+    String,()=>releases++);
+  await reader.get(1);await assert.rejects(reader.get(2),{name:'AbortError'});
+  reader.clear();assert.equal(releases,1);
 });

@@ -56,3 +56,12 @@ test('a blocked database fails promptly and can be retried after closing the cac
   opens[1].onsuccess();await Promise.resolve();state.tx.oncomplete();assert.deepEqual(await retry,{dry:true});
   cache.close();t.mock.timers.tick(20000);assert.equal(state.aborted,0);
 });
+
+test('optional map caching reaches its budget without blocking a download',async t=>{
+  const {state,opens}=fixture(t),cache=new PreparedMapCache(40);
+  const first=cache.put('a',{data:'small'});opens[0].onsuccess();await Promise.resolve();state.tx.oncomplete();
+  assert.equal(await first,true);
+  assert.equal(await cache.put('b',{data:'this frame would exceed the optional cache budget'}),false);
+  const read=cache.get('a');await Promise.resolve();state.tx.oncomplete();assert.deepEqual(await read,{dry:true});
+  cache.close();
+});

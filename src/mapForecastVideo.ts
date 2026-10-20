@@ -87,3 +87,17 @@ export function videoImage(url:string,signal:AbortSignal):Promise<HTMLImageEleme
     image.onerror=()=>{finish();reject(new Error('Video map image unavailable'));};image.src=url;
   });
 }
+
+/** Keep one source raster while hourly captions/contours are encoded; no full-animation cache. */
+export function sequentialFrameReader<T>(load:(time:number)=>Promise<T>,key:(time:number)=>string,release:(value:T)=>void){
+  let value:T|undefined,activeKey:string|undefined;
+  return {
+    async get(time:number):Promise<T>{
+      const next=key(time);
+      if(value!==undefined&&next===activeKey)return value;
+      if(value!==undefined){release(value);value=undefined;activeKey=undefined;}
+      const loaded=await load(time);value=loaded;activeKey=next;return loaded;
+    },
+    clear(){if(value!==undefined)release(value);value=undefined;activeKey=undefined;}
+  };
+}

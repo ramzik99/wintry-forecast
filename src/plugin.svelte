@@ -85,7 +85,7 @@
       <div class="info-body">
         <div><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div>
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
-        <div><b>Prepare & download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div>
+        <div><b>Prepare & download MP4:</b> renders and encodes the visible area one frame at a time through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Video export keeps one raster frame at a time and does not store the full animation on disk. A download link is available if the automatic download is blocked.</div>
         <div><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. Opening or enabling the plugin selects Windy's Precipitation type layer; you can then choose another background. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Above-model-ground pressure levels available from some neighbouring columns are retained with renormalized weights and a limited-detail flag, rather than discarding warm valley air because a mountain corner lacks those levels. This is an approximate spatial estimate, not restored observations. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Entire missing columns and missing precipitation remain unavailable. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Estimated types:</b> colours and icons show the estimated physical precipitation type. Limited-detail and borderline point labels say “possible”. This is model guidance, not a calibrated probability. If the profile cannot be classified, no type colour or icon is invented.</div>
         <div><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div>
@@ -143,7 +143,7 @@
   import { register, release } from '@windy/singleclick';
   import config from './pluginConfig';
   import { PreparedMapCache } from './preparedMapCache';
-  import { canExportMapForecast, encodeMapForecast, forecastMovieTimes, videoImage, videoSize } from './mapForecastVideo';
+  import { canExportMapForecast, encodeMapForecast, forecastMovieTimes, sequentialFrameReader, videoImage, videoSize } from './mapForecastVideo';
   import { boundedRequest } from './boundedRequest';
   import { geocode } from './geocoding';
   import { formatElevation, formatSnowline, formatPrecip, formatSnow, loadUnitSystem, type UnitSystem } from './displayUnits';
@@ -577,30 +577,50 @@
       const size=videoSize(map.getSize().x,map.getSize().y+196);
       const exportAvailable=await canExportMapForecast(size.width,size.height);if(!current())return;
       if(videoDownloadUrl){URL.revokeObjectURL(videoDownloadUrl);videoDownloadUrl='';}
-      await preparedMapCache.clear();
-      for(let i=0;i<times.length&&current();){
-        if(rasterLoading||viewportLoading||terrainLoading||prefetchBusy){await new Promise(resolve=>setTimeout(resolve,150));continue;}
-        const frame=await paintShading(times[i],true,true);
-        if(!current())break;
-        if(!frame){await new Promise(resolve=>setTimeout(resolve,150));continue;}
-        const key=phaseFrameKey(times[i]);await preparedMapCache.put(key,frame.record);
-        if(!current())break;
-        preparedKeys.add(key);i++;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
-        prepareMessage=`${i} / ${times.length} times${i>1&&minutes>0?` · ~${minutes} min left`:'…'}`;
-        await new Promise(resolve=>setTimeout(resolve,0));
+      if(exportAvailable){
+        await downloadMapForecastVideo(videoTimes,current);
+      }else{
+        let storageAvailable=true;
+        try{await preparedMapCache.clear();}catch{storageAvailable=false;}
+        for(let i=0;i<times.length&&current();){
+          if(rasterLoading||viewportLoading||terrainLoading||prefetchBusy){await new Promise(resolve=>setTimeout(resolve,150));continue;}
+          const frame=await paintShading(times[i],true,true);
+          if(!current()){if(frame)releaseExportFrame(frame);break;}
+          if(!frame){await new Promise(resolve=>setTimeout(resolve,150));continue;}
+          try{
+            if(storageAvailable){
+              try{if(await preparedMapCache.put(phaseFrameKey(times[i]),frame.record))preparedKeys.add(phaseFrameKey(times[i]));else storageAvailable=false;}
+              catch{storageAvailable=false;preparedMapCache.close();}
+            }
+          }finally{releaseExportFrame(frame);}
+          i++;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
+          prepareMessage=`${i} / ${times.length} times${i>1&&minutes>0?` · ~${minutes} min left`:'…'}`;
+          await new Promise(resolve=>setTimeout(resolve,0));
+        }
+        if(current())prepareMessage=`Map ready · ${preparedKeys.size} times cached · MP4 unavailable in this browser`;
       }
-      if(current()){
-        if(exportAvailable)await downloadMapForecastVideo(videoTimes,current);
-        else prepareMessage=`Map ready · ${preparedKeys.size} times · MP4 unavailable in this browser`;
-      }
-      else if(my===prepareGeneration)prepareMessage='Preparation stopped · forecast changed; refresh to try again';
+      if(!current()&&my===prepareGeneration)prepareMessage='Preparation stopped · forecast changed; refresh to try again';
     }catch(error){if(current()){prepareMessage=error instanceof Error?`${error.message} · ${preparedKeys.size} times prepared`:'Preparation unavailable · normal timeline still works';preparedMapCache.close();}}
     finally{if(my===prepareGeneration){preparingMap=false;exportingMap=false;scheduleNextFrame();}}
   }
 
+  function releaseExportFrame(frame:RasterFrame){
+    // A normal map frame may be borrowed from the small RAM cache.
+    if(frame.shading===shadingLayer||[...frameCache.values()].includes(frame))return;
+    frame.shading.clearLayers();frame.icons.clearLayers();frame.geography?.clearLayers();
+  }
   async function downloadMapForecastVideo(times:number[],current:()=>boolean){
     const abort=new AbortController();videoAbort=abort;exportingMap=true;
     const requireCurrent=()=>{if(!current())abort.abort();abort.signal.throwIfAborted();};
+    const frames=sequentialFrameReader<RasterFrame>(async time=>{
+      for(;;){
+        requireCurrent();
+        if(rasterLoading||viewportLoading||terrainLoading||prefetchBusy){await new Promise(resolve=>setTimeout(resolve,150));continue;}
+        const frame=await paintShading(time,true,true);
+        if(frame)return frame;
+        requireCurrent();await new Promise(resolve=>setTimeout(resolve,150));
+      }
+    },phaseFrameKey,releaseExportFrame);
     const size=map.getSize(),header=76,footer=120,dimensions=videoSize(size.x,size.y+header+footer);
     const canvas=document.createElement('canvas');canvas.width=dimensions.width;canvas.height=dimensions.height;
     const ctx=canvas.getContext('2d');if(!ctx)throw new Error('Video canvas unavailable');
@@ -624,8 +644,7 @@
       });
       const symbolImages=new Map<string,HTMLImageElement>();
       const blob=await encodeMapForecast(canvas,times,async time=>{
-        requireCurrent();const record=await preparedMapCache.get(phaseFrameKey(time));requireCurrent();
-        if(!record)throw new Error('Prepared frame unavailable. Prepare this area again.');
+        requireCurrent();const frame=await frames.get(time);requireCurrent();const record=frame.record;
         ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#132431';ctx.fillRect(0,0,canvas.width,canvas.height);
         ctx.drawImage(base,0,header*sy);
         ctx.save();ctx.setTransform(sx,0,0,sy,0,header*sy);
@@ -646,7 +665,7 @@
       requireCurrent();videoDownloadUrl=URL.createObjectURL(blob);videoDownloadName=`wintry-forecast-${new Date(times[0]).toISOString().replace(/[:.]/g,'-')}.mp4`;
       const link=document.createElement('a');link.href=videoDownloadUrl;link.download=videoDownloadName;document.body.appendChild(link);link.click();link.remove();
       prepareMessage=`MP4 ready · ${times.length} times · download available below`;
-    }finally{if(videoAbort===abort){videoAbort=null;exportingMap=false;}canvas.width=canvas.height=base.width=base.height=0;}
+    }finally{frames.clear();if(videoAbort===abort){videoAbort=null;exportingMap=false;}canvas.width=canvas.height=base.width=base.height=0;}
   }
 
   function drawVideoContours(ctx:CanvasRenderingContext2D,target:number){
