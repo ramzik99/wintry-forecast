@@ -14,7 +14,7 @@ test('categorical shading uses geographic image bounds and decodes before displa
  assert.equal(args[2].pane,'precip');assert.equal(args[2].interactive,false);
  assert.equal(args[2].opacity,PRECIP_RASTER_OPACITY);assert.ok(PRECIP_RASTER_OPACITY>0&&PRECIP_RASTER_OPACITY<1);
 });
-test('screen and video share the selected geographic template at every zoom',()=>{
+test('video uses the selected geographic template at every zoom',()=>{
  const tiles={sznmap:'outdoor',winter:'winter',graymap:'transparent labels'};
  assert.equal(terrainMapTemplate(tiles,'winter'),'winter');assert.equal(terrainMapTemplate(tiles,'unknown'),'outdoor');
  assert.match(terrainMapTemplate({},'unknown'),/outdoor/);

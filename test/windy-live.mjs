@@ -16,7 +16,7 @@ let page=await browser.newPage({viewport:{width:1365,height:1000}});
 async function loadWindy(time){
  await page.goto('https://www.windy.com/',{waitUntil:'domcontentloaded',timeout:60000});
  await page.waitForFunction(()=>window.W?.map?.map?.maplibreMap&&window.W?.fetch?.getMeteogramForecastData,null,{timeout:60000});
- await page.evaluate(t=>{W.store.set('particlesAnim','off');W.map.map.setView([46.5,10],9,{animate:false});if(t)W.store.set('timestamp',t);},time);
+ await page.evaluate(t=>{W.store.set('particlesAnim','off');W.store.set('overlay','temp');W.map.map.setView([46.5,10],9,{animate:false});if(t)W.store.set('timestamp',t);},time);
  await page.waitForFunction(()=>W.map.map.getZoom()===9);await page.waitForTimeout(3000);
 }
 async function settled(){
@@ -30,7 +30,8 @@ async function mount(){
   await host.open({params:{},disableOpeningAnimation:true});window.wintryTest=host.svelteApp;
  },pluginURL);
  await settled();
- await page.waitForFunction(()=>document.querySelectorAll('.wintry-terrain-tile').length>0);
+ assert.equal(await page.locator('.wintry-terrain-tile').count(),0,'Plugin must not cover Windy with an extra base map');
+ assert.equal(await page.evaluate(()=>W.store.get('overlay')),'temp','Opening must preserve the selected Windy weather layer');
 }
 async function colour(x,y){
  const png=await page.screenshot({clip:{x,y,width:12,height:12}});
@@ -87,6 +88,12 @@ try{
  });assert.ok(edgePixels>0,'The real wet/dry boundary must contain partial coverage pixels');
  console.log('Live smooth wet/dry edge pixels',edgePixels);
  await page.screenshot({path:'test-output/windy-wintry-desktop.png'});
+ await page.evaluate(()=>W.store.set('overlay','rain'));await page.waitForTimeout(1500);
+ assert.equal(await page.evaluate(()=>W.store.get('overlay')),'rain');
+ assert.ok(await page.locator('.wintry-raster-tile').count()>0);
+ assert.equal(await page.locator('.wintry-terrain-tile').count(),0);
+ await page.screenshot({path:'test-output/windy-wintry-rain-beneath.png'});
+ console.log('Windy temperature selection preserved on desktop/mobile; rain selection remains beneath shading.');
  await page.getByRole('button',{name:'Open Wintry settings'}).click();
  await page.getByRole('dialog',{name:'Wintry settings'}).waitFor();
  await page.getByRole('button',{name:'Close settings'}).click();
