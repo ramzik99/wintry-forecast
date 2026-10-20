@@ -19,12 +19,20 @@ export function precipRasterLayer(L:any,url:string,nw:{lat:number;lon:number},se
   return layer;
 }
 
-/** Bake geographic luminance into full-opacity phase colours; preserve dry/missing alpha. */
+/** Apply label-free elevation relief to full-opacity phase colours; preserve dry/missing alpha. */
 export function colourTerrainTile(phase:HTMLCanvasElement,terrain:CanvasImageSource){
   const result=document.createElement('canvas');result.width=phase.width;result.height=phase.height;
   const ctx=result.getContext('2d');if(!ctx)throw new Error('Canvas unavailable');
-  ctx.drawImage(terrain,0,0,result.width,result.height);
-  ctx.globalCompositeOperation='color';ctx.drawImage(phase,0,0);
+  ctx.drawImage(phase,0,0);
+  ctx.globalCompositeOperation='multiply';ctx.drawImage(terrain,0,0,result.width,result.height);
   ctx.globalCompositeOperation='destination-in';ctx.drawImage(phase,0,0);
   ctx.globalCompositeOperation='source-over';return result;
+}
+
+/** Northwest light at 45 degrees; bounded ambient light keeps each type readable. */
+export function terrainIllumination(west:number,east:number,north:number,south:number,metres:number){
+  if(![west,east,north,south,metres].every(Number.isFinite)||metres<=0)return 235;
+  const dx=(east-west)/(2*metres),dy=(north-south)/(2*metres);
+  const light=(.5*dx-.5*dy+Math.SQRT1_2)/Math.hypot(dx,dy,1);
+  return Math.round(Math.max(100,Math.min(255,235+150*(light-Math.SQRT1_2))));
 }

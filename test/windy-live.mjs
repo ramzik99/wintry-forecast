@@ -54,7 +54,7 @@ try{
   tc.fillStyle='#808080';tc.fillRect(0,0,256,256);tc.fillStyle='#404040';tc.fillRect(0,0,256,64);
   const coloured=colourTerrainTile(c,terrain),cc=coloured.getContext('2d'),light=cc.getImageData(64,128,1,1).data,dark=cc.getImageData(64,32,1,1).data,clear=cc.getImageData(192,128,1,1).data;
   const lum=p=>p[0]*.3+p[1]*.59+p[2]*.11;
-  if(light[3]!==255||dark[3]!==255||clear[3]!==0||Math.abs(lum(light)-128)>2||Math.abs(lum(dark)-64)>2)throw new Error('Opaque terrain composition must preserve luminance and dry gaps');
+  if(light[3]!==255||dark[3]!==255||clear[3]!==0||Math.abs(light[1]-99)>2||Math.abs(light[2]-128)>2||Math.abs(dark[1]-50)>2||Math.abs(dark[2]-64)>2)throw new Error('Opaque terrain composition must preserve luminance and dry gaps');
   window.expectedRasterColour=[...light].slice(0,3);
   window.testRaster=precipRasterLayer(L,coloured.toDataURL(),{lat:b.getNorth(),lon:b.getWest()},{lat:b.getSouth(),lon:b.getEast()},'wintry-test-shading');
   await testRaster.ready;
