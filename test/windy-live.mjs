@@ -117,11 +117,12 @@ try{
  await page.getByRole('checkbox',{name:'Enable precipitation type'}).check();await settled();
  assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype');
  await page.evaluate(()=>wintryTest.onopen({lat:46.5,lon:10}));
- await page.getByRole('button',{name:'Close precipitation type label'}).waitFor({timeout:45000});
+ await page.getByRole('button',{name:'Close precipitation type label',exact:true}).waitFor({timeout:45000});
+ await page.waitForFunction(()=>{const s=document.querySelector('.snowline-click-label')?.textContent??'';return !!s&&!/Loading/.test(s);},null,{timeout:45000});
  const label=await page.locator('.snowline-click-label').innerText();
  assert.ok(!/thermal snowline|limited atmospheric|snowfall|wintry period/i.test(label),label);
  await page.screenshot({path:'test-output/precip-type-point.png'});
- await page.getByRole('button',{name:'Close precipitation type label'}).click();
+ await page.getByRole('button',{name:'Close precipitation type label',exact:true}).click();
  await page.evaluate(t=>W.store.set('timestamp',t+3*3600000),wet.time);await settled();
  await page.evaluate(()=>W.map.map.panBy([100,40],{animate:false}));await page.waitForTimeout(800);await settled();
  await page.evaluate(()=>wintryHost.close());

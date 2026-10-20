@@ -41,11 +41,11 @@ jobs:
       - name: Test streaming MP4 and shading pixels
         run: node test/map-export-browser.mjs
 
-      - name: Test live Windy desktop, mobile and MP4 download
-        run: node test/windy-live.mjs
-
       - name: Compare webcam locations with current profiles
         run: node test/webcam-profiles.mjs
+
+      - name: Test live Windy desktop, mobile and MP4 download
+        run: node test/windy-live.mjs
 
       - name: Independently decode exported video
         run: |
