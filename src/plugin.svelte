@@ -40,9 +40,10 @@
     {/if}
     <div class="panel-actions">
     <div class="prepare-map-controls">
-      {#if preparingMap}<button class="refresh-button" type="button" on:click={cancelMapPreparation}>{exportingMap ? 'Cancel MP4 export' : 'Cancel preparation'}</button>
-      {:else}<button class="refresh-button" type="button" disabled={!enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading} on:click={prepareMapForecast}>Prepare & download MP4</button>{/if}
-      <small>{prepareMessage || 'Current area · up to 144 h'}</small>
+      {#if preparingMap}<button class="refresh-button" type="button" on:click={cancelMapPreparation}>Cancel download</button>
+      {:else}<button class="refresh-button" type="button" disabled={!enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading} on:click={prepareMapForecast}>Download MP4</button>{/if}
+      {#if preparingMap}<progress max="100" value={downloadProgress} aria-label="MP4 download progress" style="width:100%;accent-color:#70d6ff"></progress>{/if}
+      <small aria-live="polite">{prepareMessage || 'Current area · up to 144 h · downloads automatically'}</small>
       {#if videoDownloadUrl}<a href={videoDownloadUrl} download={videoDownloadName}>Download MP4 again</a>{/if}
     </div>
     <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading} on:click={refreshForecast}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
@@ -85,7 +86,7 @@
       <div class="info-body">
         <div><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div>
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
-        <div><b>Prepare & download MP4:</b> renders and encodes the visible area one frame at a time through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Video export keeps one raster frame at a time and does not store the full animation on disk. A download link is available if the automatic download is blocked.</div>
+        <div><b>Download MP4:</b> renders and encodes the visible area one frame at a time through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Video export keeps one raster frame at a time and does not store the full animation on disk. A download link is available if the automatic download is blocked.</div>
         <div><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. Opening or enabling the plugin selects Windy's Precipitation type layer; you can then choose another background. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Above-model-ground pressure levels available from some neighbouring columns are retained with renormalized weights and a limited-detail flag, rather than discarding warm valley air because a mountain corner lacks those levels. This is an approximate spatial estimate, not restored observations. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Entire missing columns and missing precipitation remain unavailable. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Estimated types:</b> colours and icons show the estimated physical precipitation type. Limited-detail and borderline point labels say “possible”. This is model guidance, not a calibrated probability. If the profile cannot be classified, no type colour or icon is invented.</div>
         <div><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div>
@@ -175,6 +176,7 @@
   type RasterFrame={shading:any;icons:any;geography:any|null;fallback:boolean;geographyError:string;bytes:number;record:StoredFrame;geographyPromise?:Promise<void>};
   const preparedMapCache=new PreparedMapCache<StoredFrame>();
   const preparedKeys=new Set<string>();
+  let downloadProgress=0;
   let preparingMap=false,prepareMessage='',prepareGeneration=0,preparedReadKey='';
   let exportingMap=false,videoAbort:AbortController|null=null,videoDownloadUrl='',videoDownloadName='';
   let weatherLoadProgress=0,terrainLoadProgress=0,rasterLoadProgress=0,stormLoadProgress=0;
@@ -550,7 +552,7 @@
     return precipMmAtTime(p.forecast,p.times,target);
   }
   function rasterZoom(){const b=currentBounds();return viewportRasterZoom(map.getSize().x,b.west,b.east,map.getZoom());}
-  function cancelMapPreparation(){prepareGeneration++;videoAbort?.abort();videoAbort=null;exportingMap=false;preparingMap=false;prepareMessage=`Stopped · ${preparedKeys.size} times prepared`;}
+  function cancelMapPreparation(){prepareGeneration++;videoAbort?.abort();videoAbort=null;exportingMap=false;preparingMap=false;downloadProgress=0;prepareMessage='Download cancelled';}
   function resetMapPreparation(){cancelMapPreparation();preparedKeys.clear();preparedReadKey='';prepareMessage='';}
   function restorePreparedFrame(record:StoredFrame):RasterFrame{
     const shading=L.layerGroup(),icons=L.layerGroup(),geography=L.layerGroup();
@@ -570,7 +572,7 @@
     const reference=getStoreTimestamp(),scene=phaseFrameKey(reference),my=++prepareGeneration;
     const options=JSON.stringify([showContours,showIcons,unitSystem]);
     const current=()=>my===prepareGeneration&&enabled&&!destroyed&&scene===phaseFrameKey(reference)&&options===JSON.stringify([showContours,showIcons,unitSystem]);
-    const started=Date.now();preparingMap=true;preparedKeys.clear();prepareMessage=`0 / ${times.length} times…`;
+    const started=Date.now();preparingMap=true;downloadProgress=0;preparedKeys.clear();prepareMessage='Starting download…';
     if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}rasterEpoch++;
     try{
       if(!times.length)throw new Error('No available forecast times for MP4');
@@ -594,13 +596,13 @@
             }
           }finally{releaseExportFrame(frame);}
           i++;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
-          prepareMessage=`${i} / ${times.length} times${i>1&&minutes>0?` · ~${minutes} min left`:'…'}`;
+          downloadProgress=Math.round(i/times.length*99);prepareMessage=`Preparing map · ${downloadProgress}%${i>1&&minutes>0?` · ~${minutes} min left`:'…'}`;
           await new Promise(resolve=>setTimeout(resolve,0));
         }
         if(current())prepareMessage=`Map ready · ${preparedKeys.size} times cached · MP4 unavailable in this browser`;
       }
       if(!current()&&my===prepareGeneration)prepareMessage='Preparation stopped · forecast changed; refresh to try again';
-    }catch(error){if(current()){prepareMessage=error instanceof Error?`${error.message} · ${preparedKeys.size} times prepared`:'Preparation unavailable · normal timeline still works';preparedMapCache.close();}}
+    }catch(error){if(current()){prepareMessage=error instanceof Error?`Download could not finish: ${error.message}`:'Download could not finish · try again';preparedMapCache.close();}}
     finally{if(my===prepareGeneration){preparingMap=false;exportingMap=false;scheduleNextFrame();}}
   }
 
@@ -632,7 +634,7 @@
       context.drawImage(image,nw.x,nw.y,se.x-nw.x,se.y-nw.y);
     };
     try{
-      prepareMessage='MP4 · loading map background…';requireCurrent();
+      prepareMessage='Creating video · loading background…';requireCurrent();
       const z=rasterZoom(),tiles=typeof getMapTiles==='function'?getMapTiles():{},kind=String(store.get('map')??'sznmap');
       const template=(Math.floor(Number(map.getZoom()))<=11?(tiles as any).graymap:(tiles as any)[kind]??(tiles as any).sznmap)
         ??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
@@ -661,10 +663,10 @@
         }
         ctx.restore();ctx.setTransform(1,0,0,1,0,0);
         drawVideoCaption(ctx,time,canvas.width,canvas.height,header*sy,footer*sy,record.fallback||mapDataMissing);
-      },abort.signal,(done,total)=>{if(current())prepareMessage=`Encoding MP4 · ${done} / ${total} times`;});
+      },abort.signal,(done,total)=>{if(current()){downloadProgress=Math.round(done/total*99);prepareMessage=done===total?'Finishing download…':`Creating video · ${downloadProgress}%`;}});
       requireCurrent();videoDownloadUrl=URL.createObjectURL(blob);videoDownloadName=`wintry-forecast-${new Date(times[0]).toISOString().replace(/[:.]/g,'-')}.mp4`;
       const link=document.createElement('a');link.href=videoDownloadUrl;link.download=videoDownloadName;document.body.appendChild(link);link.click();link.remove();
-      prepareMessage=`MP4 ready · ${times.length} times · download available below`;
+      downloadProgress=100;prepareMessage='Video ready · download started';
     }finally{frames.clear();if(videoAbort===abort){videoAbort=null;exportingMap=false;}canvas.width=canvas.height=base.width=base.height=0;}
   }
 
@@ -954,7 +956,7 @@
 
   let lastNavigationKey='';
   export function activatePrecipitationLayer(){if(enabled&&store.get('overlay')!=='ptype')store.set('overlay','ptype');}
-  function handleMapNavigation(){const size=map.getSize(),key=JSON.stringify([currentBounds(),Number(map.getZoom()),size.x,size.y]);if(key===lastNavigationKey)return;const wasPrepared=preparingMap||preparedKeys.size>0;resetMapPreparation();if(wasPrepared)prepareMessage='Map changed · prepare this area';lastNavigationKey=key;precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
+  function handleMapNavigation(){const size=map.getSize(),key=JSON.stringify([currentBounds(),Number(map.getZoom()),size.x,size.y]);if(key===lastNavigationKey)return;const wasPrepared=preparingMap||preparedKeys.size>0;resetMapPreparation();if(wasPrepared)prepareMessage='Map changed · ready for a new download';lastNavigationKey=key;precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
   function toggleEnabled(){
     lastNavigationKey='';
     if(enabled){activatePrecipitationLayer();register(config.name,'high');void renderStorms();refreshViewport();return}
