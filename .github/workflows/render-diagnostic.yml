@@ -1,0 +1,39 @@
+name: render-diagnostic
+on:
+  push:
+    branches: [verify-wintry-forecast-1000.1.6]
+    paths: ['.github/workflows/render-diagnostic.yml']
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm install
+      - run: npm run build
+      - run: |
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps chromium
+          node test/render-diagnostic.mjs
+      - uses: actions/download-artifact@v4
+        with:
+          name: wintry-shading-browser
+          run-id: 39432072363
+          github-token: ${{ github.token }}
+          path: test-output/previous
+      - name: Decode downloaded MP4 independently
+        run: |
+          ffprobe -v error -show_entries stream=codec_name,width,height,nb_frames,duration -of json test-output/previous/wintry-live.mp4
+          ffmpeg -hide_banner -loglevel error -i test-output/previous/wintry-live.mp4 -frames:v 1 test-output/mp4-decoded-first.png
+          ffmpeg -hide_banner -loglevel error -ss 14 -i test-output/previous/wintry-live.mp4 -frames:v 1 test-output/mp4-decoded-middle.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wintry-final-diagnostics
+          path: test-output/
