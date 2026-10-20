@@ -61,11 +61,16 @@ try{
  },rasterURL);
  for(const zoom of [9,12]){
   await page.evaluate(z=>W.map.map.setZoom(z,{animate:false}),zoom);await page.waitForTimeout(3000);
-  const before=await colour(600,500);
   await page.evaluate(()=>testRaster.addTo(W.map.map));await page.waitForTimeout(100);
-  const after=await colour(600,500),expected=await page.evaluate(()=>expectedRasterColour);
+  const expected=await page.evaluate(()=>expectedRasterColour);
   assert.equal(await page.evaluate(()=>testRaster.options.opacity),1);
-  assert.ok(after.every((v,i)=>Math.abs(v-expected[i])<12),JSON.stringify({zoom,before,after,expected}));
+  // Native place labels sit above this overlay. Sample several areas so a label cannot masquerade as alpha blending.
+  let matching=0;const samples=[];
+  for(const x of [440,500,560,620])for(const y of [300,400,500,600]){
+    const actual=await colour(x,y);samples.push({x,y,actual});
+    if(actual.every((v,i)=>Math.abs(v-expected[i])<12))matching++;
+  }
+  assert.ok(matching>=4,JSON.stringify({zoom,matching,expected,samples}));
   await page.screenshot({path:'test-output/windy-raster-zoom-'+zoom+'.png'});
   await page.evaluate(()=>W.map.map.removeLayer(testRaster));
  }
