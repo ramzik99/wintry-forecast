@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const source=readFileSync(new URL('../src/precipShading.ts',import.meta.url),'utf8');
 const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
-const {precipitationShade,dryTerrainDifference,viewportGridForZoom,sampleTileBounds,PRECIP_TYPE_COLOURS}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+const {precipitationShade,dryTerrainDifference,viewportGridForZoom,sampleTileBounds,PRECIP_TYPE_COLOURS,writePrecipitationPixel}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
 test('one type colour is retained at every positive amount with no dry or missing fill',()=>{
   for(const p of [null,NaN,Infinity,-1,0])assert.equal(precipitationShade(p),null);
   for(const p of [.01,.499,.5,2.999,3,50])assert.equal(precipitationShade(p).tone,0);
@@ -30,4 +30,15 @@ test('zoom increases shared grid resolution and sample tiles stop at grid edges'
   assert.deepEqual(sampleTileBounds(grid,1,1),[[.5,.5],[.5,1.5],[1.5,1.5],[1.5,.5]]);
   assert.deepEqual(sampleTileBounds(grid,0,0),[[0,0],[0,.5],[.5,.5],[.5,0]]);
   grid[1][0]=null;assert.equal(sampleTileBounds(grid,1,1),null);
+});
+
+test('categorical shading uses exact legend colours with no decorative brightness or blended types',()=>{
+ for(const [key,hex] of Object.entries(PRECIP_TYPE_COLOURS)){
+  const data=new Uint8ClampedArray(8);
+  assert.equal(writePrecipitationPixel(data,4,key),true);
+  assert.deepEqual([...data.slice(4)],[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16),255]);
+  assert.deepEqual([...data.slice(0,4)],[0,0,0,0]);
+ }
+ const unknown=new Uint8ClampedArray(4);assert.equal(writePrecipitationPixel(unknown,0,'unknown'),false);
+ assert.deepEqual([...unknown],[0,0,0,0]);
 });

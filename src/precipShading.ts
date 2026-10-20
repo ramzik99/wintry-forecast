@@ -43,3 +43,12 @@ export function sampleTileBounds(grid: ({ lat: number; lon: number } | null)[][]
   if (![s,n,w,e].every(Number.isFinite) || s >= n || w >= e) return null;
   return [[s,w],[s,e],[n,e],[n,w]] as [number,number][];
 }
+
+const TYPE_RGB=Object.fromEntries(Object.entries(PRECIP_TYPE_COLOURS).map(([key,hex])=>[
+  key,[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)]
+])) as Record<TerrainPrecipTypeKey,number[]>;
+/** A categorical pixel is a single legend colour; no hillshade, blends or invented fallback colour. */
+export function writePrecipitationPixel(data:Uint8ClampedArray,offset:number,key:TerrainPrecipTypeKey){
+  const rgb=TYPE_RGB[key];if(!rgb)return false;
+  data[offset]=rgb[0];data[offset+1]=rgb[1];data[offset+2]=rgb[2];data[offset+3]=255;return true;
+}

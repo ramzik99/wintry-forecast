@@ -1,7 +1,7 @@
 import type { ProfilePoint } from './snowLevel';
 
 export type Weighted<T> = { value:T; weight:number };
-export const TILE_SIZE=256, RASTER_SAMPLES=96;
+export const TILE_SIZE=256, RASTER_SAMPLES=128;
 /** Infer physical Web-Mercator zoom from viewport geometry, independent of wrapper zoom conventions. */
 export function viewportRasterZoom(width:number,west:number,east:number,fallback:number){
   const span=east-west;
@@ -76,4 +76,9 @@ export function blendedProfile(values:Weighted<ProfilePoint[]>[],wetBulb:(t:numb
     if(Number.isFinite(tw))result.push({...first,tempC:temp,dewpointC:dew,heightM:height,wetBulbC:tw,spatialSupport:support/total});
   }
   return result.sort((a,b)=>a.heightM-b.heightM);
+}
+
+/** Sample the same global pixel lattice on every tile and after panning. */
+export function rasterSampleLocation(tileX:number,tileY:number,zoom:number,x:number,y:number){
+  return tileLocation(tileX+(x+.5)/RASTER_SAMPLES,tileY+(y+.5)/RASTER_SAMPLES,zoom);
 }

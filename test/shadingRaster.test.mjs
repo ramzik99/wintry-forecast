@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const compile=name=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(readFileSync(new URL(`../src/${name}.ts`,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
 const rasterURL=compile('shadingRaster');
-const {weatherInterpolator,weightedScalar,wetCoverage,blendedProfile,tileLocation,tilePosition,visibleRasterTiles,viewportRasterZoom,RASTER_SAMPLES}=await import(rasterURL);
+const {weatherInterpolator,weightedScalar,wetCoverage,blendedProfile,tileLocation,tilePosition,visibleRasterTiles,viewportRasterZoom,RASTER_SAMPLES,rasterSampleLocation}=await import(rasterURL);
 const {supportedPrecipitationType}=await import(compile('precipType'));
 const terrainJS=ts.transpileModule(readFileSync(new URL('../src/terrainTiles.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace("'./shadingRaster'",JSON.stringify(rasterURL));
 const {decodeTerrarium,terrainTileZoom,TerrainTiles}=await import('data:text/javascript;base64,'+Buffer.from(terrainJS).toString('base64'));
@@ -70,4 +70,17 @@ test('terrain tiles share pending requests, reuse cached data, and preserve zero
   try{await Promise.all([dem.ensure(b,9,()=>true,()=>{}),dem.ensure(b,9,()=>true,()=>{})]);const first=requests;assert.ok(first>0);assert.ok(peak<=4);
     assert.equal(dem.sample(32,36,9),0);await dem.ensure(b,9,()=>true,()=>{});assert.equal(requests,first);assert.equal(dem.sample(-70,0,9),null);
   }finally{dem.destroy();Object.assign(globalThis,original);}
+});
+
+test('adjacent shading tiles use one regular global pixel lattice at every zoom',()=>{
+ for(const z of [0,5,8,14,19]){
+  const left=rasterSampleLocation(2,3,z,RASTER_SAMPLES-1,50),right=rasterSampleLocation(3,3,z,0,50);
+  const a=tilePosition(left.lat,left.lon,z),b=tilePosition(right.lat,right.lon,z);
+  assert.ok(Math.abs((b.x-a.x)-1/RASTER_SAMPLES)<1e-8);
+  assert.ok(Math.abs(b.y-a.y)<1e-8);
+  const upper=rasterSampleLocation(2,3,z,50,RASTER_SAMPLES-1),lower=rasterSampleLocation(2,4,z,50,0);
+  const c=tilePosition(upper.lat,upper.lon,z),d=tilePosition(lower.lat,lower.lon,z);
+  // Polar clamping is separate from tile sampling; compare rows within the valid Mercator domain.
+  if(upper.lat>-85&&upper.lat<85&&lower.lat>-85&&lower.lat<85)assert.ok(Math.abs((d.y-c.y)-1/RASTER_SAMPLES)<1e-8);
+ }
 });
