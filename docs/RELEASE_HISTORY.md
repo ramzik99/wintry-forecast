@@ -1,5 +1,11 @@
 # Release history
 
+## 1000.1.7 — 20 October 2026
+
+Preserves the selected Windy weather layer beneath translucent Wintry shading. Removes the extra opaque geographic overlay and automatic Precipitation type selection. Smooth edges, terrain diagnosis, compact controls and streaming MP4 remain.
+
+117 unit tests, live desktop/mobile selection and shading checks, complete MP4 download and independent H.264 decoding passed. [Release notes](../RELEASE_1000_1_7.md).
+
 ## 1000.1.6 — 20 October 2026
 
 Continuous geographic terrain background, translucent precipitation colours, smooth wet/dry edges and decoded frame swaps. Repairs the black WebGL raster textures and close-zoom shading loss. Screen and MP4 rendering share the same background and opacity.
