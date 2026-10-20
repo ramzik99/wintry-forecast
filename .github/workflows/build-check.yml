@@ -1,9 +1,8 @@
-name: build-check
+name: published-1000.1.9-thorough-qa
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [qa-published-1000.1.9-thorough]
 
 jobs:
   build:
@@ -41,8 +40,13 @@ jobs:
       - name: Test streaming MP4 and shading pixels
         run: node test/map-export-browser.mjs
 
-      - name: Test live Windy desktop, mobile and MP4 download
-        run: node test/windy-live.mjs
+      - name: Download the official published plugin
+        run: |
+          curl --fail --location --retry 2 https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.9/plugin.min.js -o dist/released.js
+          node --check dist/released.js
+          sha256sum dist/released.js
+      - name: Test the published plugin on desktop and mobile
+        run: node test/windy-published-qa.mjs
 
       - name: Independently decode exported video
         run: |
@@ -68,7 +72,9 @@ jobs:
           name: wintry-shading-browser
           path: |
             test-output/*.png
-            test-output/wintry-live.mp4
+            test-output/*.mp4
+            test-output/*.json
+            test-output/*.log
           if-no-files-found: ignore
 
       - name: Verify packaged plugin version
@@ -78,3 +84,26 @@ jobs:
           echo "package.json:    ${PACKAGE_VERSION}"
           echo "dist/plugin.json: ${BUILT_VERSION}"
           test "$PACKAGE_VERSION" = "$BUILT_VERSION"
+
+  robustness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install browser
+        run: |
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps chromium
+          mkdir -p dist
+          curl --fail --location --retry 2 https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.9/plugin.min.js -o dist/released.js
+          sha256sum dist/released.js
+      - name: Test published plugin geography, failures and lifecycle
+        run: node test/windy-robustness-qa.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: published-robustness
+          path: test-output/
