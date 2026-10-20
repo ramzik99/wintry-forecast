@@ -16,7 +16,7 @@ let page=await browser.newPage({viewport:{width:1365,height:1000}});
 async function loadWindy(time){
  await page.goto('https://www.windy.com/',{waitUntil:'domcontentloaded',timeout:60000});
  await page.waitForFunction(()=>window.W?.map?.map?.maplibreMap&&window.W?.fetch?.getMeteogramForecastData,null,{timeout:60000});
- await page.evaluate(t=>{W.map.map.setView([46.5,10],9,{animate:false});if(t)W.store.set('timestamp',t);},time);
+ await page.evaluate(t=>{W.store.set('particlesAnim','off');W.map.map.setView([46.5,10],9,{animate:false});if(t)W.store.set('timestamp',t);},time);
  await page.waitForFunction(()=>W.map.map.getZoom()===9);await page.waitForTimeout(3000);
 }
 async function settled(){
@@ -101,6 +101,7 @@ try{
  await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
  assert.equal(await page.locator('.wintry-raster-tile,.wintry-terrain-tile').count(),0);
  console.log('Desktop controls, graph, sounding, timeline, pan and cleanup passed.');
+ await page.close();
  page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'});
  await loadWindy(wet.time);await mount();
  await page.getByRole('button',{name:'Open Wintry settings'}).tap();
@@ -111,7 +112,15 @@ try{
  const downloaded=page.waitForEvent('download',{timeout:600000});
  console.log('Starting actual six-day mobile MP4 export');
  await downloadButton.tap();
- const file=await downloaded;assert.equal(await file.failure(),null);await file.saveAs('test-output/wintry-live.mp4');
+ const reporter=setInterval(()=>page.locator('.prepare-map-controls small').innerText().then(t=>console.log('Export progress:',t)).catch(()=>{}),30000);
+ let file;
+ try{
+  file=await Promise.race([downloaded,(async()=>{
+   await page.waitForFunction(()=>/could not finish|cancelled|stopped|MP4 unavailable/i.test(document.querySelector('.prepare-map-controls small')?.textContent??''),null,{timeout:600000});
+   throw new Error('Live download stopped: '+await page.locator('.prepare-map-controls small').innerText());
+  })()]);
+ }finally{clearInterval(reporter)}
+ assert.equal(await file.failure(),null);await file.saveAs('test-output/wintry-live.mp4');
  const videoBytes=await readFile('test-output/wintry-live.mp4');assert.ok(videoBytes.length>10000);
  console.log('Actual plugin MP4 downloaded',videoBytes.length,'bytes');
  await page.evaluate(async data=>{
