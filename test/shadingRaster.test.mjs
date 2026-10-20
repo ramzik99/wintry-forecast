@@ -58,7 +58,7 @@ test('raster tiles are globally anchored and cover the date line without an over
 });
 test('Terrarium decode retains negative elevations and fractions, with bounded terrain zoom',()=>{
   assert.equal(decodeTerrarium(128,0,0),0);assert.equal(decodeTerrarium(127,255,128),-.5);assert.equal(decodeTerrarium(137,219,68),2523.265625);
-  assert.equal(terrainTileZoom(0),0);assert.equal(terrainTileZoom(9),7);assert.equal(terrainTileZoom(22),14);
+  assert.equal(terrainTileZoom(0),0);assert.equal(terrainTileZoom(9),9);assert.equal(terrainTileZoom(22),14);
 });
 test('terrain tiles share pending requests, reuse cached data, and preserve zero elevations',async()=>{
   const original={fetch:globalThis.fetch,document:globalThis.document,createImageBitmap:globalThis.createImageBitmap};let requests=0,active=0,peak=0;

@@ -121,7 +121,7 @@
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
   import { weatherInterpolator, weightedScalar, blendedProfile, rasterSampleLocation, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles, terrainTileZoom } from './terrainTiles';
-  import { precipRasterLayer } from './precipRasterLayer';
+  import { precipRasterLayer, terrainBackgroundLayer, terrainMapTemplate, PRECIP_RASTER_OPACITY } from './precipRasterLayer';
   import { GeographicTiles } from './geographicTiles';
   import { buildProfile, wetBulbZeroHeight, resolvedSnowlineM, wetBulbFromDewpoint } from './snowLevel';
   import { precipMmAt, precipMmAtTime, isPrecipitating } from './precip';
@@ -164,6 +164,7 @@
   let stormInterpolator:any=null;
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
   let shadingLayer:any=null, precipIconLayer:any=null;
+  let terrainBackground:any=null,terrainBackgroundKey='',mapStyleListener:any=null;
   const terrainTiles=new TerrainTiles();
   let terrainComplete=false;
   let terrainDetailStatus='', rasterEpoch=0, rasterTarget:number|null=null, rasterTimer:ReturnType<typeof setTimeout>|null=null;
@@ -333,7 +334,7 @@
   }
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null;activePhaseKey=''}
-  function clearShading(){resetMapPreparation();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}terrainLoading=false;terrainDetailStatus='';terrainComplete=false;rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
+  function clearShading(){clearTerrainBackground();resetMapPreparation();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}terrainLoading=false;terrainDetailStatus='';terrainComplete=false;rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
   function clearPointState(closeChart=true){placeAbort?.abort();placeAbort=null;clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function statusColor(s:ProbeStatus){return s==='above'?'#46d9ff':s==='below'?'#ff9d3d':s==='near'?'#ffe45c':'#fff'}
@@ -590,8 +591,7 @@
     try{
       prepareMessage='Creating video · loading background…';requireCurrent();
       const z=rasterZoom(),tiles=typeof getMapTiles==='function'?getMapTiles():{},kind=String(store.get('map')??'sznmap');
-      const template=(Math.floor(Number(map.getZoom()))<=11?(tiles as any).graymap:(tiles as any)[kind]??(tiles as any).sznmap)
-        ??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
+      const template=terrainMapTemplate(tiles as any,kind);
       bc.scale(sx,sy);
       await mapLimit(visibleRasterTiles(currentBounds(),z),4,async t=>{
         requireCurrent();const n=2**z,url=template.replace('{z}',String(z)).replace('{x}',String(((t.x%n)+n)%n)).replace('{y}',String(t.y));
@@ -605,7 +605,9 @@
         ctx.drawImage(base,0,header*sy);
         ctx.save();ctx.setTransform(sx,0,0,sy,0,header*sy);
         ctx.beginPath();ctx.rect(0,0,size.x,size.y);ctx.clip();
+        ctx.imageSmoothingEnabled=false;ctx.globalAlpha=PRECIP_RASTER_OPACITY;
         for(const tile of record.tiles){const image=await videoImage(tile.url,abort.signal);requireCurrent();drawTile(ctx,image,tile);}
+        ctx.globalAlpha=1;ctx.imageSmoothingEnabled=true;
         if(showContours)drawVideoContours(ctx,time);
         if(showIcons)for(const symbol of record.symbols){
           const svg=symbol.html.match(/<svg[\s\S]*<\/svg>/)?.[0];if(!svg)continue;
@@ -693,7 +695,21 @@
     if(rasterTimer||destroyed||!enabled)return;
     rasterTimer=setTimeout(()=>{rasterTimer=null;void paintShading(getStoreTimestamp());},80);
   }
+  function clearTerrainBackground(){
+    if(terrainBackground)try{map.removeLayer(terrainBackground)}catch{}
+    terrainBackground=null;terrainBackgroundKey='';
+  }
+  function syncTerrainBackground(){
+    if(!enabled||!showShading||!precipDetailAvailable){clearTerrainBackground();return;}
+    const tiles=typeof getMapTiles==='function'?getMapTiles():{};
+    const url=terrainMapTemplate(tiles as any,String(store.get('map')??'sznmap'));
+    if(url===terrainBackgroundKey&&terrainBackground)return;
+    const pane=map.getPane('wintry-terrain-background')||map.createPane('wintry-terrain-background');pane.style.zIndex='389';pane.style.pointerEvents='none';
+    const next=terrainBackgroundLayer(L,url,layerOrder?.BASE_MAP??400,'wintry-terrain-background').addTo(map);
+    clearTerrainBackground();terrainBackground=next;terrainBackgroundKey=url;
+  }
   function renderPrecipitation(target:number){
+    syncTerrainBackground();
     if(!precipDetailAvailable||(!showShading&&!showIcons)){clearShading();return;}
     const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
     rasterTarget=target;
@@ -902,15 +918,15 @@
 
   let lastNavigationKey='';
   export function activatePrecipitationLayer(){if(enabled&&store.get('overlay')!=='ptype')store.set('overlay','ptype');}
-  function handleMapNavigation(){const size=map.getSize(),key=JSON.stringify([currentBounds(),Number(map.getZoom()),size.x,size.y]);if(key===lastNavigationKey)return;const wasPrepared=preparingMap||preparedKeys.size>0;resetMapPreparation();if(wasPrepared)prepareMessage='Map changed · ready for a new download';lastNavigationKey=key;precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
+  function handleMapNavigation(){const size=map.getSize(),key=JSON.stringify([currentBounds(),Number(map.getZoom()),size.x,size.y]);if(key===lastNavigationKey)return;const wasPrepared=preparingMap||preparedKeys.size>0;resetMapPreparation();if(wasPrepared)prepareMessage='Map changed · ready for a new download';lastNavigationKey=key;precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;syncTerrainBackground();clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
   function toggleEnabled(){
     lastNavigationKey='';
     if(enabled){activatePrecipitationLayer();register(config.name,'high');void renderStorms();refreshViewport();return}
     release(config.name,'high');for(const abort of forecastRequests)abort.abort();forecastRequests.clear();generation++;refreshEpoch++;pendingProfiles.clear();viewportLoading=false;refreshQueued=false;
     if(moveTimer){clearTimeout(moveTimer);moveTimer=null}clearContours();clearShading();clearStorms();clearPointState(true);
   }
-  onMount(()=>{loadPreferences();activatePrecipitationLayer();if(!enabled)release(config.name,'high');freshnessTimer=setInterval(checkAutomaticRefresh,30_000);document.addEventListener('visibilitychange',checkAutomaticRefresh);window.addEventListener('online',checkAutomaticRefresh);map.on('moveend',handleMapNavigation);map.on('zoomend',handleMapNavigation);try{timestampListener=store.on('timestamp',()=>{if(enabled&&cache.length)renderFromCache();else void renderStorms();if(enabled)updatePersistentClickLabel()})}catch{}void renderStorms();refreshViewport()})
-  onDestroy(()=>{destroyed=true;if(videoDownloadUrl)URL.revokeObjectURL(videoDownloadUrl);cancelMapPreparation();preparedMapCache.close();stormFrames.clear();placeAbort?.abort();for(const abort of forecastRequests)abort.abort();forecastRequests.clear();refreshEpoch++;pendingProfiles.clear();if(freshnessTimer)clearInterval(freshnessTimer);document.removeEventListener('visibilitychange',checkAutomaticRefresh);window.removeEventListener('online',checkAutomaticRefresh);generation++;clickGeneration++;refreshQueued=false;if(moveTimer)clearTimeout(moveTimer);map.off('moveend',handleMapNavigation);map.off('zoomend',handleMapNavigation);if(timestampListener!==null)try{store.off(timestampListener)}catch{}clearContours();clearShading();clearStorms();terrainTiles.destroy();geographicTiles.destroy();clearClickLayer();stormInterpolator?.destroy();stormInterpolator=null;profileCache.clear()})
+  onMount(()=>{loadPreferences();activatePrecipitationLayer();syncTerrainBackground();mapStyleListener=store.on('map',()=>{syncTerrainBackground();resetMapPreparation();if(enabled&&cache.length)renderFromCache()});if(!enabled)release(config.name,'high');freshnessTimer=setInterval(checkAutomaticRefresh,30_000);document.addEventListener('visibilitychange',checkAutomaticRefresh);window.addEventListener('online',checkAutomaticRefresh);map.on('moveend',handleMapNavigation);map.on('zoomend',handleMapNavigation);try{timestampListener=store.on('timestamp',()=>{if(enabled&&cache.length)renderFromCache();else void renderStorms();if(enabled)updatePersistentClickLabel()})}catch{}void renderStorms();refreshViewport()})
+  onDestroy(()=>{destroyed=true;if(videoDownloadUrl)URL.revokeObjectURL(videoDownloadUrl);cancelMapPreparation();preparedMapCache.close();stormFrames.clear();placeAbort?.abort();for(const abort of forecastRequests)abort.abort();forecastRequests.clear();refreshEpoch++;pendingProfiles.clear();if(freshnessTimer)clearInterval(freshnessTimer);document.removeEventListener('visibilitychange',checkAutomaticRefresh);window.removeEventListener('online',checkAutomaticRefresh);generation++;clickGeneration++;refreshQueued=false;if(moveTimer)clearTimeout(moveTimer);map.off('moveend',handleMapNavigation);map.off('zoomend',handleMapNavigation);if(mapStyleListener!==null)try{store.off(mapStyleListener)}catch{}if(timestampListener!==null)try{store.off(timestampListener)}catch{}clearContours();clearShading();clearStorms();terrainTiles.destroy();geographicTiles.destroy();clearClickLayer();stormInterpolator?.destroy();stormInterpolator=null;profileCache.clear()})
 </script>
 
 <style lang="less">

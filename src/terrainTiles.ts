@@ -1,7 +1,7 @@
 import { tileLocation, tilePosition, visibleRasterTiles } from './shadingRaster';
 
 export function decodeTerrarium(r:number,g:number,b:number){return r*256+g+b/256-32768;}
-export function terrainTileZoom(mapZoom:number){return Math.max(0,Math.min(14,Math.floor(mapZoom)-2));}
+export function terrainTileZoom(mapZoom:number){return Math.max(0,Math.min(14,Math.floor(mapZoom)));}
 type DemTile={pixels:Float32Array;width:number;height:number};
 const URL='https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
 
