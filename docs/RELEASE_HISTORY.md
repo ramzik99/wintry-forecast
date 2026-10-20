@@ -1,5 +1,9 @@
 # Release history
 
+## 1000.1.10 — 20 October 2026
+
+Fixes reversed contour connections in diagonal saddle cells using the bilinear asymptotic decider. Adds three numerical regressions and live Norway/date-line contour checks. 122 unit tests, live desktop/mobile checks and independent MP4 decoding passed. [Release notes](../RELEASE_1000_1_10.md) · [QA report](../QA_1000_1_10.md).
+
 ## 1000.1.9 — 20 October 2026
 
 Full-opacity precipitation colours with label-free relief derived from the loaded elevation data. Map and MP4 share the same shaded tiles. Windy's interface remains above them.
