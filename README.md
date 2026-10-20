@@ -1,6 +1,6 @@
 # Wintry forecast for Windy
 
-**Published 1000.1.4** — terrain-aware winter-weather guidance from sampled
+**Published 1000.1.5** — terrain-aware winter-weather guidance from sampled
 ECMWF profiles and local terrain. Six physical types are displayed; limited-detail point diagnoses are qualified
 with “possible”, while unsupported snow amounts remain unavailable. Independent forecast-skill validation
 is still required; this is not a calibrated high-confidence forecast.
@@ -13,13 +13,16 @@ shows the diagnosed precipitation type, terrain, estimated snowline and average
 precipitation. **Forecast** opens the timeline; **Sounding** keeps the atmospheric
 profile available without crowding the map controls.
 
-- **Contours:** estimated snowline and dry-terrain hatching.
+- **Contours:** estimated snowline contours.
 - **Shading:** six physical precipitation types in their existing Windy colours.
+  One flat colour per type: no decorative terrain brightness, hatching or wet-area map-image overlays.
+  Weather and terrain inputs finish loading before the previous complete shading frame is replaced.
+  If detailed terrain coverage is incomplete, the entire view uses the coarse estimate consistently.
   No extra unresolved-type colour or question-mark icon. Missing/unclassifiable
   profiles remain blank rather than receiving an invented type.
   Warm levels available in valley columns are retained when neighbouring mountain
   columns mask them; partial horizontal support remains a limited-detail estimate.
-- **Icons:** precipitation symbols and ECMWF forecast lightning.
+- **Optional icons:** precipitation symbols and ECMWF forecast lightning; off by default for new preferences.
 - Shading and icons become available from zoom level 8; contours are independent.
 - Search, saved locations, metric/imperial units and image export are retained.
 - Controls remain compact on desktop and mobile; forecast windows stay on screen
@@ -34,7 +37,7 @@ H.264 support is required; browsers without it retain optional timeline preparat
 
 The video includes a geographic background, precipitation shading, enabled type
 icons and snowline contours, timestamps and a colour legend. It excludes Windy's
-weather layer, forecast lightning and dry-terrain hatching. Five forecast hours
+weather layer and forecast lightning. Five forecast hours
 correspond to one video second. The longest video dimension is bounded at 1280 px.
 Encoding happens in the browser without uploading the frames.
 
@@ -73,11 +76,11 @@ See [method, equations and scientific limits](METHODS.md),
 
 Node.js 24; `npm install`, `npm test`, `npm run build`. Built files are in `dist`.
 The package and plugin configuration must contain the same three-part version.
-GitHub runs unit, build and browser MP4 checks. Version 1000.1.4 was published from
-tested source using the isolated `publish-wintry-forecast-1000.1.4` publishing branch.
+GitHub runs unit, build and browser MP4 checks. Version 1000.1.5 was published from
+tested source using the isolated `publish-wintry-forecast-1000.1.5` publishing branch.
 
 [Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Published 1000.1.4](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.4/plugin.min.js)
+[Published 1000.1.5](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.5/plugin.min.js)
 
 ## Sources and licences
 
