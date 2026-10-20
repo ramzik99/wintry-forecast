@@ -1,0 +1,36 @@
+import {chromium} from 'playwright';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import ts from 'typescript';
+const rasterURL='data:text/javascript;base64,'+Buffer.from(ts.transpileModule(await readFile('src/precipRasterLayer.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
+const pluginURL='data:text/javascript;base64,'+(await readFile('dist/plugin.js')).toString('base64');
+await mkdir('test-output',{recursive:true});
+const browser=await chromium.launch({headless:true,args:['--enable-unsafe-swiftshader','--use-angle=swiftshader']});
+const page=await browser.newPage({viewport:{width:1365,height:1000}});
+page.on('pageerror',e=>console.log('PAGE ERROR',String(e)));
+try{
+ await page.goto('https://www.windy.com/?46.5,10,8',{waitUntil:'domcontentloaded',timeout:60000});
+ await page.waitForFunction(()=>window.W?.map?.map?.maplibreMap&&window.W?.fetch?.getMeteogramForecastData,null,{timeout:60000});
+ await page.waitForTimeout(5000);
+ console.log('INITIAL MAP',await page.evaluate(()=>({zoom:W.map.map.getZoom(),bounds:W.map.map.getBounds(),map:W.store.get('map'),overlay:W.store.get('overlay'),order:W.map.layerOrder,tiles:W.map.getMapTiles(),layers:W.map.map.maplibreMap.getStyle().layers.map(l=>({id:l.id,type:l.type,paint:l.paint}))})));
+ await page.screenshot({path:'test-output/windy-background.png'});
+ console.log('RASTER',await page.evaluate(async rasterURL=>{
+  const {precipRasterLayer}=await import(rasterURL),m=W.map.map,b=m.getBounds(),canvas=document.createElement('canvas');canvas.width=canvas.height=256;
+  const c=canvas.getContext('2d');c.fillStyle='#00c6ff';c.fillRect(0,0,128,256);
+  m.createPane('wintry-precip-shading').style.zIndex='390';
+  window.testRaster=precipRasterLayer(L,canvas.toDataURL(),{lat:b.getNorth(),lon:b.getWest()},{lat:b.getSouth(),lon:b.getEast()},W.map.layerOrder.BASE_MAP,'wintry-precip-shading').addTo(m);
+  return m.maplibreMap.getStyle().layers.map(l=>({id:l.id,type:l.type,paint:l.paint}));
+ },rasterURL));
+ await page.waitForTimeout(3000);await page.screenshot({path:'test-output/windy-raster-background.png'});
+ await page.evaluate(()=>W.map.map.removeLayer(testRaster));
+ await page.evaluate(async pluginURL=>{
+  const host=document.createElement('div');host.id='windy-plugin-snowline-map-100m';document.body.append(host);
+  const mod=await import(pluginURL);window.wintryTest=new mod.default({target:host});
+ },pluginURL);
+ await page.waitForTimeout(45000);
+ console.log('PLUGIN PANEL',await page.locator('.snowline-panel').innerText());
+ console.log('PLUGIN NATIVE LAYERS',await page.evaluate(()=>W.map.map.maplibreMap.getStyle().layers.map(l=>({id:l.id,type:l.type}))));
+ await page.screenshot({path:'test-output/windy-wintry-desktop.png'});
+ await page.setViewportSize({width:390,height:844});await page.waitForTimeout(8000);
+ await page.screenshot({path:'test-output/windy-wintry-mobile.png'});
+ await page.evaluate(()=>wintryTest.$destroy());
+}finally{await browser.close()}

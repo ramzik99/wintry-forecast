@@ -37,12 +37,13 @@ jobs:
           npm install --no-save playwright@1.62.1
           npx playwright install --with-deps chromium
           node test/map-export-browser.mjs
+          node test/windy-live.mjs
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: wintry-shading-browser
-          path: test-output/precipitation-shading.png
+          path: test-output/*.png
           if-no-files-found: ignore
 
       - name: Verify packaged plugin version
