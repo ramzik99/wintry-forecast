@@ -38,6 +38,13 @@ jobs:
           npx playwright install --with-deps chromium
           node test/map-export-browser.mjs
 
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wintry-shading-browser
+          path: test-output/precipitation-shading.png
+          if-no-files-found: ignore
+
       - name: Verify packaged plugin version
         run: |
           PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
