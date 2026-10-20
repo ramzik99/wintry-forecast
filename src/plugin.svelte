@@ -165,6 +165,7 @@
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
   let shadingLayer:any=null, precipIconLayer:any=null;
   const terrainTiles=new TerrainTiles();
+  let terrainComplete=false;
   let terrainDetailStatus='', rasterEpoch=0, rasterTarget:number|null=null, rasterTimer:ReturnType<typeof setTimeout>|null=null;
   let terrainGeneration=0, terrainJobKey='';
   type FrameTile={url:string;nw:{lat:number;lon:number};se:{lat:number;lon:number}};
@@ -332,7 +333,7 @@
   }
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null;activePhaseKey=''}
-  function clearShading(){resetMapPreparation();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
+  function clearShading(){resetMapPreparation();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}terrainLoading=false;terrainDetailStatus='';terrainComplete=false;rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
   function clearPointState(closeChart=true){placeAbort?.abort();placeAbort=null;clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function statusColor(s:ProbeStatus){return s==='above'?'#46d9ff':s==='below'?'#ff9d3d':s==='near'?'#ffe45c':'#fff'}
@@ -699,11 +700,11 @@
     const b=currentBounds(),z=rasterZoom(),terrainKey=[z,b.south,b.north,b.west,b.east].join(':');
     if(terrainKey!==terrainJobKey){
       terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoadProgress=0;terrainLoading=true;terrainDetailStatus='';rasterEpoch++;
-      const ready=()=>{
+      const ready=(complete:boolean)=>{
         if(epoch!==terrainGeneration||destroyed||!enabled)return;
-        terrainLoading=false;terrainRevision++;frameCache.clear();renderPrecipitation(getStoreTimestamp());
+        terrainLoading=false;terrainComplete=complete;terrainRevision++;frameCache.clear();renderPrecipitation(getStoreTimestamp());
       };
-      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;}).then(ready,ready);
+      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;}).then(ready,()=>ready(false));
     }
     // Keep the previous complete frame while inputs load; never paint a partly loaded mosaic.
     if(terrainLoading)return;
@@ -740,7 +741,7 @@
     function diagnose(lat:number,lon:number){
       const neighbours=stencil(lat,lon);if(!neighbours||neighbours.some(v=>!profiles.has(v.value)))return null;
       const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount,detailZoom);if(!shade)return null;
-      const detailed=terrainTiles.sample(lat,lon,z),terrain=detailed??weightedScalar(neighbours,p=>p.terrainM);
+      const detailed=terrainComplete?terrainTiles.sample(lat,lon,z):null,terrain=detailed??weightedScalar(neighbours,p=>p.terrainM);
       if(terrain===null)return null;if(detailed===null)fallback=true;
       const profile=blendedProfile(neighbours.map(v=>({value:profiles.get(v.value)!,weight:v.weight})),wetBulbFromDewpoint);
       const phase=supportedPrecipitationType(profile,terrain);if(!phase)return null;return{phase};

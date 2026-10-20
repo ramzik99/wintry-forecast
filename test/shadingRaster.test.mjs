@@ -84,3 +84,12 @@ test('adjacent shading tiles use one regular global pixel lattice at every zoom'
   if(upper.lat>-85&&upper.lat<85&&lower.lat>-85&&lower.lat<85)assert.ok(Math.abs((d.y-c.y)-1/RASTER_SAMPLES)<1e-8);
  }
 });
+
+test('incomplete terrain coverage is reported after loading rather than presented as complete',async()=>{
+ const oldFetch=globalThis.fetch,dem=new TerrainTiles();let completed=0;
+ globalThis.fetch=async()=>({ok:false,status:503});
+ try{
+  const ready=await dem.ensure({south:31.9,north:32.1,west:35.9,east:36.1},9,()=>true,done=>{completed=done;});
+  assert.equal(ready,false);assert.ok(completed>0);assert.equal(dem.sample(32,36,9),null);
+ }finally{dem.destroy();globalThis.fetch=oldFetch;}
+});

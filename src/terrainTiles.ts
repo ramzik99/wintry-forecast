@@ -17,8 +17,9 @@ export class TerrainTiles {
   async ensure(bounds:{south:number;north:number;west:number;east:number},zoom:number,isCurrent:()=>boolean,progress:(completed:number,total:number)=>void){
     const z=terrainTileZoom(zoom),nw=tilePosition(bounds.north,bounds.west,z),se=tilePosition(bounds.south,bounds.east,z);
     const pad=1/256,a=tileLocation(nw.x-pad,nw.y-pad,z),b=tileLocation(se.x+pad,se.y+pad,z);
-    const tiles=visibleRasterTiles({north:a.lat,south:b.lat,west:a.lon,east:b.lon},z);let next=0,completed=0;
-    await Promise.all(Array.from({length:Math.min(4,tiles.length)},async()=>{while(this.alive&&isCurrent()){const tile=tiles[next++];if(!tile)return;await this.load(tile.x,tile.y,z);if(isCurrent())progress(++completed,tiles.length);}}));
+    const tiles=visibleRasterTiles({north:a.lat,south:b.lat,west:a.lon,east:b.lon},z);let next=0,completed=0,complete=true;
+    await Promise.all(Array.from({length:Math.min(4,tiles.length)},async()=>{while(this.alive&&isCurrent()){const tile=tiles[next++];if(!tile)return;if(!await this.load(tile.x,tile.y,z))complete=false;if(isCurrent())progress(++completed,tiles.length);}}));
+    return complete&&completed===tiles.length;
   }
   private load(x:number,y:number,z:number):Promise<boolean>{
     const n=2**z;x=((x%n)+n)%n;const key=`${z}/${x}/${y}`;
