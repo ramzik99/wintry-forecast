@@ -42,3 +42,12 @@ test('categorical shading uses exact legend colours with no decorative brightnes
  const unknown=new Uint8ClampedArray(4);assert.equal(writePrecipitationPixel(unknown,0,'unknown'),false);
  assert.deepEqual([...unknown],[0,0,0,0]);
 });
+
+test('wet/dry support fades opacity without changing precipitation-type hue or inventing dry coverage',()=>{
+ const data=new Uint8ClampedArray(4);
+ assert.equal(writePrecipitationPixel(data,0,'rain',.1),true);
+ assert.deepEqual([...data],[0,153,182,26]);
+ assert.equal(writePrecipitationPixel(data,0,'rain',1),true);
+ assert.deepEqual([...data],[0,153,182,255]);
+ for(const support of [0,-1,NaN])assert.equal(writePrecipitationPixel(new Uint8ClampedArray(4),0,'rain',support),false);
+});

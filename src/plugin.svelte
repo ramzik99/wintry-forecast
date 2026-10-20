@@ -119,7 +119,7 @@
   import { precipitationShade, PRECIP_TYPE_COLOURS, writePrecipitationPixel, PRECIP_DETAIL_MIN_ZOOM } from './precipShading';
   import { precipitationIconSvg } from './precipIcons';
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
-  import { weatherInterpolator, weightedScalar, blendedProfile, rasterSampleLocation, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
+  import { weatherInterpolator, weightedScalar, wetCoverage, blendedProfile, rasterSampleLocation, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles, terrainTileZoom } from './terrainTiles';
   import { precipRasterLayer, terrainMapTemplate, PRECIP_RASTER_OPACITY } from './precipRasterLayer';
   import { GeographicTiles } from './geographicTiles';
@@ -776,10 +776,11 @@
     function diagnose(lat:number,lon:number){
       const neighbours=stencil(lat,lon);if(!neighbours||neighbours.some(v=>!profiles.has(v.value)))return null;
       const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount,detailZoom);if(!shade)return null;
+      const coverage=wetCoverage(neighbours,p=>amounts.get(p)??null);if(coverage===null||coverage<=0)return null;
       const detailed=terrainComplete?terrainTiles.sample(lat,lon,z):null,terrain=detailed??weightedScalar(neighbours,p=>p.terrainM);
       if(terrain===null)return null;if(detailed===null)fallback=true;
       const profile=blendedProfile(neighbours.map(v=>({value:profiles.get(v.value)!,weight:v.weight})),wetBulbFromDewpoint);
-      const phase=supportedPrecipitationType(profile,terrain);if(!phase)return null;return{phase};
+      const phase=supportedPrecipitationType(profile,terrain);if(!phase)return null;return{phase,coverage};
     }
     try{
       if(showShading&&[...amounts.values()].some(value=>value!==null&&value>0)){
@@ -794,8 +795,8 @@
           for(let x=0;x<RASTER_SAMPLES;x++){
             const p=rasterSampleLocation(tile.x,tile.y,z,x,y);
             if(p.lat<b.south||p.lat>b.north||p.lon<b.west||p.lon>b.east)continue;
-            const result=diagnose(p.lat,p.lon);if(!result)continue;wet=true;
-            writePrecipitationPixel(image.data,(y*RASTER_SAMPLES+x)*4,result.phase.key);
+            const result=diagnose(p.lat,p.lon);if(!result)continue;
+            if(writePrecipitationPixel(image.data,(y*RASTER_SAMPLES+x)*4,result.phase.key,result.coverage))wet=true;
           }
           }
           if(wet){

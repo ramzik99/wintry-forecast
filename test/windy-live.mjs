@@ -1,5 +1,5 @@
 import {chromium} from 'playwright';
-import {readFile,mkdir} from 'node:fs/promises';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import ts from 'typescript';
 import assert from 'node:assert/strict';
 async function sourceURL(name){
@@ -76,6 +76,16 @@ try{
  await mount();
  assert.ok(await page.locator('.wintry-raster-tile').count()>0,'Wet live forecast must draw precipitation');
  assert.equal(await page.locator('.zoom-hint').count(),0);
+ const edgePixels=await page.evaluate(()=>{
+  let count=0;
+  for(const image of document.querySelectorAll('.wintry-raster-tile')){
+   const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d');ctx.drawImage(image,0,0);
+   const pixels=ctx.getImageData(0,0,256,256).data;
+   for(let i=3;i<pixels.length;i+=4)if(pixels[i]>0&&pixels[i]<255)count++;
+  }
+  return count;
+ });assert.ok(edgePixels>0,'The real wet/dry boundary must contain partial coverage pixels');
+ console.log('Live smooth wet/dry edge pixels',edgePixels);
  await page.screenshot({path:'test-output/windy-wintry-desktop.png'});
  await page.getByRole('button',{name:'Open Wintry settings'}).click();
  await page.getByRole('dialog',{name:'Wintry settings'}).waitFor();
@@ -123,14 +133,18 @@ try{
  assert.equal(await file.failure(),null);await file.saveAs('test-output/wintry-live.mp4');
  const videoBytes=await readFile('test-output/wintry-live.mp4');assert.ok(videoBytes.length>10000);
  console.log('Actual plugin MP4 downloaded',videoBytes.length,'bytes');
- await page.evaluate(async data=>{
+ const decoded=await page.evaluate(async data=>{
   const v=document.createElement('video');v.muted=true;v.src='data:video/mp4;base64,'+data;
   await new Promise((resolve,reject)=>{v.onloadeddata=resolve;v.onerror=()=>reject(new Error('Downloaded MP4 cannot decode'))});
-  const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);c.id='download-preview';
-  Object.assign(c.style,{position:'fixed',inset:'0',zIndex:999999,width:'100%',height:'auto'});document.body.append(c);
+  const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;const ctx=c.getContext('2d');ctx.drawImage(v,0,0);
+  const first=c.toDataURL('image/png');
+  const seeked=new Promise(resolve=>v.onseeked=resolve);v.currentTime=v.duration/2;await seeked;ctx.drawImage(v,0,0);
+  return{first,middle:c.toDataURL('image/png'),width:c.width,height:c.height,duration:v.duration};
  },videoBytes.toString('base64'));
- await page.screenshot({path:'test-output/windy-mp4-first-frame.png'});
- await page.evaluate(()=>{document.querySelector('#download-preview').remove();wintryHost.close()});
+ assert.ok(decoded.duration>28&&decoded.duration<30);assert.ok(decoded.width>0&&decoded.height>0&&Math.max(decoded.width,decoded.height)<=1280);
+ for(const [key,name] of [['first','first'],['middle','middle']])await writeFile('test-output/windy-mp4-'+name+'-frame.png',Buffer.from(decoded[key].split(',')[1],'base64'));
+ console.log('Decoded real MP4 metadata',decoded.width,decoded.height,decoded.duration);
+ await page.evaluate(()=>wintryHost.close());
  await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
  assert.equal(await page.locator('.wintry-raster-tile,.wintry-terrain-tile').count(),0);
  console.log('Actual mobile touch controls, complete MP4 download and cleanup passed.');
