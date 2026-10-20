@@ -44,8 +44,8 @@ jobs:
       - name: Test live Windy desktop, mobile and MP4 download
         run: node test/windy-live.mjs
 
-      - name: Check corrected contours at high latitude and the date line
-        run: node test/contour-geography-browser.mjs
+      - name: Compare webcam locations with current profiles
+        run: node test/webcam-profiles.mjs
 
       - name: Independently decode exported video
         run: |
@@ -71,6 +71,7 @@ jobs:
           name: wintry-shading-browser
           path: |
             test-output/*.png
+            test-output/*.json
             test-output/wintry-live.mp4
           if-no-files-found: ignore
 

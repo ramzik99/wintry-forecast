@@ -1,105 +1,19 @@
-# Wintry forecast for Windy
+# Precipitation type
 
-**Published 1000.1.10** — terrain-aware winter-weather guidance from sampled
-ECMWF profiles and local terrain. Six physical types are displayed; limited-detail point diagnoses are qualified
-with “possible”, while unsupported snow amounts remain unavailable. Independent forecast-skill validation
-is still required; this is not a calibrated high-confidence forecast.
+A simple Windy plugin that estimates precipitation type from melting and refreezing in the ECMWF wet-bulb profile at ground elevation.
 
-## Use
+- Six types: snow, wet snow, rain/snow mix, rain, ice pellets and freezing rain.
+- Terrain remains visible in full-opacity precipitation shading; Windy's layers remain underneath.
+- Click a point for its type and selected time. Windy's timeline controls forecast time.
+- On/off, search, refresh, information and MP4 download. No snowline contours, sounding, snowfall totals or event outlook.
+- Blank areas can be dry or unavailable. Missing profiles are never converted to a made-up type.
 
-Opening/enabling the plugin selects Windy's **Precipitation type** layer.
-Plugin shading uses **100% opacity with elevation relief**: the diagnosed phase supplies the colour, while slopes in the loaded elevation data supply label-free light and shade. Terrain relief stays visible without transparent type colours. Contours, markers
-and the Windy interface remain above it. No additional base-map overlay is added. Search for a place or select a map point. The point card
-shows the diagnosed precipitation type, terrain, estimated snowline and average
-precipitation. **Forecast** opens the timeline; **Sounding** keeps the atmospheric
-profile available without crowding the map controls.
+The classifier integrates positive wet-bulb temperature through warm layers and negative temperature below them to estimate melting and refreezing. This is a model estimate, not an observed precipitation report.
 
-- **Contours:** estimated snowline contours.
-- **Shading:** six physical precipitation types in their existing Windy colours.
-  Type hues stay categorical. Elevation-based hillshade is built into the opaque shading tiles, and wet/dry support fades at the edges to avoid hard grid-shaped borders. Displayed brightness follows the background; it is not precipitation intensity.
-  Edge opacity is not an intensity scale or a probability. Windy's own weather and map supply the live background.
-  Relief follows actual elevation slopes; it adds no extra place labels, roads or hatching.
-  Weather and terrain inputs finish loading, and every image decodes, before the previous complete shading frame is replaced.
-  Stale frames are discarded after navigation or settings changes.
-  Elevation detail follows raster zoom, up to DEM zoom 14, while adapting large views to a 64-tile / 16 MiB cache.
-  If detailed terrain coverage is incomplete, the entire view uses the coarse estimate consistently.
-  No extra unresolved-type colour or question-mark icon. Missing/unclassifiable
-  profiles remain blank rather than receiving an invented type.
-  Warm levels available in valley columns are retained when neighbouring mountain
-  columns mask them; partial horizontal support remains a limited-detail estimate.
-- **Optional icons:** precipitation symbols and ECMWF forecast lightning; off by default for new preferences.
-- Shading and icons become available from zoom level 8; contours are independent.
-- Search, saved locations, metric/imperial units and image export are retained.
-- Controls remain compact on desktop and mobile; forecast windows stay on screen
-  after resizing. You can select a different Windy layer while the plugin is open; reopening or enabling selects Precipitation type again.
+## Validation
 
-## Download MP4
+Run `npm test`, `npm run build`, `node test/map-export-browser.mjs` and `node test/windy-live.mjs`. The live test opens Windy in Chromium, checks desktop/mobile controls, terrain shading, timeline changes, point labels, teardown and a complete MP4 export. CI independently decodes the video with FFmpeg.
 
-**Download MP4** renders and encodes the current map area one frame at a time,
-through available forecast times up to 144 hours, and starts the download automatically.
-The full animation is not stored on disk, so it cannot hit the former 512 MB preparation limit.
-H.264 support is required; browsers without it retain optional timeline preparation.
+`test/webcam-profiles.mjs` compares model profiles with four timestamped NPS webcam frames from 20 October 2026. These cameras show dry conditions; existing ground snow is not counted as falling snow. They test occurrence only and do not validate freezing rain, ice pellets or snowfall. Results are stored with the CI artifacts.
 
-The video uses a geographic background with the same opaque terrain-textured shading and wet/dry edges as the map, plus enabled type
-icons and snowline contours, timestamps and a colour legend. It excludes Windy's
-weather layer and forecast lightning. Five forecast hours
-correspond to one video second. The longest video dimension is bounded at 1280 px.
-Encoding happens in the browser without uploading the frames.
-
-A single progress indicator, cancellation and a repeat-download link are available.
-The repeat link saves the finished video without re-rendering it. Moving/zooming,
-new data or changing relevant settings cancels an in-progress export. Large views
-can take several minutes; normal map viewing does not require exporting. Missing forecast
-periods stay blank. Filling the optional timeline cache does not interrupt preparation.
-Geographic tiles and forecast lightning can load independently of the weather profiles.
-
-## Quantities and interpretation
-
-- Precipitation is the **average rate over the source interval**, not instantaneous
-  intensity. Next-24-hour liquid totals require complete supported coverage.
-- **Snowfall total** is estimated gross fresh snowfall. It does not decrease when
-  later melt occurs and does not represent total snow already on the ground.
-- **Snowfall amounts** remain heuristic, are rounded to whole centimetres/inches
-  (positive sub-unit amounts use `<1`) and become unavailable across wet intervals
-  with insufficient atmospheric detail. Rounding is display precision, not a calibrated error range.
-- **Remaining ground snow and wind–terrain exposure** are removed from the user
-  interface. Their experimental research functions remain in source.
-- **Thermal snowline** is a wet-bulb-zero proxy, rounded to 100 m / 500 ft. A
-  zero crossing across more than 1400 m or an extrapolation below the profile is
-  withheld. Contours preserve missing-data gaps; this proxy is not an exact
-  precipitation-type boundary.
-- Fine terrain detail does not create a finer atmospheric forecast. The point
-  precipitation feed can differ in coverage from Windy's native weather layer.
-- Phase rules and snow ratios need independent calibration. Low-detail and
-  borderline point diagnoses use “possible”. Internal detail flags
-  are not calibrated probabilities. Wider gaps may reduce coverage in this version.
-
-See [method, equations and scientific limits](METHODS.md),
-[release notes](RELEASE_1000_1_10.md) and [release history](docs/RELEASE_HISTORY.md).
-
-## Testing
-
-Thorough published-build QA found and corrected a saddle-cell contour connectivity error in 1000.1.10. See the [QA report](QA_1000_1_10.md) for numerical regressions, browser coverage and limitations.
-
-## Development and publication
-
-Node.js 24; `npm install`, `npm test`, `npm run build`. Built files are in `dist`.
-The package and plugin configuration must contain the same three-part version.
-GitHub runs unit, build and browser MP4 checks. This release passed 122 unit tests and live Windy desktop / Android mobile-emulation checks,
-including normal clicks/taps, timeline changes, panning, point forecast and sounding views, layer cleanup and a complete MP4 download.
-The downloaded H.264 file was decoded independently with FFmpeg; all 142 available hourly frames passed the black-frame check.
-[Live checks and independent video decode](https://github.com/ramzik99/wintry-forecast/actions/runs/39461973118).
- Version 1000.1.10 was published from
-tested source using the isolated `publish-wintry-forecast-1000.1.10` publishing branch.
-
-[Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Published 1000.1.10](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.10/plugin.min.js)
-
-## Sources and licences
-
-Weather data/API and map interface: Windy / ECMWF. Geographic background: Windy / Mapy.com / OpenStreetMap contributors.
-Elevation data: Mapzen / Tilezen Terrain
-Tiles via AWS; [terrain source attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
-Point elevations use Windy's elevation service. Map data credits remain on the
-Windy map and exported video. MP4 encoding uses
-[Mediabunny](https://mediabunny.dev/) (MPL-2.0). Plugin licence: MIT.
+Package identity remains `windy-plugin-snowline-map-100m` so existing installations can update.
