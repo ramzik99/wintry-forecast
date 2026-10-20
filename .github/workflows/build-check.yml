@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -32,18 +33,24 @@ jobs:
       - name: Build plugin
         run: npm run build
 
-      - name: Test streaming MP4 export in browser
+      - name: Install browser
         run: |
           npm install --no-save playwright@1.62.1
           npx playwright install --with-deps chromium
-          node test/map-export-browser.mjs
-          node test/windy-live.mjs
+
+      - name: Test streaming MP4 and shading pixels
+        run: node test/map-export-browser.mjs
+
+      - name: Test live Windy desktop, mobile and MP4 download
+        run: node test/windy-live.mjs
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: wintry-shading-browser
-          path: test-output/*.png
+          path: |
+            test-output/*.png
+            test-output/wintry-live.mp4
           if-no-files-found: ignore
 
       - name: Verify packaged plugin version

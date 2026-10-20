@@ -14,7 +14,7 @@ const precipURL=await sourceURL('precip'),timelineURL=await sourceURL('forecastT
 const pluginURL='data:text/javascript;base64,'+(await readFile('dist/plugin.js')).toString('base64');
 await mkdir('test-output',{recursive:true});
 const browser=await chromium.launch({headless:true,args:['--enable-unsafe-swiftshader','--use-angle=swiftshader']});
-const page=await browser.newPage({viewport:{width:1365,height:1000}});
+let page=await browser.newPage({viewport:{width:1365,height:1000}});
 page.on('pageerror',e=>console.log('PAGE ERROR',String(e)));
 try{
  await page.goto('https://www.windy.com/?46.5,10,8',{waitUntil:'domcontentloaded',timeout:60000});
@@ -88,11 +88,36 @@ try{
  await page.evaluate(()=>W.map.map.panBy([100,40],{animate:false}));
  await page.waitForTimeout(800);
  await page.waitForFunction(()=>!document.querySelector('.status-pill'),null,{timeout:120000});
- await page.setViewportSize({width:390,height:844});await page.waitForTimeout(8000);
- await page.screenshot({path:'test-output/windy-wintry-mobile.png'});
- await page.getByRole('button',{name:'Open Wintry settings'}).click({force:true});
- await page.getByRole('button',{name:'Close settings'}).click({force:true});
  await page.evaluate(()=>wintryTest.$destroy());
+ page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'});
+ await page.goto('https://www.windy.com/',{waitUntil:'domcontentloaded',timeout:60000});
+ await page.waitForFunction(()=>window.W?.map?.map?.maplibreMap&&window.W?.fetch?.getMeteogramForecastData,null,{timeout:60000});
+ await page.evaluate(t=>{W.map.map.setView([46.5,10],9,{animate:false});W.store.set('timestamp',t);},wetTime.time);
+ await page.waitForFunction(()=>W.map.map.getZoom()===9);
+ await page.evaluate(async pluginURL=>{
+  const host=document.createElement('div');host.id='windy-plugin-snowline-map-100m';document.body.append(host);
+  const mod=await import(pluginURL);window.wintryTest=new mod.default({target:host});
+ },pluginURL);
+ await page.waitForFunction(()=>document.querySelector('.snowline-panel')&&!document.querySelector('.status-pill')&&!document.querySelector('.refresh-error'),null,{timeout:180000});
+ await page.screenshot({path:'test-output/windy-wintry-mobile.png'});
+ await page.getByRole('button',{name:'Open Wintry settings'}).tap({force:true});
+ await page.getByRole('button',{name:'Close settings'}).tap({force:true});
+ const downloadButton=page.getByRole('button',{name:'Download MP4',exact:true});await downloadButton.waitFor();
+ console.log('Starting real six-day plugin MP4 export on mobile viewport');
+ const downloadPromise=page.waitForEvent('download',{timeout:600000});
+ await downloadButton.tap({force:true});
+ const download=await downloadPromise;
+ assert.equal(await download.failure(),null);await download.saveAs('test-output/wintry-live.mp4');
+ const videoBytes=await readFile('test-output/wintry-live.mp4');assert.ok(videoBytes.length>10000);
+ console.log('Real plugin MP4 download completed',videoBytes.length,'bytes');
+ await page.evaluate(async data=>{
+  const video=document.createElement('video');video.muted=true;video.src='data:video/mp4;base64,'+data;
+  await new Promise((resolve,reject)=>{video.onloadeddata=resolve;video.onerror=()=>reject(new Error('Downloaded MP4 cannot be decoded'))});
+  const canvas=document.createElement('canvas');canvas.width=video.videoWidth;canvas.height=video.videoHeight;canvas.getContext('2d').drawImage(video,0,0);
+  canvas.id='download-preview';Object.assign(canvas.style,{position:'fixed',inset:'0',zIndex:999999,width:'100%',height:'auto'});document.body.append(canvas);
+ },videoBytes.toString('base64'));
+ await page.screenshot({path:'test-output/windy-mp4-first-frame.png'});
+ await page.evaluate(()=>{document.querySelector('#download-preview').remove();wintryTest.$destroy()});
  assert.ok(await page.evaluate(()=>!W.map.map.maplibreMap.getStyle().layers.some(l=>l.id.startsWith('wintry-'))));
  console.log('Live Windy desktop/mobile controls, timeline, pan and native resource cleanup passed.');
 }catch(error){
