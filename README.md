@@ -1,6 +1,6 @@
 # Wintry forecast for Windy
 
-**Published 1000.1.5** — terrain-aware winter-weather guidance from sampled
+**Published 1000.1.6** — terrain-aware winter-weather guidance from sampled
 ECMWF profiles and local terrain. Six physical types are displayed; limited-detail point diagnoses are qualified
 with “possible”, while unsupported snow amounts remain unavailable. Independent forecast-skill validation
 is still required; this is not a calibrated high-confidence forecast.
@@ -8,15 +8,19 @@ is still required; this is not a calibrated high-confidence forecast.
 ## Use
 
 Opening/enabling the plugin selects Windy's **Precipitation type** layer. You can
-choose another background afterward. Search for a place or select a map point. The point card
+choose a geographic map style afterward. With shading enabled, that map style supplies a continuous terrain background. Search for a place or select a map point. The point card
 shows the diagnosed precipitation type, terrain, estimated snowline and average
 precipitation. **Forecast** opens the timeline; **Sounding** keeps the atmospheric
 profile available without crowding the map controls.
 
 - **Contours:** estimated snowline contours.
 - **Shading:** six physical precipitation types in their existing Windy colours.
-  One flat colour per type: no decorative terrain brightness, hatching or wet-area map-image overlays.
-  Weather and terrain inputs finish loading before the previous complete shading frame is replaced.
+  Type hues stay fixed. Translucency keeps terrain visible, and wet/dry support fades at the edges to avoid hard grid-shaped borders.
+  Edge opacity is not an intensity scale or a probability. The geographic background covers the whole view; it is not clipped to wet masks.
+  No decorative terrain brightness or hatching is applied.
+  Weather and terrain inputs finish loading, and every image decodes, before the previous complete shading frame is replaced.
+  Stale frames are discarded after navigation or settings changes.
+  Elevation detail follows raster zoom, up to DEM zoom 14, while adapting large views to a 64-tile / 16 MiB cache.
   If detailed terrain coverage is incomplete, the entire view uses the coarse estimate consistently.
   No extra unresolved-type colour or question-mark icon. Missing/unclassifiable
   profiles remain blank rather than receiving an invented type.
@@ -26,7 +30,7 @@ profile available without crowding the map controls.
 - Shading and icons become available from zoom level 8; contours are independent.
 - Search, saved locations, metric/imperial units and image export are retained.
 - Controls remain compact on desktop and mobile; forecast windows stay on screen
-  after resizing. The plugin works over Windy's available background layers.
+  after resizing. The geographic background follows Windy's selected map style.
 
 ## Download MP4
 
@@ -35,7 +39,7 @@ through available forecast times up to 144 hours, and starts the download automa
 The full animation is not stored on disk, so it cannot hit the former 512 MB preparation limit.
 H.264 support is required; browsers without it retain optional timeline preparation.
 
-The video includes a geographic background, precipitation shading, enabled type
+The video uses the same geographic background, shading opacity and wet/dry edges as the map, with enabled type
 icons and snowline contours, timestamps and a colour legend. It excludes Windy's
 weather layer and forecast lightning. Five forecast hours
 correspond to one video second. The longest video dimension is bounded at 1280 px.
@@ -46,7 +50,7 @@ The repeat link saves the finished video without re-rendering it. Moving/zooming
 new data or changing relevant settings cancels an in-progress export. Large views
 can take several minutes; normal map viewing does not require exporting. Missing forecast
 periods stay blank. Filling the optional timeline cache does not interrupt preparation.
-Windy's background and forecast lightning manage their loads separately.
+Geographic tiles and forecast lightning can load independently of the weather profiles.
 
 ## Quantities and interpretation
 
@@ -70,21 +74,27 @@ Windy's background and forecast lightning manage their loads separately.
   are not calibrated probabilities. Wider gaps may reduce coverage in this version.
 
 See [method, equations and scientific limits](METHODS.md),
-[release notes](RELEASE_1000_1_4.md) and [release history](docs/RELEASE_HISTORY.md).
+[release notes](RELEASE_1000_1_6.md) and [release history](docs/RELEASE_HISTORY.md).
 
 ## Development and publication
 
 Node.js 24; `npm install`, `npm test`, `npm run build`. Built files are in `dist`.
 The package and plugin configuration must contain the same three-part version.
-GitHub runs unit, build and browser MP4 checks. Version 1000.1.5 was published from
-tested source using the isolated `publish-wintry-forecast-1000.1.5` publishing branch.
+GitHub runs unit, build and browser MP4 checks. This release passed 117 unit tests and live Windy desktop / Android mobile-emulation checks,
+including normal clicks/taps, timeline changes, panning, point forecast and sounding views, layer cleanup and a complete MP4 download.
+The downloaded H.264 file was decoded independently with FFmpeg; all 142 available hourly frames passed the black-frame check.
+[Live checks](https://github.com/ramzik99/wintry-forecast/actions/runs/39433580152) ·
+[Independent video decode](https://github.com/ramzik99/wintry-forecast/actions/runs/39434571044).
+ Version 1000.1.6 was published from
+tested source using the isolated `publish-wintry-forecast-1000.1.6` publishing branch.
 
 [Repository](https://github.com/ramzik99/wintry-forecast) ·
-[Published 1000.1.5](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.5/plugin.min.js)
+[Published 1000.1.6](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.6/plugin.min.js)
 
 ## Sources and licences
 
-Weather data/API and map interface: Windy / ECMWF. Terrain shading: Mapzen Terrain
+Weather data/API and map interface: Windy / ECMWF. Geographic background: Windy / Mapy.com / OpenStreetMap contributors.
+Elevation data: Mapzen / Tilezen Terrain
 Tiles via AWS; [terrain source attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
 Point elevations use Windy's elevation service. Map data credits remain on the
 Windy map and exported video. MP4 encoding uses

@@ -1,3 +1,13 @@
+# Release history
+
+## 1000.1.6 — 20 October 2026
+
+Continuous geographic terrain background, translucent precipitation colours, smooth wet/dry edges and decoded frame swaps. Repairs the black WebGL raster textures and close-zoom shading loss. Screen and MP4 rendering share the same background and opacity.
+
+117 unit tests, live Windy desktop/mobile-host checks and a complete independently decoded MP4 passed. [Release notes](../RELEASE_1000_1_6.md).
+
+## Archived notes
+
 # Wintry forecast for Windy
 
 A convenience-first Windy external plugin for terrain-aware winter-weather guidance using **ECMWF vertical profiles** and **Windy local terrain**.
