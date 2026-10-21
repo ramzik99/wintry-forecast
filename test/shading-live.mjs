@@ -49,12 +49,13 @@ try{
  // Verify actual visible colours, including at close zoom; layer existence cannot catch black textures.
  await page.evaluate(async url=>{
   const {precipRasterLayer,colourTerrainTile}=await import(url),m=W.map.map,b=m.getBounds(),c=document.createElement('canvas');c.width=c.height=256;
-  const ctx=c.getContext('2d');ctx.fillStyle='#00c6ff';ctx.fillRect(0,0,128,256);
+  const ctx=c.getContext('2d');ctx.fillStyle='#00c6ff';ctx.fillRect(0,0,128,256);ctx.fillStyle='rgba(0,198,255,0.5)';ctx.fillRect(128,0,32,256);
   m.createPane('wintry-test-shading').style.zIndex='390';
   const terrain=document.createElement('canvas');terrain.width=terrain.height=256;const tc=terrain.getContext('2d');
   tc.fillStyle='#808080';tc.fillRect(0,0,256,256);tc.fillStyle='#404040';tc.fillRect(0,0,256,64);
   const coloured=colourTerrainTile(c,terrain),cc=coloured.getContext('2d'),light=cc.getImageData(64,128,1,1).data,dark=cc.getImageData(64,32,1,1).data,clear=cc.getImageData(192,128,1,1).data;
-  const lum=p=>p[0]*.3+p[1]*.59+p[2]*.11;
+  const partial=cc.getImageData(144,128,1,1).data;
+  if(Math.abs(partial[3]-128)>1||Math.abs(partial[1]-light[1])>2||Math.abs(partial[2]-light[2])>2)throw new Error('Terrain relief must preserve partial-coverage hue and alpha');
   if(light[3]!==255||dark[3]!==255||clear[3]!==0||Math.abs(light[1]-99)>2||Math.abs(light[2]-128)>2||Math.abs(dark[1]-50)>2||Math.abs(dark[2]-64)>2)throw new Error('Opaque terrain composition must preserve luminance and dry gaps');
   window.expectedRasterColour=[...light].slice(0,3);
   window.testRaster=precipRasterLayer(L,coloured.toDataURL(),{lat:b.getNorth(),lon:b.getWest()},{lat:b.getSouth(),lon:b.getEast()},'wintry-test-shading');

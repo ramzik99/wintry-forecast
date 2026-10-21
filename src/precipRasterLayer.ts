@@ -23,10 +23,15 @@ export function precipRasterLayer(L:any,url:string,nw:{lat:number;lon:number},se
 export function colourTerrainTile(phase:HTMLCanvasElement,terrain:CanvasImageSource){
   const result=document.createElement('canvas');result.width=phase.width;result.height=phase.height;
   const ctx=result.getContext('2d');if(!ctx)throw new Error('Canvas unavailable');
-  ctx.drawImage(phase,0,0);
-  ctx.globalCompositeOperation='multiply';ctx.drawImage(terrain,0,0,result.width,result.height);
-  ctx.globalCompositeOperation='destination-in';ctx.drawImage(phase,0,0);
-  ctx.globalCompositeOperation='source-over';return result;
+  ctx.drawImage(terrain,0,0,result.width,result.height);
+  const relief=ctx.getImageData(0,0,result.width,result.height).data;
+  ctx.clearRect(0,0,result.width,result.height);ctx.drawImage(phase,0,0);
+  const pixels=ctx.getImageData(0,0,result.width,result.height);
+  for(let i=0;i<pixels.data.length;i+=4){
+    if(!pixels.data[i+3])continue;
+    for(let c=0;c<3;c++)pixels.data[i+c]=Math.round(pixels.data[i+c]*relief[i+c]/255);
+  }
+  ctx.putImageData(pixels,0,0);return result;
 }
 
 /** Northwest light at 45 degrees; bounded ambient light keeps each type readable. */
