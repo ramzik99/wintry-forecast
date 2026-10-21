@@ -17,12 +17,13 @@ export class TerrainTiles {
   async ensure(bounds:{south:number;north:number;west:number;east:number},zoom:number,isCurrent:()=>boolean,progress:(completed:number,total:number)=>void){
     const z=terrainTileZoom(zoom),nw=tilePosition(bounds.north,bounds.west,z),se=tilePosition(bounds.south,bounds.east,z);
     const pad=1/256,a=tileLocation(nw.x-pad,nw.y-pad,z),b=tileLocation(se.x+pad,se.y+pad,z);
-    const tiles=visibleRasterTiles({north:a.lat,south:b.lat,west:a.lon,east:b.lon},z);let next=0,completed=0;
-    await Promise.all(Array.from({length:Math.min(4,tiles.length)},async()=>{while(this.alive&&isCurrent()){const tile=tiles[next++];if(!tile)return;await this.load(tile.x,tile.y,z);if(isCurrent())progress(++completed,tiles.length);}}));
+    const tiles=visibleRasterTiles({north:a.lat,south:b.lat,west:a.lon,east:b.lon},z);let next=0,completed=0,complete=true;
+    await Promise.all(Array.from({length:Math.min(4,tiles.length)},async()=>{while(this.alive&&isCurrent()){const tile=tiles[next++];if(!tile)return;if(!await this.load(tile.x,tile.y,z))complete=false;if(isCurrent())progress(++completed,tiles.length);}}));
+    return complete&&completed===tiles.length;
   }
   private load(x:number,y:number,z:number):Promise<boolean>{
     const n=2**z;x=((x%n)+n)%n;const key=`${z}/${x}/${y}`;
-    if(this.cache.has(key))return Promise.resolve(true);
+    if(this.cache.has(key)){const hit=this.cache.get(key)!;this.cache.delete(key);this.cache.set(key,hit);return Promise.resolve(true);}
     const existing=this.pending.get(key);if(existing)return existing;
     if(Date.now()-(this.failed.get(key)??0)<30_000)return Promise.resolve(false);
     const promise=(async()=>{
@@ -51,9 +52,32 @@ export class TerrainTiles {
     for(const [x,y,w] of [[x0,y0,(1-fx)*(1-fy)],[x0+1,y0,fx*(1-fy)],[x0,y0+1,(1-fx)*fy],[x0+1,y0+1,fx*fy]]){
       if(w<1e-10)continue;const tx=((Math.floor(x/256)%n)+n)%n,ty=Math.floor(y/256),key=`${z}/${tx}/${ty}`,tile=this.cache.get(key);if(!tile)return null;
       const value=tile.pixels[((y%256)+256)%256*256+((x%256)+256)%256];if(!Number.isFinite(value))return null;sum+=w*value;
-      this.cache.delete(key);this.cache.set(key,tile);
+
     }
     return sum;
+  }
+
+  /** Sample Web-Mercator tiles directly: no per-pixel geographic reprojection. */
+  raster(tileX:number,tileY:number,mapZoom:number,size:number,padding=0){
+    const z=terrainTileZoom(mapZoom),n=2**z,scale=256*2**(z-mapZoom);
+    const side=size+2*padding,out=new Float32Array(side*side);
+    let lastX=NaN,lastY=NaN,lastTile:DemTile|undefined;
+    const read=(x:number,y:number)=>{
+      const tx=((Math.floor(x/256)%n)+n)%n,ty=Math.floor(y/256);
+      if(tx!==lastX||ty!==lastY){lastX=tx;lastY=ty;lastTile=this.cache.get(`${z}/${tx}/${ty}`);}
+      return lastTile?.pixels[((y%256)+256)%256*256+((x%256)+256)%256]??NaN;
+    };
+    for(let y=0;y<side;y++){
+      const yy=(tileY+(y-padding+.5)/size)*scale-.5,y0=Math.floor(yy),fy=yy-y0;
+      for(let x=0;x<side;x++){
+        const xx=(tileX+(x-padding+.5)/size)*scale-.5,x0=Math.floor(xx),fx=xx-x0;
+        const samples=[[x0,y0,(1-fx)*(1-fy)],[x0+1,y0,fx*(1-fy)],[x0,y0+1,(1-fx)*fy],[x0+1,y0+1,fx*fy]];
+        let value=0;
+        for(const [px,py,w] of samples){if(w>1e-10)value+=w*read(px,py);}
+        out[y*side+x]=value;
+      }
+    }
+    return out;
   }
   retry(){this.failed.clear();}
   destroy(){this.alive=false;for(const abort of this.controllers)abort.abort();for(const resume of this.waiting)resume();this.waiting=[];this.cache.clear();this.failed.clear();}

@@ -1,4 +1,4 @@
-import type { ProfilePoint } from './snowLevel';
+import { PRESSURE_LEVELS, type ProfilePoint } from './snowLevel';
 
 export type Weighted<T> = { value:T; weight:number };
 export const TILE_SIZE=256, RASTER_SAMPLES=128;
@@ -51,4 +51,48 @@ export function blendedProfile(values:Weighted<ProfilePoint[]>[],wetBulb:(t:numb
     if(complete)result.push({...first,tempC:temp,dewpointC:Math.min(temp,dew),heightM:height,wetBulbC:wetBulb(temp,Math.min(temp,dew),first.pressureHpa)});
   }
   return result.sort((a,b)=>a.heightM-b.heightM);
+}
+
+/**
+ * Match valid columns on a fixed pressure-coordinate list without discarding
+ * low-level air from all four corners when one corner is mountainous.
+ * Outside each column's support, repeat its endpoint at the SAME height and
+ * pressure (zero thickness), never use model fields beneath its ground.
+ * Native wet-bulb values are calculated once by buildProfile, then interpolated.
+ */
+export function continuousProfileBlender(){
+  const columns=new WeakMap<ProfilePoint[],ProfilePoint[]>();
+  function prepare(profile:ProfilePoint[]){
+    const hit=columns.get(profile);if(hit)return hit;
+    if(profile.length<2)return [];
+    const sorted=[...profile].sort((a,b)=>b.pressureHpa-a.pressureHpa);
+    const out=PRESSURE_LEVELS.map(level=>{
+      const pressure=Number(level.slice(0,-1));
+      if(pressure>=sorted[0].pressureHpa)return sorted[0];
+      if(pressure<=sorted[sorted.length-1].pressureHpa)return sorted[sorted.length-1];
+      let i=0;while(i<sorted.length-2&&pressure<sorted[i+1].pressureHpa)i++;
+      const a=sorted[i],b=sorted[i+1];
+      const f=(Math.log(pressure)-Math.log(a.pressureHpa))/(Math.log(b.pressureHpa)-Math.log(a.pressureHpa));
+      const lerp=(x:number,y:number)=>x+(y-x)*f;
+      return {level,pressureHpa:pressure,heightM:lerp(a.heightM,b.heightM),
+        tempC:lerp(a.tempC,b.tempC),dewpointC:lerp(a.dewpointC,b.dewpointC),
+        wetBulbC:lerp(a.wetBulbC,b.wetBulbC)};
+    });
+    columns.set(profile,out);return out;
+  }
+  return(values:Weighted<ProfilePoint[]>[]):ProfilePoint[]=>{
+    const prepared=values.map(v=>({points:prepare(v.value),weight:v.weight}));
+    if(!prepared.length||prepared.some(v=>!v.points.length))return [];
+    const result:ProfilePoint[]=[];
+    for(let i=0;i<PRESSURE_LEVELS.length;i++){
+      let heightM=0,tempC=0,dewpointC=0,wetBulbC=0,pressureHpa=0;
+      for(const v of prepared){
+        const p=v.points[i],w=v.weight;
+        heightM+=w*p.heightM;tempC+=w*p.tempC;dewpointC+=w*p.dewpointC;
+        wetBulbC+=w*p.wetBulbC;pressureHpa+=w*p.pressureHpa;
+      }
+      result.push({level:PRESSURE_LEVELS[i],heightM,tempC,dewpointC:Math.min(tempC,dewpointC),wetBulbC,pressureHpa});
+    }
+    return result;
+  };
 }

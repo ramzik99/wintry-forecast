@@ -2,9 +2,13 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
-const compile=name=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(readFileSync(new URL(`../src/${name}.ts`,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
+const compile=name=>{
+ let js=ts.transpileModule(readFileSync(new URL('../src/'+name+'.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+ for(const m of [...js.matchAll(/from ['"](\.\/[^'"]+)['"]/g)])js=js.replace(m[0],'from '+JSON.stringify(compile(m[1].slice(2))));
+ return 'data:text/javascript;base64,'+Buffer.from(js).toString('base64');
+};
 const rasterURL=compile('shadingRaster');
-const {weatherInterpolator,weightedScalar,wetCoverage,blendedProfile,tileLocation,tilePosition,visibleRasterTiles,viewportRasterZoom,RASTER_SAMPLES}=await import(rasterURL);
+const {weatherInterpolator,weightedScalar,wetCoverage,blendedProfile,tileLocation,tilePosition,visibleRasterTiles,viewportRasterZoom,RASTER_SAMPLES,continuousProfileBlender}=await import(rasterURL);
 const terrainJS=ts.transpileModule(readFileSync(new URL('../src/terrainTiles.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace("'./shadingRaster'",JSON.stringify(rasterURL));
 const {decodeTerrarium,terrainTileZoom,TerrainTiles}=await import('data:text/javascript;base64,'+Buffer.from(terrainJS).toString('base64'));
 
@@ -54,4 +58,39 @@ test('terrain tiles share pending requests, reuse cached data, and preserve zero
   try{await Promise.all([dem.ensure(b,9,()=>true,()=>{}),dem.ensure(b,9,()=>true,()=>{})]);const first=requests;assert.ok(first>0);assert.ok(peak<=4);
     assert.equal(dem.sample(32,36,9),0);await dem.ensure(b,9,()=>true,()=>{});assert.equal(requests,first);assert.equal(dem.sample(-70,0,9),null);
   }finally{dem.destroy();Object.assign(globalThis,original);}
+});
+
+test('mountain/valley profiles stay continuous across weather-cell edges',()=>{
+ const p=(level,heightM,t)=>({level,heightM,tempC:t,dewpointC:t,wetBulbC:t,pressureHpa:Number(level.slice(0,-1))});
+ const valley=[p('1000h',0,6),p('950h',500,4),p('900h',1000,2),p('850h',1500,-1),p('700h',3000,-10),p('500h',5500,-25)];
+ const mountain=valley.slice(3);
+ const grid=[[{lat:0,lon:0,profile:mountain},{lat:0,lon:1,profile:valley},{lat:0,lon:2,profile:valley}],
+             [{lat:1,lon:0,profile:mountain},{lat:1,lon:1,profile:valley},{lat:1,lon:2,profile:valley}]];
+ const locate=weatherInterpolator(grid),blend=continuousProfileBlender();
+ const values=lon=>locate(.5,lon).map(v=>({value:v.value.profile,weight:v.weight}));
+ const left=values(1-1e-7),right=values(1+1e-7);
+ const oldA=blendedProfile(left,t=>t),oldB=blendedProfile(right,t=>t);
+ assert.ok(Math.abs(oldA[0].wetBulbC-oldB[0].wetBulbC)>5,'Fixture reproduces the released rectangular jump');
+ const a=blend(left),b=blend(right);
+ assert.ok(Math.abs(a[0].wetBulbC-b[0].wetBulbC)<.00001);
+ assert.ok(Math.abs(a[0].heightM-b[0].heightM)<.001);
+ assert.equal(blend([{value:[],weight:1}]).length,0,'Unknown profiles remain blank');
+ const atMountain=blend([{value:mountain,weight:1}]);
+ assert.equal(atMountain[0].heightM,1500,'Endpoint repetition never creates air beneath model ground');
+ assert.equal(atMountain[0].pressureHpa,850);
+ for(let i=1;i<a.length;i++)assert.ok(a[i].heightM>=a[i-1].heightM);
+});
+test('direct DEM raster matches geographic sampling across DEM tile seams',()=>{
+ const dem=new TerrainTiles(),z=3;
+ for(let ty=0;ty<4;ty++)for(let tx=0;tx<4;tx++){
+  const pixels=new Float32Array(256*256);
+  for(let y=0;y<256;y++)for(let x=0;x<256;x++)pixels[y*256+x]=tx*256+x+(ty*256+y)/100;
+  dem.cache.set(z+'/'+tx+'/'+ty,{pixels,width:256,height:256});
+ }
+ const size=32,padding=1,side=size+2,tile={x:7,y:10,z:5},pixels=dem.raster(tile.x,tile.y,tile.z,size,padding);
+ for(let y=0;y<side;y+=3)for(let x=0;x<side;x+=3){
+  const p=tileLocation(tile.x+(x-padding+.5)/size,tile.y+(y-padding+.5)/size,tile.z);
+  assert.ok(Math.abs(pixels[y*side+x]-dem.sample(p.lat,p.lon,tile.z))<.001);
+ }
+ dem.destroy();
 });

@@ -43,11 +43,14 @@ jobs:
       - name: Verify visible shading, terrain and map navigation
         run: node test/shading-live.mjs
 
+      - name: Reproduce Caucasus cells and compare shading performance
+        run: node test/caucasus-shading-live.mjs
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: restored-1000-1-interface
-          path: test-output/*.png
+          path: test-output/
           if-no-files-found: ignore
 
       - name: Verify packaged plugin version

@@ -86,7 +86,7 @@
         <div><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div>
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
         <div><b>Prepare & download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div>
-        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one full-opacity colour with elevation relief. Windy’s selected weather layer remains beneath it. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
+        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one full-opacity colour with elevation relief. Windy’s selected weather layer remains beneath it. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Valid atmospheric profiles and precipitation are interpolated continuously between weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div>
         <details><summary>Terrain data credits</summary>
           <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p>
@@ -120,7 +120,7 @@
   import { precipitationShade, dryTerrainDifference, PRECIP_TYPE_COLOURS, PRECIP_SHADING_OPACITY, PRECIP_DETAIL_MIN_ZOOM } from './precipShading';
   import { precipitationIconSvg } from './precipIcons';
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
-  import { weatherInterpolator, weightedScalar, wetCoverage, blendedProfile, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
+  import { weatherInterpolator, weightedScalar, wetCoverage, continuousProfileBlender, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles, terrainTileZoom } from './terrainTiles';
   import { precipRasterLayer, colourTerrainTile, terrainIllumination } from './precipRasterLayer';
   import { GeographicTiles } from './geographicTiles';
@@ -144,7 +144,7 @@
   import { geocode } from './geocoding';
   import { formatElevation, formatPrecip, formatSnow, loadUnitSystem, type UnitSystem } from './displayUnits';
 
-  type CachedPoint = { lat:number; lon:number; forecast:Record<string,unknown>; header:Record<string,unknown>; times:number[]; runTime:number|null; step:number; terrainM:number|null; fetchedAt:number; precipChecked?:boolean };
+  type CachedPoint = { lat:number; lon:number; forecast:Record<string,unknown>; header:Record<string,unknown>; times:number[]; runTime:number|null; step:number; terrainM:number|null; fetchedAt:number; siteElevation?:boolean; precipChecked?:boolean };
   type ColourStop = { value:number; color:string };
   type ViewportPoint = { lat:number; lon:number; r:number; c:number };
   type LabelCandidate = { point:[number,number]; level:number; color:string; length:number; isMajor:boolean };
@@ -164,6 +164,7 @@
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
   let shadingLayer:any=null, precipIconLayer:any=null;
   const terrainTiles=new TerrainTiles();
+  let terrainComplete=false;
   let terrainDetailStatus='', rasterEpoch=0, rasterTarget:number|null=null, rasterTimer:ReturnType<typeof setTimeout>|null=null;
   let terrainGeneration=0, terrainJobKey='';
   type FrameTile={url:string;nw:{lat:number;lon:number};se:{lat:number;lon:number}};
@@ -257,21 +258,21 @@
     try{return await loadSelectedPrecipFields(lat,lon,FORECAST_DAYS,MODEL,abort.signal)}
     finally{forecastRequests.delete(abort)}
   }
-  async function loadPoint(lat:number,lon:number,step=1):Promise<CachedPoint|null>{
-    const c=cachedProfile(lat,lon,step);if(c){if(c.terrainM===null)c.terrainM=await loadMapElevation(lat,lon);return c}
+  async function loadPoint(lat:number,lon:number,step=1,siteElevation=true):Promise<CachedPoint|null>{
+    const c=cachedProfile(lat,lon,step);if(c){if(siteElevation&&!c.siteElevation){c.terrainM=await loadMapElevation(lat,lon);c.siteElevation=c.terrainM!==null;}return c}
     const key=profileKey(lat,lon,step),epoch=refreshEpoch,pending=pendingProfiles.get(key);
     if(pending)return pending;
     const request=(async()=>{
       const abort=new AbortController();forecastRequests.add(abort);const timer=setTimeout(()=>abort.abort(),20_000);
       try{
-        const [r,terrainM]=await Promise.all([boundedRequest(signal=>getMeteogramForecastData(MODEL,{lat,lon:wrappedLongitude(lon),step},undefined,{abortSignal:signal}),20_000,abort.signal),loadMapElevation(lat,lon)]);
+        const [r,terrainM]=await Promise.all([boundedRequest(signal=>getMeteogramForecastData(MODEL,{lat,lon:wrappedLongitude(lon),step},undefined,{abortSignal:signal}),20_000,abort.signal),siteElevation?loadMapElevation(lat,lon):Promise.resolve(null)]);
         if(destroyed||epoch!==refreshEpoch)return null;
         const{forecast:rawForecast,header}=extractPayload(r);if(!Object.keys(rawForecast).length)return null;
         const forecast=typeof header.modelElevation==='number'&&Number.isFinite(header.modelElevation)
           ? {...rawForecast,__modelTerrainM:header.modelElevation}:rawForecast;
         const runTime=parseTime(header.refTime);if(isOlderRun(runTime,activeRunTime))return null;
         invalidateForNewRun(runTime);
-        const p={lat,lon,forecast,header,times:buildForecastTimes(forecast,runTime),runTime,step,terrainM,fetchedAt:Date.now()};
+        const p={lat,lon,forecast,header,times:buildForecastTimes(forecast,runTime),runTime,step,terrainM:terrainM??(typeof header.modelElevation==='number'?header.modelElevation:null),siteElevation:siteElevation&&terrainM!==null,fetchedAt:Date.now()};
         if(!p.times.length)return null;
         rememberProfile(p);return p;
       }catch(e){if(!abort.signal.aborted)console.warn('Wintry forecast point request failed',lat,lon,e);return null}
@@ -293,10 +294,11 @@
     refreshQueued=false;const my=++generation;weatherLoadProgress=0;viewportLoading=true;
     const{points,rows,cols}=buildViewportPoints();
     const progressive:(CachedPoint|null)[][]=Array.from({length:rows},()=>Array(cols).fill(null));
-    let completed=0,settled=0,paintedAt=0;
+    let completed=0,settled=0;
+    if(precipDetailAvailable&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());
     try{
       const results=await mapLimit(points,MAX_CONCURRENT,async p=>{
-        const result=my===generation&&enabled&&!destroyed?await loadPoint(p.lat,p.lon,CONTOUR_STEP_H):null;
+        const result=my===generation&&enabled&&!destroyed?await loadPoint(p.lat,p.lon,CONTOUR_STEP_H,false):null;
         if(result&&!result.precipChecked&&my===generation){
           result.precipChecked=true;
           if(!result.times.some((_,i)=>precipMmAt(result.forecast,i)!==null)){
@@ -308,8 +310,7 @@
         }
         if(my===generation&&result&&profileIsFresh(result.fetchedAt,result.runTime,activeRunTime)){
           progressive[p.r][p.c]=result;completed++;
-          // One early preview, then the complete frame: repeated partial redraws waste CPU.
-          if(completed>=12&&paintedAt===0){cache=progressive;weatherRevision++;frameCache.clear();paintedAt=Date.now();renderFromCache();}
+          // Commit only the complete weather grid; partial cells create rectangular holes.
         }
         if(my===generation)weatherLoadProgress=++settled/points.length;
         return {...p,result};
@@ -320,6 +321,7 @@
       if(valid<Math.max(4,Math.floor(points.length*MIN_VALID_FRACTION))){cache=[];clearContours();clearShading();mapDataStatus='Forecast unavailable for this area';mapDataMissing=false;refreshError='Map forecast unavailable.';return}
       const next:(CachedPoint|null)[][]=Array.from({length:rows},()=>Array(cols).fill(null));
       for(const x of results)if(sameRun(x.result))next[x.r][x.c]=x.result;
+      if(terrainComplete){const z=rasterZoom();for(const row of next)for(const p of row)if(p&&!p.siteElevation)p.terrainM=terrainTiles.sample(p.lat,p.lon,z)??p.terrainM;}
       cache=next;weatherRevision++;frameCache.clear();lastChecked=Date.now();refreshError='';renderFromCache();
       if(clickedPoint&&clickedLatLon&&!profileIsFresh(clickedPoint.fetchedAt,clickedPoint.runTime,activeRunTime))void probeLocation(...clickedLatLon,pointSource??'map-click',clickedPlaceName);
     }finally{
@@ -675,8 +677,8 @@
     const b=currentBounds(),z=rasterZoom(),terrainKey=[z,b.south,b.north,b.west,b.east].join(':');
     if(terrainKey!==terrainJobKey){
       terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoadProgress=0;terrainLoading=true;terrainDetailStatus='';rasterEpoch++;
-      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;}).then(()=>{
-        if(epoch!==terrainGeneration||destroyed||!enabled)return;terrainLoading=false;terrainRevision++;reliefCache.clear();frameCache.clear();renderPrecipitation(getStoreTimestamp());
+      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;}).then(complete=>{
+        if(epoch!==terrainGeneration||destroyed||!enabled)return;terrainLoading=false;terrainComplete=complete;terrainRevision++;reliefCache.clear();frameCache.clear();renderPrecipitation(getStoreTimestamp());
       });
     }
     // Finish the terrain batch before replacing the visible frame.
@@ -699,14 +701,7 @@
   }
   async function terrainRelief(tile:{x:number;y:number},z:number){
     const key=[terrainRevision,z,tile.x,tile.y].join(':'),hit=reliefCache.get(key);if(hit)return hit;
-    const side=TILE_SIZE+2,heights=new Float32Array(side*side);
-    for(let y=0;y<side;y++){
-      for(let x=0;x<side;x++){
-        const p=tileLocation(tile.x+(x-.5)/TILE_SIZE,tile.y+(y-.5)/TILE_SIZE,z);
-        heights[y*side+x]=terrainTiles.sample(p.lat,p.lon,z)??NaN;
-      }
-      if(y%32===0)await new Promise(resolve=>setTimeout(resolve,0));
-    }
+    const side=TILE_SIZE+2,heights=terrainTiles.raster(tile.x,tile.y,z,TILE_SIZE,1);
     const canvas=document.createElement('canvas');canvas.width=canvas.height=TILE_SIZE;
     const ctx=canvas.getContext('2d');if(!ctx)return null;
     const image=ctx.createImageData(TILE_SIZE,TILE_SIZE);
@@ -735,13 +730,14 @@
     for(const p of cache.flat())if(p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)){
       const i=forecastIntervalIndex(p.times,target);profiles.set(p,i<0?[]:buildProfile(p.forecast,i));amounts.set(p,mapPrecipAt(p,target));
     }
-    let fallback=false;
-    function diagnose(lat:number,lon:number){
+    let fallback=!terrainComplete;
+    const blend=continuousProfileBlender();
+    function diagnose(lat:number,lon:number,pixelTerrain?:number){
       const neighbours=stencil(lat,lon);if(!neighbours||neighbours.some(v=>!profiles.has(v.value)))return null;
       const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount,detailZoom);if(!shade)return null;
-      const detailed=terrainTiles.sample(lat,lon,z),terrain=detailed??weightedScalar(neighbours,p=>p.terrainM);
+      const detailed=terrainComplete?(pixelTerrain===undefined?terrainTiles.sample(lat,lon,z):Number.isFinite(pixelTerrain)?pixelTerrain:null):null,terrain=detailed??weightedScalar(neighbours,p=>p.terrainM);
       if(terrain===null)return null;if(detailed===null)fallback=true;
-      const profile=blendedProfile(neighbours.map(v=>({value:profiles.get(v.value)!,weight:v.weight})),wetBulbFromDewpoint);
+      const profile=blend(neighbours.map(v=>({value:profiles.get(v.value)!,weight:v.weight})));
       const phase=terrainPrecipitationType(profile,terrain);if(!phase)return null;return{phase,shade,coverage:wetCoverage(neighbours,p=>amounts.get(p)??null)??0};
     }
     try{
@@ -750,6 +746,7 @@
         let paintedTiles=0;
         for(const tile of tiles){
           if(obsolete()){next.clearLayers();return;}
+          const terrain=terrainComplete?terrainTiles.raster(tile.x,tile.y,z,RASTER_SAMPLES):null;
           const canvas=document.createElement('canvas');canvas.width=RASTER_SAMPLES;canvas.height=RASTER_SAMPLES;
           const ctx=canvas.getContext('2d');if(!ctx)continue;const image=ctx.createImageData(RASTER_SAMPLES,RASTER_SAMPLES);let wet=false;
           for(let y=0;y<RASTER_SAMPLES;y++){
@@ -757,7 +754,7 @@
           for(let x=0;x<RASTER_SAMPLES;x++){
             const p=tileLocation(tile.x+(x+.5)/RASTER_SAMPLES,tile.y+(y+.5)/RASTER_SAMPLES,z);
             if(p.lat<b.south||p.lat>b.north||p.lon<b.west||p.lon>b.east)continue;
-            const result=diagnose(p.lat,p.lon);if(!result)continue;wet=true;const rgb=hexToRgb(PRECIP_TYPE_COLOURS[result.phase.key]).map(v=>Math.round(result.shade.tone>=0?v+(255-v)*result.shade.tone:v*(1+result.shade.tone))),i=(y*RASTER_SAMPLES+x)*4;
+            const result=diagnose(p.lat,p.lon,terrain?.[y*RASTER_SAMPLES+x]);if(!result)continue;wet=true;const rgb=hexToRgb(PRECIP_TYPE_COLOURS[result.phase.key]).map(v=>Math.round(result.shade.tone>=0?v+(255-v)*result.shade.tone:v*(1+result.shade.tone))),i=(y*RASTER_SAMPLES+x)*4;
             const light=1;
             image.data[i]=Math.min(255,Math.round(rgb[0]*light));image.data[i+1]=Math.min(255,Math.round(rgb[1]*light));image.data[i+2]=Math.min(255,Math.round(rgb[2]*light));image.data[i+3]=Math.round(PRECIP_SHADING_OPACITY*255*result.coverage);
           }
@@ -765,7 +762,7 @@
           if(wet){
             ctx.putImageData(image,0,0);const full=document.createElement('canvas');full.width=TILE_SIZE;full.height=TILE_SIZE;const fc=full.getContext('2d');
             if(fc){fc.imageSmoothingEnabled=false;fc.drawImage(canvas,0,0,TILE_SIZE,TILE_SIZE);const nw=tileLocation(tile.x,tile.y,z),se=tileLocation(tile.x+1,tile.y+1,z);
-              const relief=await terrainRelief(tile,z);if(obsolete()){next.clearLayers();return;}
+              const relief=terrainComplete?await terrainRelief(tile,z):null;if(obsolete()){next.clearLayers();return;}
               const textured=relief?colourTerrainTile(full,relief):full;
               const url=textured.toDataURL('image/png');record.tiles.push({url,nw,se});
               precipRasterLayer(L,url,nw,se,PRECIP_PANE).addTo(next);}
