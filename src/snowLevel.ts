@@ -13,8 +13,6 @@ export interface ProfilePoint {
   tempC: number;
   dewpointC: number;
   wetBulbC: number;
-  /** Fraction of horizontal interpolation weight with a valid above-model-ground level. */
-  spatialSupport?: number;
 }
 
 export interface SnowLevelResult {
@@ -25,17 +23,6 @@ export interface SnowLevelResult {
   upper?: ProfilePoint;
   belowLowestLevel?: boolean;
   extrapolated?: boolean;
-}
-
-/** Public contours/labels omit a fabricated numeric zero level in an all-cold column.
- * The raw bounded extrapolation remains available for research comparisons.
- */
-export function resolvedSnowlineM(profile: ProfilePoint[]): number | null {
-  const result = wetBulbZeroHeight(profile);
-  // Match the public phase-detail guardrail; a very wide crossing layer is unresolved.
-  if (result.lower && result.upper && result.upper.heightM - result.lower.heightM > 1400) return null;
-  return result.status === 'resolved' && result.snowLevelM !== null && Number.isFinite(result.snowLevelM)
-    ? result.snowLevelM : null;
 }
 
 const DEFAULT_COLD_COLUMN_LAPSE_C_PER_M = -0.006;

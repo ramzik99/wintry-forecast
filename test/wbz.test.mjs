@@ -95,9 +95,8 @@ test('raw forecast heights stay in metres and feed the terrain-aware calculation
   assert.equal(wetBulbZeroHeight(profile).snowLevelM,2250);
   assert.equal(wetBulbZeroHeight(profile).snowLevelM,2250);
 });
-test('terrain timing stays continuous while the zero crossing remains resolved', () => {
+test('terrain timing stays continuous through a fully cold forecast interval', () => {
   const p={times:[0,3600000,7200000],forecast:{
-    'temp-1000h':[6,2,6], 'dewpoint-1000h':[6,2,6], 'gh-1000h':[0,0,0],
     'temp-850h':[2,-2,2], 'dewpoint-850h':[2,-2,2], 'gh-850h':[1000,1000,1000],
     'temp-700h':[-2,-4,-2], 'dewpoint-700h':[-2,-4,-2], 'gh-700h':[2000,2000,2000]}};
   const r=terrainCrossingState(p,800,0);
@@ -107,12 +106,11 @@ test('terrain timing stays continuous while the zero crossing remains resolved',
 
 test('crossing timing keeps a crossing after the midpoint and never bridges missing hours',()=>{
   const h=3600000,p={times:[0,3*h,6*h],forecast:{
-    'temp-1000h':[6,2,6], 'dewpoint-1000h':[6,2,6], 'gh-1000h':[0,0,0],
     'temp-850h':[2,-2,2], 'dewpoint-850h':[2,-2,2], 'gh-850h':[1000,1000,1000],
     'temp-700h':[-2,-4,-2], 'dewpoint-700h':[-2,-4,-2], 'gh-700h':[2000,2000,2000]}};
-  const upcoming=terrainCrossingState(p,700,2*h);
+  const upcoming=terrainCrossingState(p,300,2*h);
   assert.equal(upcoming.direction,'below');assert.ok(upcoming.crossingTime>2*h);
-  const after=terrainCrossingState(p,700,2.8*h);
+  const after=terrainCrossingState(p,300,2.8*h);
   assert.equal(after.direction,'above');assert.ok(after.crossingTime>3*h);
   p.times=[0,6*h,12*h];
   assert.equal(terrainCrossingState(p,300,0).crossingTime,null);
@@ -166,7 +164,7 @@ test('cold mountain profile still diagnoses snow above the atmospheric WBZ',()=>
 });
 
 const { contourPolylines } = await import(moduleUrl('contours'));
-test('contours leave a missing viewport column blank',()=>{
+test('contours bridge a missing viewport sample instead of breaking around it',()=>{
   const missing={lat:0,lon:0,value:null};
   const field=[
     [{lat:70,lon:0,value:0},missing,{lat:70,lon:2,value:4}],
@@ -174,7 +172,9 @@ test('contours leave a missing viewport column blank',()=>{
     [{lat:72,lon:0,value:0},missing,{lat:72,lon:2,value:4}],
   ];
   const lines=contourPolylines(field,1);
-  assert.equal(lines.length,0);
+  assert.equal(lines.length,1);
+  assert.ok(lines[0].length>=3);
+  assert.ok(lines[0].every(([lat,lon])=>lat>=70&&lat<=72&&lon>=0&&lon<=2));
 });
 
 const { alignPrecipIntervals } = await import(moduleUrl('precipIntervals'));
@@ -199,7 +199,7 @@ test('a single three-hour snow interval contributes a full interval to event tot
  const h=3600000;
  const p={times:[0,3*h,6*h],forecast:{__precipMm3h:[6,0,0],
  'temp-850h':[-5,-5,-5],'dewpoint-850h':[-5,-5,-5],'gh-850h':[1000,1000,1000],
- 'temp-700h':[-8,-8,-8],'dewpoint-700h':[-8,-8,-8],'gh-700h':[2000,2000,2000]}};
+ 'temp-700h':[-8,-8,-8],'dewpoint-700h':[-8,-8,-8],'gh-700h':[3000,3000,3000]}};
  const e=nextWintryEvent(p,1000,0);
  assert.ok(e);assert.equal(e.endTime,3*h);assert.equal(e.newSnowCm,9);
 });
@@ -253,7 +253,7 @@ test('missing precipitation and unknown wet phase are never labelled dry',()=>{
   assert.equal(conditionLabel(null,null),'Precipitation unavailable');
   assert.equal(conditionLabel(NaN,null),'Precipitation unavailable');
   assert.equal(conditionLabel(0,null),'Dry');
-  assert.equal(conditionLabel(2,null),'Precipitation type unavailable');
+  assert.equal(conditionLabel(2,null),'Precipitation');
   assert.equal(conditionLabel(2,{label:'Snow'}),'Snow');
 });
 
@@ -279,7 +279,7 @@ test('interval selection preserves ongoing weather and rejects gaps and out-of-r
 
 const snowEventPoint=()=>({times:[0,3*3600000,6*3600000],forecast:{__precipMm3h:[6,0,0],
   'temp-850h':[-5,-5,-5],'dewpoint-850h':[-5,-5,-5],'gh-850h':[1000,1000,1000],
-  'temp-700h':[-8,-8,-8],'dewpoint-700h':[-8,-8,-8],'gh-700h':[2000,2000,2000]}});
+  'temp-700h':[-8,-8,-8],'dewpoint-700h':[-8,-8,-8],'gh-700h':[3000,3000,3000]}});
 
 test('an ongoing snow event reports its remaining interval and amount',()=>{
   const h=3600000,event=nextWintryEvent(snowEventPoint(),1000,2*h);

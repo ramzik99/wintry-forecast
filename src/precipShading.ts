@@ -43,12 +43,3 @@ export function sampleTileBounds(grid: ({ lat: number; lon: number } | null)[][]
   if (![s,n,w,e].every(Number.isFinite) || s >= n || w >= e) return null;
   return [[s,w],[s,e],[n,e],[n,w]] as [number,number][];
 }
-
-const TYPE_RGB=Object.fromEntries(Object.entries(PRECIP_TYPE_COLOURS).map(([key,hex])=>[
-  key,[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)]
-])) as Record<TerrainPrecipTypeKey,number[]>;
-/** Phase hue stays categorical. Only wet/dry spatial support changes edge opacity. */
-export function writePrecipitationPixel(data:Uint8ClampedArray,offset:number,key:TerrainPrecipTypeKey,coverage=1){
-  const rgb=TYPE_RGB[key],alpha=Math.round(255*Math.min(1,coverage));if(!rgb||!Number.isFinite(coverage)||alpha<=0)return false;
-  data[offset]=rgb[0];data[offset+1]=rgb[1];data[offset+2]=rgb[2];data[offset+3]=alpha;return true;
-}

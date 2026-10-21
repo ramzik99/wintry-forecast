@@ -21,18 +21,9 @@ export interface TerrainPrecipType {
   refreezingDegreeMetres: number;
 }
 
-/** Internal detail flags are not calibrated probabilities of forecast accuracy. */
+/** Qualify a model estimate without discarding its best-supported phase. */
 export function precipitationLabel(phase: Pick<TerrainPrecipType, 'label' | 'confidence'>, confidence = phase.confidence): string {
-  return confidence === 'low' || confidence === 'medium' ? `${phase.label} possible` : phase.label;
-}
-
-/** Show the estimated physical type, qualifying limited-detail diagnoses in labels.
- * Snow amounts and event timing have separate detail checks. No extra category
- * is fabricated when the atmospheric profile cannot be classified at all.
- */
-export function supportedPrecipitationType(profile: ProfilePoint[], terrainM: number): TerrainPrecipType | null {
-  if (!Number.isFinite(terrainM)) return null;
-  return terrainPrecipitationType(profile, terrainM);
+  return confidence === 'low' ? `${phase.label} possible` : phase.label;
 }
 
 const WARM_NODE_C = 0.2;
@@ -54,7 +45,6 @@ function interpolateAtHeight(a: ProfilePoint, b: ProfilePoint, heightM: number):
     tempC: lerp(a.tempC, b.tempC),
     dewpointC: lerp(a.dewpointC, b.dewpointC),
     wetBulbC: lerp(a.wetBulbC, b.wetBulbC),
-    spatialSupport: Math.min(a.spatialSupport ?? 1,b.spatialSupport ?? 1),
   };
 }
 
@@ -69,7 +59,7 @@ function terrainProfile(profile: ProfilePoint[], terrainM: number): { points: Pr
   let extrapolated = false;
   let start = 0;
 
-  if (terrainM < p[0].heightM) {
+  if (terrainM <= p[0].heightM) {
     surface = { ...p[0], heightM: terrainM };
     extrapolated = true;
   } else {
@@ -113,14 +103,13 @@ function integrateSigned(points: ProfilePoint[], sign: 'positive' | 'negative', 
 }
 
 function classifyConfidence(points: ProfilePoint[], extrapolated: boolean, warmDM: number, coldDM: number): TerrainPrecipConfidence {
-  if (extrapolated || points.some(p => (p.spatialSupport ?? 1) < 1 - 1e-8)) return 'low';
+  if (extrapolated) return 'low';
   let maxGap = 0;
   for (let i = 1; i < points.length; i++) maxGap = Math.max(maxGap, points[i].heightM - points[i - 1].heightM);
   if (maxGap > 1400) return 'low';
 
   const near = (value: number, threshold: number, margin: number) => Math.abs(value - threshold) <= margin;
   if (
-    [-0.7, 0, 0.3, 0.6, 1.2].some(threshold => near(points[0].wetBulbC, threshold, 0.2)) ||
     near(warmDM, MIN_MELTING_DM, 90) ||
     near(warmDM, PARTIAL_MELTING_DM, 180) ||
     near(warmDM, FULL_MELTING_DM, 260) ||

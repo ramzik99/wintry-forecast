@@ -23,20 +23,13 @@ export function formatElevation(m: number | null, units: UnitSystem, stepM = 10)
 }
 
 export function formatSnow(cm: number | null, units: UnitSystem): string {
-  if (cm === null || !Number.isFinite(cm) || cm < 0) return 'Unavailable';
-  if (cm === 0) return 'None';
+  if (cm === null || !Number.isFinite(cm)) return '—';
+  if (cm < 0.05) return 'None';
   if (units === 'imperial') {
     const value = cmToInches(cm);
-    return value < 1 ? '<1 in' : `≈ ${Math.round(value)} in`;
+    return value < 4 ? `${value.toFixed(1).replace(/\.0$/, '')} in` : `${Math.round(value)} in`;
   }
-  return cm < 1 ? '<1 cm' : `≈ ${Math.round(cm)} cm`;
-}
-
-/** Display precision only; this rounding is not an uncertainty interval. */
-export function formatSnowline(m: number | null, units: UnitSystem): string {
-  if (m === null || !Number.isFinite(m)) return 'Unresolved';
-  return units === 'imperial' ? `≈ ${Math.round(metresToFeet(m) / 500) * 500} ft`
-    : `≈ ${Math.round(m / 100) * 100} m`;
+  return cm < 10 ? `${cm.toFixed(1).replace(/\.0$/, '')} cm` : `${Math.round(cm)} cm`;
 }
 
 export function formatPrecip(mm3h: number | null, units: UnitSystem): string {

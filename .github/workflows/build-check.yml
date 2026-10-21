@@ -8,7 +8,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -33,46 +32,19 @@ jobs:
       - name: Build plugin
         run: npm run build
 
-      - name: Install browser
+      - name: Install browser for restored interface checks
         run: |
           npm install --no-save playwright@1.62.1
           npx playwright install --with-deps chromium
 
-      - name: Test streaming MP4 and shading pixels
-        run: node test/map-export-browser.mjs
-
-      - name: Compare webcam locations with current profiles
-        run: node test/webcam-profiles.mjs
-
-      - name: Test live Windy desktop, mobile and MP4 download
-        run: node test/windy-live.mjs
-
-      - name: Independently decode exported video
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          ffprobe -v error -show_entries stream=codec_name,width,height,nb_frames,duration -of json test-output/wintry-live.mp4 > test-output/video-info.json
-          ffmpeg -hide_banner -loglevel error -i test-output/wintry-live.mp4 -frames:v 1 test-output/windy-mp4-first-frame.png
-          ffmpeg -hide_banner -loglevel error -ss 14 -i test-output/wintry-live.mp4 -frames:v 1 test-output/windy-mp4-middle-frame.png
-          ffmpeg -hide_banner -i test-output/wintry-live.mp4 -vf 'blackdetect=d=0.1:pix_th=0.02' -f null - 2> test-output/video-decode.log
-          node --input-type=module <<'NODE'
-          import {readFileSync} from 'node:fs';
-          import assert from 'node:assert/strict';
-          const video=JSON.parse(readFileSync('test-output/video-info.json')).streams[0];
-          assert.equal(video.codec_name,'h264');assert.ok(Number(video.nb_frames)>100);
-          assert.ok(Math.max(video.width,video.height)<=1280);
-          assert.ok(!readFileSync('test-output/video-decode.log','utf8').includes('black_start:'));
-          console.log('Independent full-file video decode passed',video);
-          NODE
+      - name: Test restored forecast and sounding on desktop and mobile
+        run: node test/restored-1000-1-live.mjs
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: wintry-shading-browser
-          path: |
-            test-output/*.png
-            test-output/*.json
-            test-output/wintry-live.mp4
+          name: restored-1000-1-interface
+          path: test-output/*.png
           if-no-files-found: ignore
 
       - name: Verify packaged plugin version

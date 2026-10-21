@@ -1,17 +1,17 @@
 const __pluginConfig =  {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.1.3",
+  "version": "1000.1.0",
   "icon": "❄️",
   "title": "Wintry forecast",
-  "description": "Terrain-aware precipitation-type guidance with six physical types, qualified limited-detail estimates, ECMWF precipitation, approximate snowfall, forecast/sounding views and prepared-map MP4 export.",
+  "description": "Concise terrain-aware winter forecast: type, terrain, snowline, precipitation, estimated new snow and timing first; a clean forecast timeline and optional hover/touch sounding.",
   "author": "Ramzi Kandah",
   "repository": "https://github.com/ramzik99/wintry-forecast",
   "desktopUI": "embedded",
   "mobileUI": "small",
   "addToContextmenu": true,
   "listenToSingleclick": true,
-  "built": 1792226525865,
-  "builtReadable": "2026-10-17T08:42:05.865Z"
+  "built": 1792153325239,
+  "builtReadable": "2026-10-16T12:22:05.239Z"
 };
 
 // transformCode: import { register, release, singleclick } from '@windy/singleclick';
@@ -2116,7 +2116,7 @@ class PlaceSearch extends SvelteComponent {
 
 const config = {
     name: 'windy-plugin-snowline-map-100m',
-    version: '1000.1.3'};
+    version: '1000.1.0'};
 
 const UNITS_STORAGE_KEY = 'wintry:units:v1';
 function loadUnitSystem() {
@@ -2149,17 +2149,13 @@ function formatElevation(m, units, stepM = 10) {
     return `${Math.round(m / stepM) * stepM} m`;
 }
 function formatSnow(cm, units) {
-    if (cm === null || !Number.isFinite(cm) || cm < 0) return 'Unavailable';
-    if (cm === 0) return 'None';
+    if (cm === null || !Number.isFinite(cm)) return '—';
+    if (cm < 0.05) return 'None';
     if (units === 'imperial') {
         const value = cmToInches(cm);
-        return value < 1 ? '<1 in' : `≈ ${Math.round(value)} in`;
+        return value < 4 ? `${value.toFixed(1).replace(/\.0$/, '')} in` : `${Math.round(value)} in`;
     }
-    return cm < 1 ? '<1 cm' : `≈ ${Math.round(cm)} cm`;
-}
-/** Display precision only; this rounding is not an uncertainty interval. */ function formatSnowline(m, units) {
-    if (m === null || !Number.isFinite(m)) return 'Unresolved';
-    return units === 'imperial' ? `≈ ${Math.round(metresToFeet(m) / 500) * 500} ft` : `≈ ${Math.round(m / 100) * 100} m`;
+    return cm < 10 ? `${cm.toFixed(1).replace(/\.0$/, '')} cm` : `${Math.round(cm)} cm`;
 }
 function formatPrecip(mm3h, units) {
     if (mm3h === null || !Number.isFinite(mm3h)) return '—';
@@ -2475,14 +2471,6 @@ const PRESSURE_LEVELS = [
     '200h',
     '150h'
 ];
-/** Public contours/labels omit a fabricated numeric zero level in an all-cold column.
- * The raw bounded extrapolation remains available for research comparisons.
- */ function resolvedSnowlineM(profile) {
-    const result = wetBulbZeroHeight(profile);
-    // Match the public phase-detail guardrail; a very wide crossing layer is unresolved.
-    if (result.lower && result.upper && result.upper.heightM - result.lower.heightM > 1400) return null;
-    return result.status === 'resolved' && result.snowLevelM !== null && Number.isFinite(result.snowLevelM) ? result.snowLevelM : null;
-}
 const DEFAULT_COLD_COLUMN_LAPSE_C_PER_M = -6e-3;
 const MIN_COLD_COLUMN_GRADIENT_C_PER_M = -0.012;
 const MAX_COLD_COLUMN_GRADIENT_C_PER_M = -1e-3;
@@ -2798,15 +2786,8 @@ function toThreeHourlyMillimetres(key, raw) {
     return index >= 0 && target < supportedIntervalEnd(times, index, data.__precipPeriodsH) ? precipMmAt(data, index) : null;
 }
 
-/** Internal detail flags are not calibrated probabilities of forecast accuracy. */ function precipitationLabel(phase, confidence = phase.confidence) {
-    return confidence === 'low' || confidence === 'medium' ? `${phase.label} possible` : phase.label;
-}
-/** Show the estimated physical type, qualifying limited-detail diagnoses in labels.
- * Snow amounts and event timing have separate detail checks. No extra category
- * is fabricated when the atmospheric profile cannot be classified at all.
- */ function supportedPrecipitationType(profile, terrainM) {
-    if (!Number.isFinite(terrainM)) return null;
-    return terrainPrecipitationType(profile, terrainM);
+/** Qualify a model estimate without discarding its best-supported phase. */ function precipitationLabel(phase, confidence = phase.confidence) {
+    return confidence === 'low' ? `${phase.label} possible` : phase.label;
 }
 const WARM_NODE_C = 0.2;
 const MIN_MELTING_DM = 150;
@@ -2825,8 +2806,7 @@ function interpolateAtHeight(a, b, heightM) {
         heightM,
         tempC: lerp(a.tempC, b.tempC),
         dewpointC: lerp(a.dewpointC, b.dewpointC),
-        wetBulbC: lerp(a.wetBulbC, b.wetBulbC),
-        spatialSupport: Math.min(a.spatialSupport ?? 1, b.spatialSupport ?? 1)
+        wetBulbC: lerp(a.wetBulbC, b.wetBulbC)
     };
 }
 function terrainProfile(profile, terrainM) {
@@ -2836,7 +2816,7 @@ function terrainProfile(profile, terrainM) {
     let surface;
     let extrapolated = false;
     let start = 0;
-    if (terrainM < p[0].heightM) {
+    if (terrainM <= p[0].heightM) {
         surface = {
             ...p[0],
             heightM: terrainM
@@ -2884,18 +2864,12 @@ function integrateSigned(points, sign, ceilingM = Infinity) {
     return sum;
 }
 function classifyConfidence(points, extrapolated, warmDM, coldDM) {
-    if (extrapolated || points.some((p)=>(p.spatialSupport ?? 1) < 1 - 1e-8)) return 'low';
+    if (extrapolated) return 'low';
     let maxGap = 0;
     for(let i = 1; i < points.length; i++)maxGap = Math.max(maxGap, points[i].heightM - points[i - 1].heightM);
     if (maxGap > 1400) return 'low';
     const near = (value, threshold, margin)=>Math.abs(value - threshold) <= margin;
-    if ([
-        -0.7,
-        0,
-        0.3,
-        0.6,
-        1.2
-    ].some((threshold)=>near(points[0].wetBulbC, threshold, 0.2)) || near(warmDM, MIN_MELTING_DM, 90) || near(warmDM, PARTIAL_MELTING_DM, 180) || near(warmDM, FULL_MELTING_DM, 260) || near(coldDM, ICE_PELLET_REFREEZE_DM, 220)) return 'medium';
+    if (near(warmDM, MIN_MELTING_DM, 90) || near(warmDM, PARTIAL_MELTING_DM, 180) || near(warmDM, FULL_MELTING_DM, 260) || near(coldDM, ICE_PELLET_REFREEZE_DM, 220)) return 'medium';
     return maxGap <= 850 ? 'high' : 'medium';
 }
 function result(key, label, icon, detail, confidence, surfaceWetBulbC, meltingDegreeMetres, refreezingDegreeMetres) {
@@ -2944,7 +2918,8 @@ function result(key, label, icon, detail, confidence, surfaceWetBulbC, meltingDe
 
 function snowlineAt(point, index, terrainM) {
     try {
-        return resolvedSnowlineM(buildProfile(point.forecast, index));
+        const result = wetBulbZeroHeight(buildProfile(point.forecast, index));
+        return result.snowLevelM !== null && Number.isFinite(result.snowLevelM) ? result.snowLevelM : null;
     } catch  {
         return null;
     }
@@ -3093,7 +3068,7 @@ function clamp$1(value, min, max) {
         sweMm: 0,
         depthCm: 0
     };
-    if (!phase || phase.confidence === 'low' || !Number.isFinite(phase.surfaceWetBulbC)) return null;
+    if (!phase || !Number.isFinite(phase.surfaceWetBulbC)) return null;
     const fraction = snowFraction(phase), ratio = snowToLiquidRatio(phase);
     if (![
         fraction,
@@ -3166,7 +3141,7 @@ function buildSnowForecast(point, terrainM) {
     const existing = terrains?.get(key);
     if (existing && existing.times === point.times) return existing;
     const amounts = point.times.map((_, i)=>precipMmAt(point.forecast, i));
-    const thermalPhases = point.times.map((_, i)=>Number.isFinite(key) ? supportedPrecipitationType(buildProfile(point.forecast, i), key) : null);
+    const thermalPhases = point.times.map((_, i)=>Number.isFinite(key) ? terrainPrecipitationType(buildProfile(point.forecast, i), key) : null);
     const sourcePeriods = point.forecast.__precipPeriodsH;
     const ends = point.times.map((_, i)=>supportedIntervalEnd(point.times, i, sourcePeriods));
     const cumulativeSnowfallCm = [];
@@ -3283,7 +3258,7 @@ function aggregateConfidence(event) {
         const precip = series.amounts[i];
         if (!isPrecipitating(precip)) continue;
         const phase = series.thermalPhases[i];
-        if (!phase || phase.confidence === 'low' || !WINTRY_KEYS.has(phase.key)) continue;
+        if (!phase || !WINTRY_KEYS.has(phase.key)) continue;
         const hours = Math.max(0, Math.min(horizonEnd, intervalEnd) - Math.max(fromTime, times[i])) / 3600_000;
         if (hours > 0) qualifying.push({
             index: i,
@@ -3299,7 +3274,7 @@ function aggregateConfidence(event) {
     ];
     for(let i = 1; i < qualifying.length; i++){
         const gapH = (qualifying[i].time - event[event.length - 1].time) / 3600_000;
-        if (gapH > MAX_EVENT_GAP_HOURS || qualifying[i].index !== event[event.length - 1].index + 1) break;
+        if (gapH > MAX_EVENT_GAP_HOURS) break;
         event.push(qualifying[i]);
     }
     const startTime = event[0].time;
@@ -3329,7 +3304,7 @@ function aggregateConfidence(event) {
     const snow = snowForecastWindow(series, Math.max(fromTime, startTime), endTime);
     // Do not present an event cut off by missing data as a complete storm total.
     const following = last.index + 1;
-    const boundaryKnown = endTime >= horizonEnd || following < times.length && times[following] === endTime && series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null && series.thermalPhases[following]?.confidence !== 'low') && supportedIntervalEnd(times, following, series.sourcePeriods) > endTime;
+    const boundaryKnown = endTime >= horizonEnd || following < times.length && times[following] === endTime && series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null) && supportedIntervalEnd(times, following, series.sourcePeriods) > endTime;
     return {
         startTime,
         endTime,
@@ -3350,7 +3325,7 @@ function aggregateConfidence(event) {
 function conditionLabel(precip, phase) {
     if (precip === null || !Number.isFinite(precip) || precip < 0) return 'Precipitation unavailable';
     if (precip === 0) return 'Dry';
-    return phase ? precipitationLabel(phase) : 'Precipitation type unavailable';
+    return phase ? precipitationLabel(phase) : 'Precipitation · type uncertain';
 }
 /** Absence of an event is only meaningful over intervals we could classify. */ function noEventMessage(point, terrainM, fromTime) {
     if (!point?.times?.length || terrainM === null || !Number.isFinite(terrainM)) return 'Wintry outlook unavailable';
@@ -3365,11 +3340,7 @@ function conditionLabel(precip, phase) {
         const start = point.times[i], intervalEnd = Math.min(end, supportedIntervalEnd(point.times, i, point.forecast.__precipPeriodsH));
         if (intervalEnd <= fromTime) continue;
         const precip = precipMmAt(point.forecast, i);
-        const phase = isPrecipitating(precip) ? supportedPrecipitationType(buildProfile(point.forecast, i), terrainM) : null;
-        if (start <= coveredUntil && isPrecipitating(precip) && phase?.confidence === 'low') {
-            return 'Limited atmospheric detail · wintry outlook unavailable';
-        }
-        if (start > coveredUntil || intervalEnd <= start || precip === null || isPrecipitating(precip) && !phase) {
+        if (start > coveredUntil || intervalEnd <= start || precip === null || isPrecipitating(precip) && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM)) {
             return partialOutlook();
         }
         coveredUntil = intervalEnd;
@@ -3377,8 +3348,48 @@ function conditionLabel(precip, phase) {
     return coveredUntil >= end ? 'No wintry precipitation in the available forecast' : partialOutlook();
 }
 
+/** Broad central difference, deliberately independent of the map's pixel zoom. */ function terrainSlopes(west, east, south, north, halfSpanM = 2000) {
+    if (![
+        west,
+        east,
+        south,
+        north
+    ].every((v)=>v !== null && Number.isFinite(v)) || !Number.isFinite(halfSpanM) || halfSpanM < 1000) return null;
+    return {
+        east: (east - west) / (2 * halfSpanM),
+        north: (north - south) / (2 * halfSpanM),
+        halfSpanM
+    };
+}
+/** Kinematic exposure diagnostic only. This is not model vertical velocity or QPF. */ function terrainFlow(forecast, index, terrainM, slopes) {
+    if (terrainM === null || !Number.isFinite(terrainM) || !slopes || ![
+        slopes.east,
+        slopes.north,
+        slopes.halfSpanM
+    ].every(Number.isFinite) || slopes.halfSpanM < 1000) return null;
+    // Never take a fixed pressure level that may be below the actual mountain.
+    const candidates = buildProfile(forecast, index).filter((p)=>p.heightM >= terrainM + 200 && p.heightM <= terrainM + 2000).sort((a, b)=>Math.abs(a.heightM - terrainM - 1000) - Math.abs(b.heightM - terrainM - 1000));
+    for (const p of candidates){
+        const u = valueAt(forecast[`wind_u-${p.level}`], index), v = valueAt(forecast[`wind_v-${p.level}`], index);
+        if (u === null || v === null || !Number.isFinite(p.tempC) || !Number.isFinite(p.dewpointC)) continue;
+        const es = (t)=>Math.exp(17.67 * t / (t + 243.5));
+        const relativeHumidity = Math.max(0, Math.min(100, 100 * es(Math.min(p.tempC, p.dewpointC)) / es(p.tempC)));
+        const upliftProxyMs = u * slopes.east + v * slopes.north;
+        if (!Number.isFinite(relativeHumidity) || !Number.isFinite(upliftProxyMs)) return null;
+        return {
+            upliftProxyMs,
+            relativeHumidity,
+            windSpeedMs: Math.hypot(u, v),
+            heightAboveTerrainM: p.heightM - terrainM,
+            level: p.level,
+            direction: Math.abs(upliftProxyMs) < 0.05 ? 'Weak/cross-slope' : upliftProxyMs > 0 ? 'Upslope' : 'Downslope'
+        };
+    }
+    return null;
+}
+
 /** A cumulative estimate is supported only up to the first unknown interval. */ function forecastCoverage(precip, phases, times) {
-    const known = precip.map((value, i)=>value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(times[i]) && (value === 0 || phases[i] != null && phases[i].confidence !== 'low'));
+    const known = precip.map((value, i)=>value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(times[i]) && (value === 0 || phases[i] != null));
     let prefix = 0;
     while(prefix < known.length && known[prefix] && (prefix === 0 || times[prefix] > times[prefix - 1] && times[prefix] - times[prefix - 1] <= 3 * 3600_000))prefix++;
     const complete = known.length > 0 && prefix === known.length;
@@ -3756,7 +3767,7 @@ function create_if_block$2(ctx) {
 			t15 = space();
 			span5 = element("span");
 			small2 = element("small");
-			small2.textContent = "Est. snowline";
+			small2.textContent = "Snowline";
 			b2 = element("b");
 			t17 = text(t17_value);
 			t18 = space();
@@ -4293,7 +4304,7 @@ function create_if_block_3$2(ctx) {
 			line = svg_element("line");
 			rect = svg_element("rect");
 			text_1 = svg_element("text");
-			t0 = text("Est. ");
+			t0 = text("Snowline ");
 			t1 = text(t1_value);
 			attr(line, "x1", "48");
 			attr(line, "x2", "310");
@@ -5125,8 +5136,11 @@ function instance$3($$self, $$props, $$invalidate) {
 		? y(terrain)
 		: null;
 
-		wetBulbZeroHeight(profile);
-		const snowlineM = resolvedSnowlineM(profile);
+		const wbz = wetBulbZeroHeight(profile);
+
+		const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM)
+		? wbz.snowLevelM
+		: null;
 
 		const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH
 		? y(snowlineM)
@@ -5140,7 +5154,7 @@ function instance$3($$self, $$props, $$invalidate) {
 		: null;
 
 		const phase = hasPrecip && terrain !== null && Number.isFinite(terrain)
-		? supportedPrecipitationType(profile, terrain)
+		? terrainPrecipitationType(profile, terrain)
 		: null;
 
 		return {
@@ -5155,7 +5169,9 @@ function instance$3($$self, $$props, $$invalidate) {
 			surfaceTw: diagnostics
 			? `${diagnostics.extrapolated ? '~' : ''}${formatTemperature(diagnostics.wetBulbC, units)}`
 			: '—',
-			snowline: formatSnowline(snowlineM, units),
+			snowline: snowlineM === null
+			? 'Unresolved'
+			: (wbz.extrapolated ? '~ ' : '') + formatElevation(snowlineM, units),
 			warmEnergy: phase
 			? `${Math.round(phase.meltingDegreeMetres)} °C·m`
 			: '—',
@@ -5324,24 +5340,24 @@ function add_css$1(target) {
 
 function get_each_context(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[45] = list[i];
+	child_ctx[47] = list[i];
 	return child_ctx;
 }
 
 function get_each_context_1(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[48] = list[i];
+	child_ctx[50] = list[i];
 	return child_ctx;
 }
 
 function get_each_context_2(ctx, list, i) {
 	const child_ctx = ctx.slice();
-	child_ctx[51] = list[i];
+	child_ctx[53] = list[i];
 	return child_ctx;
 }
 
 // (9:6) {#if tab === 'graph' && showNow}
-function create_if_block_23(ctx) {
+function create_if_block_24(ctx) {
 	let button;
 	let mounted;
 	let dispose;
@@ -5359,7 +5375,7 @@ function create_if_block_23(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*resetToNow*/ ctx[19]);
+				dispose = listen(button, "click", /*resetToNow*/ ctx[20]);
 				mounted = true;
 			}
 		},
@@ -5376,7 +5392,7 @@ function create_if_block_23(ctx) {
 }
 
 // (10:6) {#if tab === 'graph' && chart}
-function create_if_block_22(ctx) {
+function create_if_block_23(ctx) {
 	let button;
 	let t_value = (/*pngBusy*/ ctx[7] ? 'Saving…' : 'Save image') + "";
 	let t;
@@ -5396,7 +5412,7 @@ function create_if_block_22(ctx) {
 			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*downloadPng*/ ctx[21]);
+				dispose = listen(button, "click", /*downloadPng*/ ctx[22]);
 				mounted = true;
 			}
 		},
@@ -5588,7 +5604,7 @@ function create_if_block_1$1(ctx) {
 	let text12;
 	let t14;
 	let tspan2;
-	let t15_value = (/*units*/ ctx[4] === 'imperial' ? 'in' : 'cm') + "";
+	let t15_value = (/*units*/ ctx[4] === 'imperial' ? 'est. in' : 'est. cm') + "";
 	let t15;
 	let rect9;
 	let if_block3_anchor;
@@ -5606,7 +5622,11 @@ function create_if_block_1$1(ctx) {
 	let span0;
 	let small0;
 	let b1;
-	let t21_value = formatSnowline(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4]) + "";
+
+	let t21_value = (/*chart*/ ctx[12].currentSnowline === null
+	? 'WBZ unresolved'
+	: formatElevation(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4])) + "";
+
 	let t21;
 	let t22;
 	let span1;
@@ -5632,30 +5652,32 @@ function create_if_block_1$1(ctx) {
 	let t34_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "";
 	let t34;
 	let t35;
-	let small2;
+	let t36_value = formatSnow(/*chart*/ ctx[12].remainingSnow24h, /*units*/ ctx[4]) + "";
+	let t36;
 	let t37;
+	let small2;
+	let t39;
+	let t40;
 	let div5;
 	let b4;
 
-	let t38_value = ((/*event*/ ctx[13]?.activeNow)
+	let t41_value = ((/*event*/ ctx[13]?.activeNow)
 	? 'Current wintry period'
 	: 'Next wintry period') + "";
 
-	let t38;
-	let t39;
-	let t40;
 	let t41;
 	let t42;
-	let div6;
+	let t43;
 	let t44;
-	let if_block14_anchor;
+	let t45;
+	let if_block15_anchor;
 	let mounted;
 	let dispose;
-	let if_block0 = /*chart*/ ctx[12].terrainY !== null && create_if_block_21(ctx);
-	let if_block1 = show_if && create_if_block_20();
+	let if_block0 = /*chart*/ ctx[12].terrainY !== null && create_if_block_22(ctx);
+	let if_block1 = show_if && create_if_block_21();
 
 	function select_block_type_2(ctx, dirty) {
-		if (/*chart*/ ctx[12].hasPrecip) return create_if_block_19;
+		if (/*chart*/ ctx[12].hasPrecip) return create_if_block_20;
 		return create_else_block_3;
 	}
 
@@ -5669,15 +5691,15 @@ function create_if_block_1$1(ctx) {
 	}
 
 	function select_block_type_3(ctx, dirty) {
-		if (/*chart*/ ctx[12].newSnowMax > 0) return create_if_block_18;
+		if (/*chart*/ ctx[12].newSnowMax > 0.05) return create_if_block_19;
 		return create_else_block_2$1;
 	}
 
 	let current_block_type_1 = select_block_type_3(ctx);
 	let if_block3 = current_block_type_1(ctx);
-	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_17(ctx);
-	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_16(ctx);
-	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_15$1(ctx);
+	let if_block4 = /*chart*/ ctx[12].nowX !== null && create_if_block_18(ctx);
+	let if_block5 = /*chart*/ ctx[12].currentX !== null && /*chart*/ ctx[12].currentY !== null && create_if_block_17(ctx);
+	let if_block6 = /*tooltip*/ ctx[11] && create_if_block_16(ctx);
 	let each_value = ensure_array_like([24, 48, 72, 96, 120, 144]);
 	let each_blocks = [];
 
@@ -5685,17 +5707,18 @@ function create_if_block_1$1(ctx) {
 		each_blocks[i] = create_each_block(get_each_context(ctx, each_value, i));
 	}
 
-	let if_block7 = /*tooltip*/ ctx[11] && create_if_block_12$1(ctx);
+	let if_block7 = /*tooltip*/ ctx[11] && create_if_block_13$1(ctx);
 
 	function select_block_type_4(ctx, dirty) {
-		if (/*chart*/ ctx[12].currentPhase) return create_if_block_11$1;
+		if (/*chart*/ ctx[12].currentPhase) return create_if_block_12$1;
 		return create_else_block_1$1;
 	}
 
 	let current_block_type_2 = select_block_type_4(ctx);
 	let if_block8 = current_block_type_2(ctx);
-	let if_block9 = /*chart*/ ctx[12].currentPosition && create_if_block_10$1(ctx);
-	let if_block10 = /*chart*/ ctx[12].precip24h === null && create_if_block_9$1();
+	let if_block9 = /*chart*/ ctx[12].currentPosition && create_if_block_11$1(ctx);
+	let if_block10 = /*chart*/ ctx[12].precip24h === null && create_if_block_10$1();
+	let if_block11 = /*flow*/ ctx[14] && create_if_block_9$1(ctx);
 
 	function select_block_type_5(ctx, dirty) {
 		if (/*event*/ ctx[13]) return create_if_block_5$1;
@@ -5703,17 +5726,17 @@ function create_if_block_1$1(ctx) {
 	}
 
 	let current_block_type_3 = select_block_type_5(ctx);
-	let if_block11 = current_block_type_3(ctx);
-	let if_block12 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
-	let if_block13 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
-	let if_block14 = /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
+	let if_block12 = current_block_type_3(ctx);
+	let if_block13 = /*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5] && create_if_block_4$1(ctx);
+	let if_block14 = /*chart*/ ctx[12].currentPhase?.confidence === 'low' && create_if_block_3$1();
+	let if_block15 = /*chart*/ ctx[12].coverageNote && create_if_block_2$1(ctx);
 
 	return {
 		c() {
 			div0 = element("div");
 			svg = svg_element("svg");
 			text0 = svg_element("text");
-			t0 = text("ESTIMATED THERMAL SNOWLINE ");
+			t0 = text("SNOWLINE ");
 			tspan0 = svg_element("tspan");
 			t1 = text(t1_value);
 			rect0 = svg_element("rect");
@@ -5763,7 +5786,7 @@ function create_if_block_1$1(ctx) {
 			text11 = svg_element("text");
 			t13 = text("Freezing rain");
 			text12 = svg_element("text");
-			t14 = text("SNOWFALL ESTIMATE ");
+			t14 = text("SNOWFALL TOTAL ");
 			tspan2 = svg_element("tspan");
 			t15 = text(t15_value);
 			rect9 = svg_element("rect");
@@ -5793,7 +5816,7 @@ function create_if_block_1$1(ctx) {
 			div2 = element("div");
 			span0 = element("span");
 			small0 = element("small");
-			small0.textContent = "Est. snowline";
+			small0.textContent = "Snowline";
 			b1 = element("b");
 			t21 = text(t21_value);
 			t22 = space();
@@ -5805,7 +5828,7 @@ function create_if_block_1$1(ctx) {
 			t25 = space();
 			div4 = element("div");
 			b3 = element("b");
-			b3.textContent = "Next 24 h · ECMWF precipitation";
+			b3.textContent = "Next 24 h precipitation";
 			t27 = space();
 			span2 = element("span");
 			t28 = text(t28_value);
@@ -5816,27 +5839,28 @@ function create_if_block_1$1(ctx) {
 			t31 = text(" · liquid equivalent");
 			t32 = space();
 			span4 = element("span");
-			t33 = text("Snowfall estimate: ");
+			t33 = text("Snowfall: ");
 			t34 = text(t34_value);
-			t35 = space();
-			small2 = element("small");
-			small2.textContent = "Approximate fresh snowfall, not snow depth on the ground. Amount withheld when atmospheric detail is insufficient.";
+			t35 = text(" · remaining layer*: ");
+			t36 = text(t36_value);
 			t37 = space();
+			small2 = element("small");
+			small2.textContent = "*Experimental settling/melt estimate; excludes existing snow and ground heat.";
+			t39 = space();
+			if (if_block11) if_block11.c();
+			t40 = space();
 			div5 = element("div");
 			b4 = element("b");
-			t38 = text(t38_value);
-			t39 = space();
-			if_block11.c();
-			t40 = space();
-			if (if_block12) if_block12.c();
-			t41 = space();
-			if (if_block13) if_block13.c();
+			t41 = text(t41_value);
 			t42 = space();
-			div6 = element("div");
-			div6.textContent = "Model guidance · accuracy has not been independently validated.";
+			if_block12.c();
+			t43 = space();
+			if (if_block13) if_block13.c();
 			t44 = space();
 			if (if_block14) if_block14.c();
-			if_block14_anchor = empty();
+			t45 = space();
+			if (if_block15) if_block15.c();
+			if_block15_anchor = empty();
 			attr(tspan0, "class", "svelte-1q22nou");
 			attr(text0, "x", "42");
 			attr(text0, "y", "11");
@@ -5989,7 +6013,6 @@ function create_if_block_1$1(ctx) {
 			attr(div4, "aria-label", "Next 24 hours precipitation");
 			attr(b4, "class", "svelte-1q22nou");
 			attr(div5, "class", "outlook24 event-intelligence svelte-1q22nou");
-			attr(div6, "class", "quality-note svelte-1q22nou");
 		},
 		m(target, anchor) {
 			insert(target, div0, anchor);
@@ -6066,7 +6089,7 @@ function create_if_block_1$1(ctx) {
 				}
 			}
 
-			/*svg_binding*/ ctx[26](svg);
+			/*svg_binding*/ ctx[28](svg);
 			append(div0, t16);
 			if (if_block7) if_block7.m(div0, null);
 			insert(target, t17, anchor);
@@ -6102,29 +6125,31 @@ function create_if_block_1$1(ctx) {
 			append(div4, span4);
 			append(span4, t33);
 			append(span4, t34);
-			append(div4, t35);
+			append(span4, t35);
+			append(span4, t36);
+			append(div4, t37);
 			append(div4, small2);
-			insert(target, t37, anchor);
+			append(div4, t39);
+			if (if_block11) if_block11.m(div4, null);
+			insert(target, t40, anchor);
 			insert(target, div5, anchor);
 			append(div5, b4);
-			append(b4, t38);
-			append(div5, t39);
-			if_block11.m(div5, null);
-			insert(target, t40, anchor);
-			if (if_block12) if_block12.m(target, anchor);
-			insert(target, t41, anchor);
+			append(b4, t41);
+			append(div5, t42);
+			if_block12.m(div5, null);
+			insert(target, t43, anchor);
 			if (if_block13) if_block13.m(target, anchor);
-			insert(target, t42, anchor);
-			insert(target, div6, anchor);
 			insert(target, t44, anchor);
 			if (if_block14) if_block14.m(target, anchor);
-			insert(target, if_block14_anchor, anchor);
+			insert(target, t45, anchor);
+			if (if_block15) if_block15.m(target, anchor);
+			insert(target, if_block15_anchor, anchor);
 
 			if (!mounted) {
 				dispose = [
-					listen(svg, "pointermove", /*handlePointer*/ ctx[20]),
-					listen(svg, "pointerdown", /*handlePointer*/ ctx[20]),
-					listen(svg, "pointerleave", /*pointerleave_handler*/ ctx[27])
+					listen(svg, "pointermove", /*handlePointer*/ ctx[21]),
+					listen(svg, "pointerdown", /*handlePointer*/ ctx[21]),
+					listen(svg, "pointerleave", /*pointerleave_handler*/ ctx[29])
 				];
 
 				mounted = true;
@@ -6137,7 +6162,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_21(ctx);
+					if_block0 = create_if_block_22(ctx);
 					if_block0.c();
 					if_block0.m(svg, line0);
 				}
@@ -6158,7 +6183,7 @@ function create_if_block_1$1(ctx) {
 
 			if (show_if) {
 				if (if_block1) ; else {
-					if_block1 = create_if_block_20();
+					if_block1 = create_if_block_21();
 					if_block1.c();
 					if_block1.m(svg, text4);
 				}
@@ -6204,7 +6229,7 @@ function create_if_block_1$1(ctx) {
 				each_blocks_1.length = each_value_1.length;
 			}
 
-			if (dirty[0] & /*units*/ 16 && t15_value !== (t15_value = (/*units*/ ctx[4] === 'imperial' ? 'in' : 'cm') + "")) set_data(t15, t15_value);
+			if (dirty[0] & /*units*/ 16 && t15_value !== (t15_value = (/*units*/ ctx[4] === 'imperial' ? 'est. in' : 'est. cm') + "")) set_data(t15, t15_value);
 
 			if (current_block_type_1 === (current_block_type_1 = select_block_type_3(ctx)) && if_block3) {
 				if_block3.p(ctx, dirty);
@@ -6222,7 +6247,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block4) {
 					if_block4.p(ctx, dirty);
 				} else {
-					if_block4 = create_if_block_17(ctx);
+					if_block4 = create_if_block_18(ctx);
 					if_block4.c();
 					if_block4.m(svg, if_block4_anchor);
 				}
@@ -6235,7 +6260,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block5) {
 					if_block5.p(ctx, dirty);
 				} else {
-					if_block5 = create_if_block_16(ctx);
+					if_block5 = create_if_block_17(ctx);
 					if_block5.c();
 					if_block5.m(svg, if_block5_anchor);
 				}
@@ -6248,7 +6273,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block6) {
 					if_block6.p(ctx, dirty);
 				} else {
-					if_block6 = create_if_block_15$1(ctx);
+					if_block6 = create_if_block_16(ctx);
 					if_block6.c();
 					if_block6.m(svg, if_block6_anchor);
 				}
@@ -6261,7 +6286,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block7) {
 					if_block7.p(ctx, dirty);
 				} else {
-					if_block7 = create_if_block_12$1(ctx);
+					if_block7 = create_if_block_13$1(ctx);
 					if_block7.c();
 					if_block7.m(div0, null);
 				}
@@ -6286,7 +6311,7 @@ function create_if_block_1$1(ctx) {
 				if (if_block9) {
 					if_block9.p(ctx, dirty);
 				} else {
-					if_block9 = create_if_block_10$1(ctx);
+					if_block9 = create_if_block_11$1(ctx);
 					if_block9.c();
 					if_block9.m(div1, null);
 				}
@@ -6295,7 +6320,10 @@ function create_if_block_1$1(ctx) {
 				if_block9 = null;
 			}
 
-			if (dirty[0] & /*chart, units*/ 4112 && t21_value !== (t21_value = formatSnowline(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4]) + "")) set_data(t21, t21_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t21_value !== (t21_value = (/*chart*/ ctx[12].currentSnowline === null
+			? 'WBZ unresolved'
+			: formatElevation(/*chart*/ ctx[12].currentSnowline, /*units*/ ctx[4])) + "")) set_data(t21, t21_value);
+
 			if (dirty[0] & /*chart, units*/ 4112 && t24_value !== (t24_value = formatPrecip(/*chart*/ ctx[12].currentPrecip, /*units*/ ctx[4]) + "")) set_data(t24, t24_value);
 
 			if (dirty[0] & /*chart*/ 4096) {
@@ -6326,7 +6354,7 @@ function create_if_block_1$1(ctx) {
 
 			if (/*chart*/ ctx[12].precip24h === null) {
 				if (if_block10) ; else {
-					if_block10 = create_if_block_9$1();
+					if_block10 = create_if_block_10$1();
 					if_block10.c();
 					if_block10.m(span2, null);
 				}
@@ -6337,58 +6365,72 @@ function create_if_block_1$1(ctx) {
 
 			if (dirty[0] & /*chart*/ 4096 && t30_value !== (t30_value = /*chart*/ ctx[12].precip24Range + "")) set_data(t30, t30_value);
 			if (dirty[0] & /*chart, units*/ 4112 && t34_value !== (t34_value = formatSnow(/*chart*/ ctx[12].newSnow24h, /*units*/ ctx[4]) + "")) set_data(t34, t34_value);
+			if (dirty[0] & /*chart, units*/ 4112 && t36_value !== (t36_value = formatSnow(/*chart*/ ctx[12].remainingSnow24h, /*units*/ ctx[4]) + "")) set_data(t36, t36_value);
 
-			if (dirty[0] & /*event*/ 8192 && t38_value !== (t38_value = ((/*event*/ ctx[13]?.activeNow)
-			? 'Current wintry period'
-			: 'Next wintry period') + "")) set_data(t38, t38_value);
-
-			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block11) {
-				if_block11.p(ctx, dirty);
-			} else {
-				if_block11.d(1);
-				if_block11 = current_block_type_3(ctx);
-
+			if (/*flow*/ ctx[14]) {
 				if (if_block11) {
+					if_block11.p(ctx, dirty);
+				} else {
+					if_block11 = create_if_block_9$1(ctx);
 					if_block11.c();
-					if_block11.m(div5, null);
+					if_block11.m(div4, null);
+				}
+			} else if (if_block11) {
+				if_block11.d(1);
+				if_block11 = null;
+			}
+
+			if (dirty[0] & /*event*/ 8192 && t41_value !== (t41_value = ((/*event*/ ctx[13]?.activeNow)
+			? 'Current wintry period'
+			: 'Next wintry period') + "")) set_data(t41, t41_value);
+
+			if (current_block_type_3 === (current_block_type_3 = select_block_type_5(ctx)) && if_block12) {
+				if_block12.p(ctx, dirty);
+			} else {
+				if_block12.d(1);
+				if_block12 = current_block_type_3(ctx);
+
+				if (if_block12) {
+					if_block12.c();
+					if_block12.m(div5, null);
 				}
 			}
 
 			if (/*crossing*/ ctx[6]?.crossingTime !== null && /*crossing*/ ctx[6]?.crossingTime !== undefined && /*crossing*/ ctx[6].crossingTime > /*timestamp*/ ctx[5]) {
-				if (if_block12) {
-					if_block12.p(ctx, dirty);
+				if (if_block13) {
+					if_block13.p(ctx, dirty);
 				} else {
-					if_block12 = create_if_block_4$1(ctx);
-					if_block12.c();
-					if_block12.m(t41.parentNode, t41);
-				}
-			} else if (if_block12) {
-				if_block12.d(1);
-				if_block12 = null;
-			}
-
-			if (/*chart*/ ctx[12].currentPhase?.confidence === 'low') {
-				if (if_block13) ; else {
-					if_block13 = create_if_block_3$1();
+					if_block13 = create_if_block_4$1(ctx);
 					if_block13.c();
-					if_block13.m(t42.parentNode, t42);
+					if_block13.m(t44.parentNode, t44);
 				}
 			} else if (if_block13) {
 				if_block13.d(1);
 				if_block13 = null;
 			}
 
-			if (/*chart*/ ctx[12].coverageNote) {
-				if (if_block14) {
-					if_block14.p(ctx, dirty);
-				} else {
-					if_block14 = create_if_block_2$1(ctx);
+			if (/*chart*/ ctx[12].currentPhase?.confidence === 'low') {
+				if (if_block14) ; else {
+					if_block14 = create_if_block_3$1();
 					if_block14.c();
-					if_block14.m(if_block14_anchor.parentNode, if_block14_anchor);
+					if_block14.m(t45.parentNode, t45);
 				}
 			} else if (if_block14) {
 				if_block14.d(1);
 				if_block14 = null;
+			}
+
+			if (/*chart*/ ctx[12].coverageNote) {
+				if (if_block15) {
+					if_block15.p(ctx, dirty);
+				} else {
+					if_block15 = create_if_block_2$1(ctx);
+					if_block15.c();
+					if_block15.m(if_block15_anchor.parentNode, if_block15_anchor);
+				}
+			} else if (if_block15) {
+				if_block15.d(1);
+				if_block15 = null;
 			}
 		},
 		d(detaching) {
@@ -6398,14 +6440,12 @@ function create_if_block_1$1(ctx) {
 				detach(div3);
 				detach(t25);
 				detach(div4);
-				detach(t37);
-				detach(div5);
 				detach(t40);
-				detach(t41);
-				detach(t42);
-				detach(div6);
+				detach(div5);
+				detach(t43);
 				detach(t44);
-				detach(if_block14_anchor);
+				detach(t45);
+				detach(if_block15_anchor);
 			}
 
 			if (if_block0) if_block0.d();
@@ -6417,15 +6457,16 @@ function create_if_block_1$1(ctx) {
 			if (if_block5) if_block5.d();
 			if (if_block6) if_block6.d();
 			destroy_each(each_blocks, detaching);
-			/*svg_binding*/ ctx[26](null);
+			/*svg_binding*/ ctx[28](null);
 			if (if_block7) if_block7.d();
 			if_block8.d();
 			if (if_block9) if_block9.d();
 			if (if_block10) if_block10.d();
-			if_block11.d();
-			if (if_block12) if_block12.d(detaching);
+			if (if_block11) if_block11.d();
+			if_block12.d();
 			if (if_block13) if_block13.d(detaching);
 			if (if_block14) if_block14.d(detaching);
+			if (if_block15) if_block15.d(detaching);
 			mounted = false;
 			run_all(dispose);
 		}
@@ -6433,7 +6474,7 @@ function create_if_block_1$1(ctx) {
 }
 
 // (23:8) {#if chart.terrainY !== null}
-function create_if_block_21(ctx) {
+function create_if_block_22(ctx) {
 	let rect;
 	let rect_y_value;
 	let rect_height_value;
@@ -6503,7 +6544,7 @@ function create_if_block_21(ctx) {
 }
 
 // (35:8) {#if !chart.points.trim()}
-function create_if_block_20(ctx) {
+function create_if_block_21(ctx) {
 	let text_1;
 	let t;
 
@@ -6569,7 +6610,7 @@ function create_else_block_3(ctx) {
 }
 
 // (39:8) {#if chart.hasPrecip}
-function create_if_block_19(ctx) {
+function create_if_block_20(ctx) {
 	let text0;
 	let t0_value = /*chart*/ ctx[12].precipMaxLabel + "";
 	let t0;
@@ -6667,36 +6708,36 @@ function create_each_block_2(ctx) {
 	return {
 		c() {
 			rect = svg_element("rect");
-			attr(rect, "x", rect_x_value = /*bar*/ ctx[51].x);
-			attr(rect, "y", rect_y_value = /*bar*/ ctx[51].y);
-			attr(rect, "width", rect_width_value = /*bar*/ ctx[51].width);
-			attr(rect, "height", rect_height_value = /*bar*/ ctx[51].height);
+			attr(rect, "x", rect_x_value = /*bar*/ ctx[53].x);
+			attr(rect, "y", rect_y_value = /*bar*/ ctx[53].y);
+			attr(rect, "width", rect_width_value = /*bar*/ ctx[53].width);
+			attr(rect, "height", rect_height_value = /*bar*/ ctx[53].height);
 			attr(rect, "rx", "1.1");
 			attr(rect, "class", "precip-bar svelte-1q22nou");
-			toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[51].mm));
+			toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[53].mm));
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*bar*/ ctx[51].x)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*bar*/ ctx[53].x)) {
 				attr(rect, "x", rect_x_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_y_value !== (rect_y_value = /*bar*/ ctx[51].y)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_y_value !== (rect_y_value = /*bar*/ ctx[53].y)) {
 				attr(rect, "y", rect_y_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*bar*/ ctx[51].width)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*bar*/ ctx[53].width)) {
 				attr(rect, "width", rect_width_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_height_value !== (rect_height_value = /*bar*/ ctx[51].height)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_height_value !== (rect_height_value = /*bar*/ ctx[53].height)) {
 				attr(rect, "height", rect_height_value);
 			}
 
 			if (dirty[0] & /*chart*/ 4096) {
-				toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[51].mm));
+				toggle_class(rect, "wet", isPrecipitating(/*bar*/ ctx[53].mm));
 			}
 		},
 		d(detaching) {
@@ -6717,26 +6758,26 @@ function create_each_block_1(ctx) {
 	return {
 		c() {
 			rect = svg_element("rect");
-			attr(rect, "x", rect_x_value = /*block*/ ctx[48].x);
+			attr(rect, "x", rect_x_value = /*block*/ ctx[50].x);
 			attr(rect, "y", "212");
-			attr(rect, "width", rect_width_value = /*block*/ ctx[48].width);
+			attr(rect, "width", rect_width_value = /*block*/ ctx[50].width);
 			attr(rect, "height", "23");
 			attr(rect, "rx", "2.8");
-			attr(rect, "class", rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-1q22nou"));
+			attr(rect, "class", rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[50].key}`) + " svelte-1q22nou"));
 		},
 		m(target, anchor) {
 			insert(target, rect, anchor);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*block*/ ctx[48].x)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_x_value !== (rect_x_value = /*block*/ ctx[50].x)) {
 				attr(rect, "x", rect_x_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*block*/ ctx[48].width)) {
+			if (dirty[0] & /*chart*/ 4096 && rect_width_value !== (rect_width_value = /*block*/ ctx[50].width)) {
 				attr(rect, "width", rect_width_value);
 			}
 
-			if (dirty[0] & /*chart*/ 4096 && rect_class_value !== (rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[48].key}`) + " svelte-1q22nou"))) {
+			if (dirty[0] & /*chart*/ 4096 && rect_class_value !== (rect_class_value = "" + (null_to_empty(`phase-block phase-${/*block*/ ctx[50].key}`) + " svelte-1q22nou"))) {
 				attr(rect, "class", rect_class_value);
 			}
 		},
@@ -6788,8 +6829,8 @@ function create_else_block_2$1(ctx) {
 	};
 }
 
-// (62:8) {#if chart.newSnowMax > 0}
-function create_if_block_18(ctx) {
+// (62:8) {#if chart.newSnowMax > 0.05}
+function create_if_block_19(ctx) {
 	let text_1;
 	let t_value = /*chart*/ ctx[12].newSnowMaxLabel + "";
 	let t;
@@ -6841,7 +6882,7 @@ function create_if_block_18(ctx) {
 }
 
 // (70:8) {#if chart.nowX !== null}
-function create_if_block_17(ctx) {
+function create_if_block_18(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6907,7 +6948,7 @@ function create_if_block_17(ctx) {
 }
 
 // (75:8) {#if chart.currentX !== null && chart.currentY !== null}
-function create_if_block_16(ctx) {
+function create_if_block_17(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -6960,7 +7001,7 @@ function create_if_block_16(ctx) {
 }
 
 // (79:8) {#if tooltip}
-function create_if_block_15$1(ctx) {
+function create_if_block_16(ctx) {
 	let line;
 	let line_x__value;
 	let line_x__value_1;
@@ -7005,11 +7046,11 @@ function create_each_block(ctx) {
 		c() {
 			text_1 = svg_element("text");
 			t0 = text("+");
-			t1 = text(/*hour*/ ctx[45]);
+			t1 = text(/*hour*/ ctx[47]);
 			t2 = text(" h");
-			attr(text_1, "x", 42 + 306 * /*hour*/ ctx[45] / 144);
+			attr(text_1, "x", 42 + 306 * /*hour*/ ctx[47] / 144);
 			attr(text_1, "y", "334");
-			attr(text_1, "text-anchor", /*hour*/ ctx[45] === 144 ? 'end' : 'middle');
+			attr(text_1, "text-anchor", /*hour*/ ctx[47] === 144 ? 'end' : 'middle');
 			attr(text_1, "class", "axis timeline-tick svelte-1q22nou");
 		},
 		m(target, anchor) {
@@ -7028,7 +7069,7 @@ function create_each_block(ctx) {
 }
 
 // (86:6) {#if tooltip}
-function create_if_block_12$1(ctx) {
+function create_if_block_13$1(ctx) {
 	let div1;
 	let b0;
 	let t0_value = /*tooltip*/ ctx[11].timeLabel + "";
@@ -7039,7 +7080,11 @@ function create_if_block_12$1(ctx) {
 	let span0;
 	let t3;
 	let b1;
-	let t4_value = formatSnowline(/*tooltip*/ ctx[11].snowline, /*units*/ ctx[4]) + "";
+
+	let t4_value = (/*tooltip*/ ctx[11].snowline === null
+	? 'Unresolved'
+	: formatElevation(/*tooltip*/ ctx[11].snowline, /*units*/ ctx[4])) + "";
+
 	let t4;
 	let t5;
 	let span1;
@@ -7055,8 +7100,8 @@ function create_if_block_12$1(ctx) {
 	let t10;
 	let t11;
 	let div1_style_value;
-	let if_block0 = /*tooltip*/ ctx[11].phase && create_if_block_14$1(ctx);
-	let if_block1 = /*terrainM*/ ctx[2] !== null && create_if_block_13$1(ctx);
+	let if_block0 = /*tooltip*/ ctx[11].phase && create_if_block_15$1(ctx);
+	let if_block1 = /*terrainM*/ ctx[2] !== null && create_if_block_14$1(ctx);
 
 	return {
 		c() {
@@ -7068,7 +7113,7 @@ function create_if_block_12$1(ctx) {
 			t2 = space();
 			div0 = element("div");
 			span0 = element("span");
-			t3 = text("Est. snowline ");
+			t3 = text("SL ");
 			b1 = element("b");
 			t4 = text(t4_value);
 			t5 = space();
@@ -7126,7 +7171,7 @@ function create_if_block_12$1(ctx) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_14$1(ctx);
+					if_block0 = create_if_block_15$1(ctx);
 					if_block0.c();
 					if_block0.m(div1, t2);
 				}
@@ -7135,7 +7180,10 @@ function create_if_block_12$1(ctx) {
 				if_block0 = null;
 			}
 
-			if (dirty[0] & /*tooltip, units*/ 2064 && t4_value !== (t4_value = formatSnowline(/*tooltip*/ ctx[11].snowline, /*units*/ ctx[4]) + "")) set_data(t4, t4_value);
+			if (dirty[0] & /*tooltip, units*/ 2064 && t4_value !== (t4_value = (/*tooltip*/ ctx[11].snowline === null
+			? 'Unresolved'
+			: formatElevation(/*tooltip*/ ctx[11].snowline, /*units*/ ctx[4])) + "")) set_data(t4, t4_value);
+
 			if (dirty[0] & /*tooltip, units*/ 2064 && t7_value !== (t7_value = formatPrecip(/*tooltip*/ ctx[11].precip, /*units*/ ctx[4]) + "")) set_data(t7, t7_value);
 			if (dirty[0] & /*tooltip, units*/ 2064 && t10_value !== (t10_value = formatSnow(/*tooltip*/ ctx[11].newSnow, /*units*/ ctx[4]) + "")) set_data(t10, t10_value);
 
@@ -7143,7 +7191,7 @@ function create_if_block_12$1(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_13$1(ctx);
+					if_block1 = create_if_block_14$1(ctx);
 					if_block1.c();
 					if_block1.m(div0, null);
 				}
@@ -7168,7 +7216,7 @@ function create_if_block_12$1(ctx) {
 }
 
 // (89:10) {#if tooltip.phase}
-function create_if_block_14$1(ctx) {
+function create_if_block_15$1(ctx) {
 	let strong;
 	let i;
 	let i_class_value;
@@ -7209,7 +7257,7 @@ function create_if_block_14$1(ctx) {
 }
 
 // (94:12) {#if terrainM !== null}
-function create_if_block_13$1(ctx) {
+function create_if_block_14$1(ctx) {
 	let span;
 	let t0;
 	let b;
@@ -7266,7 +7314,7 @@ function create_else_block_1$1(ctx) {
 }
 
 // (102:11) {#if chart.currentPhase}
-function create_if_block_11$1(ctx) {
+function create_if_block_12$1(ctx) {
 	let i;
 	let i_class_value;
 	let t_value = precipitationLabel(/*chart*/ ctx[12].currentPhase) + "";
@@ -7299,7 +7347,7 @@ function create_if_block_11$1(ctx) {
 }
 
 // (103:8) {#if chart.currentPosition}
-function create_if_block_10$1(ctx) {
+function create_if_block_11$1(ctx) {
 	let strong;
 	let t_value = /*chart*/ ctx[12].currentPosition + "";
 	let t;
@@ -7326,7 +7374,7 @@ function create_if_block_10$1(ctx) {
 }
 
 // (113:54) {#if chart.precip24h===null}
-function create_if_block_9$1(ctx) {
+function create_if_block_10$1(ctx) {
 	let t;
 
 	return {
@@ -7344,7 +7392,49 @@ function create_if_block_9$1(ctx) {
 	};
 }
 
-// (123:6) {:else}
+// (117:6) {#if flow}
+function create_if_block_9$1(ctx) {
+	let span;
+	let t0;
+	let t1_value = /*flow*/ ctx[14].direction + "";
+	let t1;
+	let t2;
+	let t3_value = Math.round(/*flow*/ ctx[14].relativeHumidity) + "";
+	let t3;
+	let t4;
+
+	return {
+		c() {
+			span = element("span");
+			t0 = text("Terrain flow: ");
+			t1 = text(t1_value);
+			t2 = text(" · ");
+			t3 = text(t3_value);
+			t4 = text("% RH · experimental");
+			attr(span, "title", "Kinematic wind–terrain exposure over a 4 km span. Does not change forecast precipitation amounts.");
+			attr(span, "class", "svelte-1q22nou");
+		},
+		m(target, anchor) {
+			insert(target, span, anchor);
+			append(span, t0);
+			append(span, t1);
+			append(span, t2);
+			append(span, t3);
+			append(span, t4);
+		},
+		p(ctx, dirty) {
+			if (dirty[0] & /*flow*/ 16384 && t1_value !== (t1_value = /*flow*/ ctx[14].direction + "")) set_data(t1, t1_value);
+			if (dirty[0] & /*flow*/ 16384 && t3_value !== (t3_value = Math.round(/*flow*/ ctx[14].relativeHumidity) + "")) set_data(t3, t3_value);
+		},
+		d(detaching) {
+			if (detaching) {
+				detach(span);
+			}
+		}
+	};
+}
+
+// (124:6) {:else}
 function create_else_block$1(ctx) {
 	let span;
 	let t_value = noEventMessage(/*point*/ ctx[1], /*terrainM*/ ctx[2], /*timestamp*/ ctx[5]) + "";
@@ -7371,7 +7461,7 @@ function create_else_block$1(ctx) {
 	};
 }
 
-// (120:6) {#if event}
+// (121:6) {#if event}
 function create_if_block_5$1(ctx) {
 	let span;
 	let t0_value = /*event*/ ctx[13].dominantPhase.icon + "";
@@ -7387,7 +7477,7 @@ function create_if_block_5$1(ctx) {
 
 	function select_block_type_6(ctx, dirty) {
 		if (/*event*/ ctx[13].incomplete) return create_if_block_7$1;
-		if (/*event*/ ctx[13].newSnowCm > 0) return create_if_block_8$1;
+		if (/*event*/ ctx[13].newSnowCm > 0.05) return create_if_block_8$1;
 	}
 
 	let current_block_type = select_block_type_6(ctx);
@@ -7466,7 +7556,7 @@ function create_if_block_5$1(ctx) {
 	};
 }
 
-// (121:223) 
+// (122:226) 
 function create_if_block_8$1(ctx) {
 	let t0;
 	let t1_value = formatSnow(/*event*/ ctx[13].newSnowCm, /*units*/ ctx[4]) + "";
@@ -7499,7 +7589,7 @@ function create_if_block_8$1(ctx) {
 	};
 }
 
-// (121:152) {#if event.incomplete}
+// (122:152) {#if event.incomplete}
 function create_if_block_7$1(ctx) {
 	let t;
 
@@ -7519,7 +7609,7 @@ function create_if_block_7$1(ctx) {
 	};
 }
 
-// (122:8) {#if !event.activeNow}
+// (123:8) {#if !event.activeNow}
 function create_if_block_6$1(ctx) {
 	let button;
 	let mounted;
@@ -7537,7 +7627,7 @@ function create_if_block_6$1(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*jumpToEvent*/ ctx[18]);
+				dispose = listen(button, "click", /*jumpToEvent*/ ctx[19]);
 				mounted = true;
 			}
 		},
@@ -7553,31 +7643,29 @@ function create_if_block_6$1(ctx) {
 	};
 }
 
-// (127:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
+// (128:4) {#if crossing?.crossingTime !== null && crossing?.crossingTime !== undefined && crossing.crossingTime > timestamp}
 function create_if_block_4$1(ctx) {
 	let button;
+
+	let t0_value = (/*crossing*/ ctx[6].direction === 'below'
+	? 'Snowline falls below this elevation'
+	: 'Snowline rises above this elevation') + "";
+
 	let t0;
-
-	let t1_value = (/*crossing*/ ctx[6].direction === 'below'
-	? 'below'
-	: 'above') + "";
-
 	let t1;
+	let t2_value = formatShortTime(/*crossing*/ ctx[6].crossingTime) + "";
 	let t2;
-	let t3_value = formatShortTime(Math.round(/*crossing*/ ctx[6].crossingTime / 3600_000) * 3600_000) + "";
 	let t3;
-	let t4;
 	let mounted;
 	let dispose;
 
 	return {
 		c() {
 			button = element("button");
-			t0 = text("Est. thermal snowline ");
-			t1 = text(t1_value);
-			t2 = text(" terrain around ");
-			t3 = text(t3_value);
-			t4 = text(" →");
+			t0 = text(t0_value);
+			t1 = text(" · ");
+			t2 = text(t2_value);
+			t3 = text(" →");
 			attr(button, "class", "crossing-action svelte-1q22nou");
 			attr(button, "type", "button");
 		},
@@ -7587,19 +7675,18 @@ function create_if_block_4$1(ctx) {
 			append(button, t1);
 			append(button, t2);
 			append(button, t3);
-			append(button, t4);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*click_handler_3*/ ctx[28]);
+				dispose = listen(button, "click", /*click_handler_3*/ ctx[30]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*crossing*/ 64 && t1_value !== (t1_value = (/*crossing*/ ctx[6].direction === 'below'
-			? 'below'
-			: 'above') + "")) set_data(t1, t1_value);
+			if (dirty[0] & /*crossing*/ 64 && t0_value !== (t0_value = (/*crossing*/ ctx[6].direction === 'below'
+			? 'Snowline falls below this elevation'
+			: 'Snowline rises above this elevation') + "")) set_data(t0, t0_value);
 
-			if (dirty[0] & /*crossing*/ 64 && t3_value !== (t3_value = formatShortTime(Math.round(/*crossing*/ ctx[6].crossingTime / 3600_000) * 3600_000) + "")) set_data(t3, t3_value);
+			if (dirty[0] & /*crossing*/ 64 && t2_value !== (t2_value = formatShortTime(/*crossing*/ ctx[6].crossingTime) + "")) set_data(t2, t2_value);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -7612,14 +7699,14 @@ function create_if_block_4$1(ctx) {
 	};
 }
 
-// (128:4) {#if chart.currentPhase?.confidence === 'low'}
+// (129:4) {#if chart.currentPhase?.confidence === 'low'}
 function create_if_block_3$1(ctx) {
 	let div;
 
 	return {
 		c() {
 			div = element("div");
-			div.textContent = "Limited atmospheric detail · precipitation type is approximate.";
+			div.textContent = "Limited atmospheric detail at this elevation; type may differ.";
 			attr(div, "class", "quality-note svelte-1q22nou");
 		},
 		m(target, anchor) {
@@ -7695,8 +7782,8 @@ function create_fragment$2(ctx) {
 	let current;
 	let mounted;
 	let dispose;
-	let if_block0 = /*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[14] && create_if_block_23(ctx);
-	let if_block1 = /*tab*/ ctx[0] === 'graph' && /*chart*/ ctx[12] && create_if_block_22(ctx);
+	let if_block0 = /*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[15] && create_if_block_24(ctx);
+	let if_block1 = /*tab*/ ctx[0] === 'graph' && /*chart*/ ctx[12] && create_if_block_23(ctx);
 	const if_block_creators = [create_if_block$1, create_else_block_5];
 	const if_blocks = [];
 
@@ -7801,15 +7888,15 @@ function create_fragment$2(ctx) {
 			append(button3, t13);
 			append(div4, t14);
 			if_blocks[current_block_type_index].m(div4, null);
-			/*div4_binding*/ ctx[29](div4);
+			/*div4_binding*/ ctx[31](div4);
 			current = true;
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "pointerdown", /*startDrag*/ ctx[16]),
-					listen(button1, "click", /*click_handler*/ ctx[23]),
-					listen(button2, "click", /*click_handler_1*/ ctx[24]),
-					listen(button3, "click", /*click_handler_2*/ ctx[25])
+					listen(button0, "pointerdown", /*startDrag*/ ctx[17]),
+					listen(button1, "click", /*click_handler*/ ctx[25]),
+					listen(button2, "click", /*click_handler_1*/ ctx[26]),
+					listen(button3, "click", /*click_handler_2*/ ctx[27])
 				];
 
 				mounted = true;
@@ -7819,11 +7906,11 @@ function create_fragment$2(ctx) {
 			if ((!current || dirty[0] & /*placeName*/ 8) && t2_value !== (t2_value = (/*placeName*/ ctx[3] || 'Selected point') + "")) set_data(t2, t2_value);
 			if ((!current || dirty[0] & /*chart*/ 4096) && t4_value !== (t4_value = (/*chart*/ ctx[12]?.validLabel ?? 'ECMWF profile · Windy terrain') + "")) set_data(t4, t4_value);
 
-			if (/*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[14]) {
+			if (/*tab*/ ctx[0] === 'graph' && /*showNow*/ ctx[15]) {
 				if (if_block0) {
 					if_block0.p(ctx, dirty);
 				} else {
-					if_block0 = create_if_block_23(ctx);
+					if_block0 = create_if_block_24(ctx);
 					if_block0.c();
 					if_block0.m(div1, t6);
 				}
@@ -7836,7 +7923,7 @@ function create_fragment$2(ctx) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
-					if_block1 = create_if_block_22(ctx);
+					if_block1 = create_if_block_23(ctx);
 					if_block1.c();
 					if_block1.m(div1, t7);
 				}
@@ -7908,7 +7995,7 @@ function create_fragment$2(ctx) {
 			if (if_block0) if_block0.d();
 			if (if_block1) if_block1.d();
 			if_blocks[current_block_type_index].d();
-			/*div4_binding*/ ctx[29](null);
+			/*div4_binding*/ ctx[31](null);
 			mounted = false;
 			run_all(dispose);
 		}
@@ -7966,8 +8053,10 @@ function instance$2($$self, $$props, $$invalidate) {
 	let event;
 	let chart;
 	let showNow;
+	let flow;
 	let { point } = $$props;
 	let { terrainM = null } = $$props;
+	let { terrainSlopes = null } = $$props;
 	let { placeName = '' } = $$props;
 	let { tab = 'graph' } = $$props;
 	let { units = 'metric' } = $$props;
@@ -7986,7 +8075,8 @@ function instance$2($$self, $$props, $$invalidate) {
 
 	function snowlineAt(p, index) {
 		try {
-			return resolvedSnowlineM(buildProfile(p.forecast, index));
+			const v = wetBulbZeroHeight(buildProfile(p.forecast, index)).snowLevelM;
+			return v !== null && Number.isFinite(v) ? v : null;
 		} catch {
 			return null;
 		}
@@ -8000,7 +8090,7 @@ function instance$2($$self, $$props, $$invalidate) {
 
 	function terrainPosition(difference) {
 		if (difference === null) return '';
-		const value = formatSnowline(Math.abs(difference), units);
+		const value = formatElevation(Math.abs(difference), units);
 		if (difference > 100) return `${value} above snowline`;
 		if (difference < -100) return `${value} below snowline`;
 		return 'Terrain near snowline';
@@ -8066,7 +8156,7 @@ function instance$2($$self, $$props, $$invalidate) {
 
 	function resetToNow() {
 		if (!point?.times?.length) return;
-		$$invalidate(22, realNow = Date.now());
+		$$invalidate(24, realNow = Date.now());
 		setTimeline(realNow);
 	}
 
@@ -8261,7 +8351,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			precipCount: coverage.precipCount,
 			snowPrefix,
 			coverageNote: coverage.note || (snowPrefix < p.times.filter(t => t < t1).length
-			? 'Snowfall estimate stops at missing data or limited atmospheric detail'
+			? 'Snowfall estimate stops at missing data'
 			: ''),
 			midTimeLabel: '+' + Math.round((t1 - t0) / 7200000) + ' h',
 			endTimeLabel: '+' + Math.round((t1 - t0) / 3600000) + ' h',
@@ -8282,6 +8372,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			min24Snowline,
 			window24Complete: snow24.complete,
 			newSnow24h: snow24.snowfallCm,
+			remainingSnow24h: snow24.remainingLayerCm,
 			nextChangeLabel,
 			nextChangeTime
 		};
@@ -8383,7 +8474,15 @@ function instance$2($$self, $$props, $$invalidate) {
 			y += 34;
 			ctx.fillStyle = '#b8c8d1';
 			ctx.font = '22px Arial';
-			ctx.fillText(`Est. thermal snowline ${formatSnowline(chart.currentSnowline, units)}   ·   Avg precip ${formatPrecip(chart.currentPrecip, units)}`, 52, y);
+
+			ctx.fillText(
+				`Snowline ${chart.currentSnowline === null
+				? 'WBZ unresolved'
+				: formatElevation(chart.currentSnowline, units)}   ·   Avg precip ${formatPrecip(chart.currentPrecip, units)}`,
+				52,
+				y
+			);
+
 			y += 30;
 			ctx.fillStyle = '#b8c8d1';
 			ctx.font = '22px Arial';
@@ -8393,7 +8492,7 @@ function instance$2($$self, $$props, $$invalidate) {
 			ctx.font = '700 21px Arial';
 
 			ctx.fillText(
-				`Next 24 h · min estimated snowline ${formatSnowline(chart.min24Snowline, units)} · snowfall ${chart.window24Complete
+				`Next 24 h · min estimated snowline ${formatElevation(chart.min24Snowline, units)} · snowfall ${chart.window24Complete
 				? formatSnow(chart.newSnow24h, units)
 				: 'unavailable'}`,
 				52,
@@ -8434,8 +8533,8 @@ function instance$2($$self, $$props, $$invalidate) {
 			y: window.innerWidth <= 520 ? 34 : 54
 		});
 
-		$$invalidate(22, realNow = Date.now());
-		realNowTimer = setInterval(() => $$invalidate(22, realNow = Date.now()), 30000);
+		$$invalidate(24, realNow = Date.now());
+		realNowTimer = setInterval(() => $$invalidate(24, realNow = Date.now()), 30000);
 		window.addEventListener('resize', keepChartVisible);
 
 		try {
@@ -8488,6 +8587,7 @@ function instance$2($$self, $$props, $$invalidate) {
 	$$self.$$set = $$props => {
 		if ('point' in $$props) $$invalidate(1, point = $$props.point);
 		if ('terrainM' in $$props) $$invalidate(2, terrainM = $$props.terrainM);
+		if ('terrainSlopes' in $$props) $$invalidate(23, terrainSlopes = $$props.terrainSlopes);
 		if ('placeName' in $$props) $$invalidate(3, placeName = $$props.placeName);
 		if ('tab' in $$props) $$invalidate(0, tab = $$props.tab);
 		if ('units' in $$props) $$invalidate(4, units = $$props.units);
@@ -8502,12 +8602,18 @@ function instance$2($$self, $$props, $$invalidate) {
 			$$invalidate(13, event = nextWintryEvent(point, terrainM, timestamp));
 		}
 
-		if ($$self.$$.dirty[0] & /*point, terrainM, timestamp, crossing, realNow, units*/ 4194422) {
+		if ($$self.$$.dirty[0] & /*point, terrainM, timestamp, crossing, realNow, units*/ 16777334) {
 			$$invalidate(12, chart = buildChart(point, terrainM, timestamp, crossing?.crossingTime ?? null, realNow, units));
 		}
 
-		if ($$self.$$.dirty[0] & /*timestamp, realNow*/ 4194336) {
-			$$invalidate(14, showNow = Math.abs(timestamp - realNow) > 90 * 60_000);
+		if ($$self.$$.dirty[0] & /*timestamp, realNow*/ 16777248) {
+			$$invalidate(15, showNow = Math.abs(timestamp - realNow) > 90 * 60_000);
+		}
+
+		if ($$self.$$.dirty[0] & /*point, timestamp, terrainM, terrainSlopes*/ 8388646) {
+			$$invalidate(14, flow = point
+			? terrainFlow(point.forecast, forecastIntervalIndex(point.times, timestamp), terrainM, terrainSlopes)
+			: null);
 		}
 	};
 
@@ -8526,6 +8632,7 @@ function instance$2($$self, $$props, $$invalidate) {
 		tooltip,
 		chart,
 		event,
+		flow,
 		showNow,
 		dispatch,
 		startDrag,
@@ -8534,6 +8641,7 @@ function instance$2($$self, $$props, $$invalidate) {
 		resetToNow,
 		handlePointer,
 		downloadPng,
+		terrainSlopes,
 		realNow,
 		click_handler,
 		click_handler_1,
@@ -8558,6 +8666,7 @@ class SnowlineChart extends SvelteComponent {
 			{
 				point: 1,
 				terrainM: 2,
+				terrainSlopes: 23,
 				placeName: 3,
 				tab: 0,
 				units: 4
@@ -8825,61 +8934,27 @@ function weightedScalar(values, read) {
         return n === null || !Number.isFinite(n) ? null : n > 0 ? 1 : 0;
     });
 }
-// Each source profile is reused by thousands of raster pixels. Index its levels
-// once, without retaining old forecasts after their profile arrays are released.
-const profileLevels = new WeakMap();
-function indexedProfile(profile) {
-    let index = profileLevels.get(profile);
-    if (!index) {
-        index = new Map(profile.map((p)=>[
-                p.level,
-                p
-            ]));
-        profileLevels.set(profile, index);
-    }
-    return index;
-}
-/** Interpolate available above-model-ground samples at each pressure, then solve Tw.
- * A high-terrain corner must not discard the valid lower-air levels from every
- * valley corner. Partial support is tracked for conservative detail flags. Entire
- * missing columns are not bridged; no below-ground field is reconstructed.
- */ function blendedProfile(values, wetBulb) {
-    if (!values.length || values.some((v)=>!v.value.length)) return [];
+/** Interpolate continuous T/Td/height by pressure, then calculate Tw; never mix categorical colours. */ function blendedProfile(values, wetBulb) {
     if (values.length === 1) return values[0].value;
     const result = [];
-    const columns = values.map((v)=>({
-            weight: v.weight,
-            levels: indexedProfile(v.value)
-        }));
-    const levels = new Map();
-    for (const column of columns)for (const [level, p] of column.levels)levels.set(level, p);
-    const total = values.reduce((sum, v)=>sum + v.weight, 0);
-    for (const first of levels.values()){
-        let temp = 0, dew = 0, height = 0, support = 0;
-        for (const v of columns){
-            const p = v.levels.get(first.level);
-            if (!p || ![
-                p.tempC,
-                p.dewpointC,
-                p.heightM
-            ].every(Number.isFinite)) continue;
-            support += v.weight;
+    for (const first of values[0].value){
+        let temp = 0, dew = 0, height = 0, complete = true;
+        for (const v of values){
+            const p = v.value.find((p)=>p.level === first.level);
+            if (!p) {
+                complete = false;
+                break;
+            }
             temp += v.weight * p.tempC;
             dew += v.weight * p.dewpointC;
             height += v.weight * p.heightM;
         }
-        if (support <= 1e-10 || total <= 0) continue;
-        temp /= support;
-        dew = Math.min(temp, dew / support);
-        height /= support;
-        const tw = wetBulb(temp, dew, first.pressureHpa);
-        if (Number.isFinite(tw)) result.push({
+        if (complete) result.push({
             ...first,
             tempC: temp,
-            dewpointC: dew,
+            dewpointC: Math.min(temp, dew),
             heightM: height,
-            wetBulbC: tw,
-            spatialSupport: support / total
+            wetBulbC: wetBulb(temp, Math.min(temp, dew), first.pressureHpa)
         });
     }
     return result.sort((a, b)=>a.heightM - b.heightM);
@@ -9348,16 +9423,93 @@ const MIN_SNOWLINE_CONTOUR_M = -500;
     };
 }
 
-/** Missing or invalid samples remain gaps; contours never invent support there. */ function continuousContourGrid(grid) {
-    return grid.map((row)=>row.map((p)=>({
-                lat: p?.lat ?? NaN,
-                lon: p?.lon ?? NaN,
-                value: p && p.value !== null && [
-                    p.value,
-                    p.lat,
-                    p.lon
-                ].every(Number.isFinite) ? p.value : null
-            })));
+function median(values) {
+    if (!values.length) return 0;
+    const sorted = [
+        ...values
+    ].sort((a, b)=>a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : 0.5 * (sorted[mid - 1] + sorted[mid]);
+}
+function reconstructAxis(known, length) {
+    if (!known.length) return Array.from({
+        length
+    }, (_, i)=>i);
+    if (known.length === 1) return Array.from({
+        length
+    }, ()=>known[0].value);
+    const ordered = [
+        ...known
+    ].sort((a, b)=>a.index - b.index);
+    const slopes = [];
+    for(let i = 1; i < ordered.length; i++){
+        const di = ordered[i].index - ordered[i - 1].index;
+        if (di > 0) slopes.push((ordered[i].value - ordered[i - 1].value) / di);
+    }
+    const step = median(slopes);
+    const anchor = ordered[Math.floor(ordered.length / 2)];
+    return Array.from({
+        length
+    }, (_, i)=>anchor.value + (i - anchor.index) * step);
+}
+/**
+ * Contours are a visual interpolation of a regularly sampled viewport field.
+ * A single failed profile request must not punch a four-cell hole in marching
+ * squares. Reconstruct missing grid geometry and fill missing values from the
+ * nearest available samples in grid space. The raw point data remain untouched.
+ */ function continuousContourGrid(grid) {
+    const rows = grid.length;
+    const cols = grid[0]?.length ?? 0;
+    if (!rows || !cols) return grid;
+    const valid = [];
+    for(let r = 0; r < rows; r++){
+        for(let c = 0; c < cols; c++){
+            const p = grid[r][c];
+            if (p && p.value !== null && Number.isFinite(p.value)) valid.push({
+                ...p,
+                r,
+                c
+            });
+        }
+    }
+    if (!valid.length) return grid;
+    const rowLatKnown = [];
+    for(let r = 0; r < rows; r++){
+        const latitudes = valid.filter((p)=>p.r === r).map((p)=>p.lat).filter(Number.isFinite);
+        if (latitudes.length) rowLatKnown.push({
+            index: r,
+            value: latitudes.reduce((a, b)=>a + b, 0) / latitudes.length
+        });
+    }
+    const colLonKnown = [];
+    for(let c = 0; c < cols; c++){
+        const longitudes = valid.filter((p)=>p.c === c).map((p)=>p.lon).filter(Number.isFinite);
+        if (longitudes.length) colLonKnown.push({
+            index: c,
+            value: longitudes.reduce((a, b)=>a + b, 0) / longitudes.length
+        });
+    }
+    const rowLat = reconstructAxis(rowLatKnown, rows);
+    const colLon = reconstructAxis(colLonKnown, cols);
+    return grid.map((row, r)=>row.map((p, c)=>{
+            if (p.value !== null && Number.isFinite(p.value)) return p;
+            const neighbours = valid.map((v)=>({
+                    v,
+                    d2: (v.r - r) ** 2 + (v.c - c) ** 2
+                })).sort((a, b)=>a.d2 - b.d2).slice(0, 8);
+            let weighted = 0;
+            let weights = 0;
+            for (const item of neighbours){
+                const weight = 1 / Math.max(0.25, item.d2);
+                weighted += item.v.value * weight;
+                weights += weight;
+            }
+            return {
+                lat: Number.isFinite(p.lat) && (p.lat !== 0 || rowLat[r] === 0) ? p.lat : rowLat[r],
+                lon: Number.isFinite(p.lon) && (p.lon !== 0 || colLon[c] === 0) ? p.lon : colLon[c],
+                value: weights > 0 ? weighted / weights : null
+            };
+        }));
 }
 function interp(p1, p2, v1, v2, level) {
     if (Math.abs(v2 - v1) < 1e-9) {
@@ -21738,7 +21890,7 @@ function create_else_block(ctx) {
 	let div5;
 	let t24;
 	let small;
-	let t25_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "";
+	let t25_value = (/*prepareMessage*/ ctx[17] || 'Current area · up to 144 h') + "";
 	let t25;
 	let t26;
 	let t27;
@@ -21752,37 +21904,37 @@ function create_else_block(ctx) {
 	let dispose;
 	let if_block0 = !/*precipDetailAvailable*/ ctx[3] && create_if_block_15();
 	placesearch = new PlaceSearch({});
-	placesearch.$on("select", /*handlePlaceSelect*/ ctx[33]);
-	placesearch.$on("clear", /*handleSearchClear*/ ctx[34]);
-	let if_block1 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[19] && create_if_block_14(ctx);
-	let if_block2 = (/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[13] && create_if_block_13(ctx);
+	placesearch.$on("select", /*handlePlaceSelect*/ ctx[34]);
+	placesearch.$on("clear", /*handleSearchClear*/ ctx[35]);
+	let if_block1 = /*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[21] && create_if_block_14(ctx);
+	let if_block2 = (/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[15] && create_if_block_13(ctx);
 	let if_block3 = /*showIcons*/ ctx[2] && /*precipDetailAvailable*/ ctx[3] && create_if_block_12(ctx);
-	let if_block4 = /*clickedPoint*/ ctx[24] && create_if_block_11(ctx);
+	let if_block4 = /*clickedPoint*/ ctx[13] && create_if_block_11(ctx);
 
 	function v21panel_unitSystem_binding(value) {
-		/*v21panel_unitSystem_binding*/ ctx[56](value);
+		/*v21panel_unitSystem_binding*/ ctx[59](value);
 	}
 
-	let v21panel_props = { activeRunTime: /*activeRunTime*/ ctx[27] };
+	let v21panel_props = { activeRunTime: /*activeRunTime*/ ctx[28] };
 
-	if (/*unitSystem*/ ctx[11] !== void 0) {
-		v21panel_props.unitSystem = /*unitSystem*/ ctx[11];
+	if (/*unitSystem*/ ctx[12] !== void 0) {
+		v21panel_props.unitSystem = /*unitSystem*/ ctx[12];
 	}
 
 	v21panel = new V21Panel({ props: v21panel_props });
 	binding_callbacks.push(() => bind(v21panel, 'unitSystem', v21panel_unitSystem_binding));
-	let if_block5 = /*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[30] && create_if_block_10();
-	let if_block6 = /*refreshError*/ ctx[28] && create_if_block_9(ctx);
-	let if_block7 = /*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) && create_if_block_7(ctx);
+	let if_block5 = /*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[11] && /*mapDataMissing*/ ctx[31] && create_if_block_10();
+	let if_block6 = /*refreshError*/ ctx[29] && create_if_block_9(ctx);
+	let if_block7 = /*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) && create_if_block_7(ctx);
 
 	function select_block_type_2(ctx, dirty) {
-		if (/*preparingMap*/ ctx[14]) return create_if_block_6;
+		if (/*preparingMap*/ ctx[16]) return create_if_block_6;
 		return create_else_block_1;
 	}
 
 	let current_block_type = select_block_type_2(ctx);
 	let if_block8 = current_block_type(ctx);
-	let if_block9 = /*videoDownloadUrl*/ ctx[17] && create_if_block_5(ctx);
+	let if_block9 = /*videoDownloadUrl*/ ctx[19] && create_if_block_5(ctx);
 
 	return {
 		c() {
@@ -21893,7 +22045,7 @@ function create_else_block(ctx) {
 			attr(div5, "class", "prepare-map-controls svelte-1gu5mnn");
 			attr(button2, "class", "refresh-button svelte-1gu5mnn");
 			attr(button2, "type", "button");
-			button2.disabled = button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6];
+			button2.disabled = button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6];
 			attr(button3, "class", "help-link svelte-1gu5mnn");
 			attr(button3, "type", "button");
 			attr(div6, "class", "panel-footer svelte-1gu5mnn");
@@ -21970,18 +22122,18 @@ function create_else_block(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "click", /*click_handler_1*/ ctx[48]),
-					listen(button1, "click", /*click_handler_2*/ ctx[49]),
-					listen(input0, "change", /*input0_change_handler*/ ctx[50]),
-					listen(input0, "change", /*toggleEnabled*/ ctx[38]),
-					listen(input1, "change", /*input1_change_handler*/ ctx[51]),
-					listen(input1, "change", /*toggleMapLayers*/ ctx[37]),
-					listen(input2, "change", /*input2_change_handler*/ ctx[52]),
-					listen(input2, "change", /*toggleMapLayers*/ ctx[37]),
-					listen(input3, "change", /*input3_change_handler*/ ctx[53]),
-					listen(input3, "change", /*toggleMapLayers*/ ctx[37]),
-					listen(button2, "click", /*refreshForecast*/ ctx[32]),
-					listen(button3, "click", /*click_handler_5*/ ctx[57])
+					listen(button0, "click", /*click_handler_1*/ ctx[51]),
+					listen(button1, "click", /*click_handler_2*/ ctx[52]),
+					listen(input0, "change", /*input0_change_handler*/ ctx[53]),
+					listen(input0, "change", /*toggleEnabled*/ ctx[39]),
+					listen(input1, "change", /*input1_change_handler*/ ctx[54]),
+					listen(input1, "change", /*toggleMapLayers*/ ctx[38]),
+					listen(input2, "change", /*input2_change_handler*/ ctx[55]),
+					listen(input2, "change", /*toggleMapLayers*/ ctx[38]),
+					listen(input3, "change", /*input3_change_handler*/ ctx[56]),
+					listen(input3, "change", /*toggleMapLayers*/ ctx[38]),
+					listen(button2, "click", /*refreshForecast*/ ctx[33]),
+					listen(button3, "click", /*click_handler_5*/ ctx[60])
 				];
 
 				mounted = true;
@@ -22045,7 +22197,7 @@ function create_else_block(ctx) {
 				if_block0 = null;
 			}
 
-			if (/*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[19]) {
+			if (/*showShading*/ ctx[1] && /*precipDetailAvailable*/ ctx[3] && /*geographyError*/ ctx[21]) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 				} else {
@@ -22058,7 +22210,7 @@ function create_else_block(ctx) {
 				if_block1 = null;
 			}
 
-			if ((/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[13]) {
+			if ((/*showShading*/ ctx[1] || /*showIcons*/ ctx[2]) && /*terrainDetailStatus*/ ctx[15]) {
 				if (if_block2) {
 					if_block2.p(ctx, dirty);
 				} else {
@@ -22084,7 +22236,7 @@ function create_else_block(ctx) {
 				if_block3 = null;
 			}
 
-			if (/*clickedPoint*/ ctx[24]) {
+			if (/*clickedPoint*/ ctx[13]) {
 				if (if_block4) {
 					if_block4.p(ctx, dirty);
 				} else {
@@ -22098,17 +22250,17 @@ function create_else_block(ctx) {
 			}
 
 			const v21panel_changes = {};
-			if (dirty[0] & /*activeRunTime*/ 134217728) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[27];
+			if (dirty[0] & /*activeRunTime*/ 268435456) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[28];
 
-			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 2048) {
+			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 4096) {
 				updating_unitSystem = true;
-				v21panel_changes.unitSystem = /*unitSystem*/ ctx[11];
+				v21panel_changes.unitSystem = /*unitSystem*/ ctx[12];
 				add_flush_callback(() => updating_unitSystem = false);
 			}
 
 			v21panel.$set(v21panel_changes);
 
-			if (/*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[10] && /*mapDataMissing*/ ctx[30]) {
+			if (/*enabled*/ ctx[7] && !/*viewportLoading*/ ctx[11] && /*mapDataMissing*/ ctx[31]) {
 				if (if_block5) ; else {
 					if_block5 = create_if_block_10();
 					if_block5.c();
@@ -22119,7 +22271,7 @@ function create_else_block(ctx) {
 				if_block5 = null;
 			}
 
-			if (/*refreshError*/ ctx[28]) {
+			if (/*refreshError*/ ctx[29]) {
 				if (if_block6) {
 					if_block6.p(ctx, dirty);
 				} else {
@@ -22132,7 +22284,7 @@ function create_else_block(ctx) {
 				if_block6 = null;
 			}
 
-			if (/*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
+			if (/*enabled*/ ctx[7] && (/*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
 				if (if_block7) {
 					if_block7.p(ctx, dirty);
 				} else {
@@ -22157,9 +22309,9 @@ function create_else_block(ctx) {
 				}
 			}
 
-			if ((!current || dirty[0] & /*prepareMessage*/ 32768) && t25_value !== (t25_value = (/*prepareMessage*/ ctx[15] || 'Current area · up to 144 h') + "")) set_data(t25, t25_value);
+			if ((!current || dirty[0] & /*prepareMessage*/ 131072) && t25_value !== (t25_value = (/*prepareMessage*/ ctx[17] || 'Current area · up to 144 h') + "")) set_data(t25, t25_value);
 
-			if (/*videoDownloadUrl*/ ctx[17]) {
+			if (/*videoDownloadUrl*/ ctx[19]) {
 				if (if_block9) {
 					if_block9.p(ctx, dirty);
 				} else {
@@ -22172,7 +22324,7 @@ function create_else_block(ctx) {
 				if_block9 = null;
 			}
 
-			if (!current || dirty[0] & /*enabled, viewportLoading, probeLoading, terrainLoading, stormLoading, rasterLoading*/ 8389872 && button2_disabled_value !== (button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[10] || /*probeLoading*/ ctx[23] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
+			if (!current || dirty[0] & /*enabled, viewportLoading, probeLoading, terrainLoading, stormLoading, rasterLoading*/ 16779504 && button2_disabled_value !== (button2_disabled_value = !/*enabled*/ ctx[7] || /*viewportLoading*/ ctx[11] || /*probeLoading*/ ctx[24] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6])) {
 				button2.disabled = button2_disabled_value;
 			}
 		},
@@ -22228,7 +22380,7 @@ function create_if_block_4(ctx) {
 			insert(target, button, anchor);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*click_handler*/ ctx[47]);
+				dispose = listen(button, "click", /*click_handler*/ ctx[50]);
 				mounted = true;
 			}
 		},
@@ -22275,7 +22427,7 @@ function create_if_block_14(ctx) {
 	return {
 		c() {
 			div = element("div");
-			t = text(/*geographyError*/ ctx[19]);
+			t = text(/*geographyError*/ ctx[21]);
 			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
@@ -22284,7 +22436,7 @@ function create_if_block_14(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*geographyError*/ 524288) set_data(t, /*geographyError*/ ctx[19]);
+			if (dirty[0] & /*geographyError*/ 2097152) set_data(t, /*geographyError*/ ctx[21]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -22302,7 +22454,7 @@ function create_if_block_13(ctx) {
 	return {
 		c() {
 			div = element("div");
-			t = text(/*terrainDetailStatus*/ ctx[13]);
+			t = text(/*terrainDetailStatus*/ ctx[15]);
 			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
@@ -22311,7 +22463,7 @@ function create_if_block_13(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*terrainDetailStatus*/ 8192) set_data(t, /*terrainDetailStatus*/ ctx[13]);
+			if (dirty[0] & /*terrainDetailStatus*/ 32768) set_data(t, /*terrainDetailStatus*/ ctx[15]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -22329,7 +22481,7 @@ function create_if_block_12(ctx) {
 	return {
 		c() {
 			div = element("div");
-			t = text(/*stormStatus*/ ctx[12]);
+			t = text(/*stormStatus*/ ctx[14]);
 			attr(div, "class", "storm-legend svelte-1gu5mnn");
 			attr(div, "role", "status");
 		},
@@ -22338,7 +22490,7 @@ function create_if_block_12(ctx) {
 			append(div, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*stormStatus*/ 4096) set_data(t, /*stormStatus*/ ctx[12]);
+			if (dirty[0] & /*stormStatus*/ 16384) set_data(t, /*stormStatus*/ ctx[14]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -22388,8 +22540,8 @@ function create_if_block_11(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button0, "click", /*click_handler_3*/ ctx[54]),
-					listen(button1, "click", /*click_handler_4*/ ctx[55])
+					listen(button0, "click", /*click_handler_3*/ ctx[57]),
+					listen(button1, "click", /*click_handler_4*/ ctx[58])
 				];
 
 				mounted = true;
@@ -22443,7 +22595,7 @@ function create_if_block_9(ctx) {
 	return {
 		c() {
 			div = element("div");
-			t0 = text(/*refreshError*/ ctx[28]);
+			t0 = text(/*refreshError*/ ctx[29]);
 			t1 = space();
 			button = element("button");
 			button.textContent = "Retry";
@@ -22459,12 +22611,12 @@ function create_if_block_9(ctx) {
 			append(div, button);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*refreshForecast*/ ctx[32]);
+				dispose = listen(button, "click", /*refreshForecast*/ ctx[33]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*refreshError*/ 268435456) set_data(t0, /*refreshError*/ ctx[28]);
+			if (dirty[0] & /*refreshError*/ 536870912) set_data(t0, /*refreshError*/ ctx[29]);
 		},
 		d(detaching) {
 			if (detaching) {
@@ -22482,7 +22634,7 @@ function create_if_block_7(ctx) {
 	let div;
 
 	function select_block_type_1(ctx, dirty) {
-		if (/*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) return create_if_block_8;
+		if (/*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*stormLoading*/ ctx[5] || /*rasterLoading*/ ctx[6]) return create_if_block_8;
 		return create_else_block_2;
 	}
 
@@ -22561,7 +22713,7 @@ function create_if_block_8(ctx) {
 	let t3;
 	let small;
 
-	let t4_value = (/*viewportLoading*/ ctx[10]
+	let t4_value = (/*viewportLoading*/ ctx[11]
 	? 'Forecast data'
 	: /*terrainLoading*/ ctx[4]
 		? 'Terrain detail'
@@ -22575,7 +22727,7 @@ function create_if_block_8(ctx) {
 		c() {
 			div = element("div");
 			span0 = element("span");
-			t0 = text(/*layerLoadPercent*/ ctx[31]);
+			t0 = text(/*layerLoadPercent*/ ctx[32]);
 			t1 = text("%");
 			t2 = space();
 			span1 = element("span");
@@ -22588,9 +22740,9 @@ function create_if_block_8(ctx) {
 			attr(div, "aria-label", "Map layer loading progress");
 			attr(div, "aria-valuemin", "0");
 			attr(div, "aria-valuemax", "100");
-			attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[31]);
-			attr(div, "aria-valuetext", div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[31]}% of layer loading stages processed`);
-			attr(div, "style", div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[31]}%`);
+			attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[32]);
+			attr(div, "aria-valuetext", div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[32]}% of layer loading stages processed`);
+			attr(div, "style", div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[32]}%`);
 			attr(small, "class", "loading-stage svelte-1gu5mnn");
 		},
 		m(target, anchor) {
@@ -22605,21 +22757,21 @@ function create_if_block_8(ctx) {
 			append(small, t4);
 		},
 		p(ctx, dirty) {
-			if (dirty[1] & /*layerLoadPercent*/ 1) set_data(t0, /*layerLoadPercent*/ ctx[31]);
+			if (dirty[1] & /*layerLoadPercent*/ 2) set_data(t0, /*layerLoadPercent*/ ctx[32]);
 
-			if (dirty[1] & /*layerLoadPercent*/ 1) {
-				attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[31]);
+			if (dirty[1] & /*layerLoadPercent*/ 2) {
+				attr(div, "aria-valuenow", /*layerLoadPercent*/ ctx[32]);
 			}
 
-			if (dirty[1] & /*layerLoadPercent*/ 1 && div_aria_valuetext_value !== (div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[31]}% of layer loading stages processed`)) {
+			if (dirty[1] & /*layerLoadPercent*/ 2 && div_aria_valuetext_value !== (div_aria_valuetext_value = `${/*layerLoadPercent*/ ctx[32]}% of layer loading stages processed`)) {
 				attr(div, "aria-valuetext", div_aria_valuetext_value);
 			}
 
-			if (dirty[1] & /*layerLoadPercent*/ 1 && div_style_value !== (div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[31]}%`)) {
+			if (dirty[1] & /*layerLoadPercent*/ 2 && div_style_value !== (div_style_value = `--progress: ${/*layerLoadPercent*/ ctx[32]}%`)) {
 				attr(div, "style", div_style_value);
 			}
 
-			if (dirty[0] & /*viewportLoading, terrainLoading, rasterLoading*/ 1104 && t4_value !== (t4_value = (/*viewportLoading*/ ctx[10]
+			if (dirty[0] & /*viewportLoading, terrainLoading, rasterLoading*/ 2128 && t4_value !== (t4_value = (/*viewportLoading*/ ctx[11]
 			? 'Forecast data'
 			: /*terrainLoading*/ ctx[4]
 				? 'Terrain detail'
@@ -22651,19 +22803,19 @@ function create_else_block_1(ctx) {
 			t = text("Prepare & download MP4");
 			attr(button, "class", "refresh-button svelte-1gu5mnn");
 			attr(button, "type", "button");
-			button.disabled = button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6];
+			button.disabled = button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6];
 		},
 		m(target, anchor) {
 			insert(target, button, anchor);
 			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*prepareMapForecast*/ ctx[36]);
+				dispose = listen(button, "click", /*prepareMapForecast*/ ctx[37]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*enabled, showShading, precipDetailAvailable, viewportLoading, terrainLoading, rasterLoading*/ 1242 && button_disabled_value !== (button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[10] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6])) {
+			if (dirty[0] & /*enabled, showShading, precipDetailAvailable, viewportLoading, terrainLoading, rasterLoading*/ 2266 && button_disabled_value !== (button_disabled_value = !/*enabled*/ ctx[7] || !/*showShading*/ ctx[1] || !/*precipDetailAvailable*/ ctx[3] || /*viewportLoading*/ ctx[11] || /*terrainLoading*/ ctx[4] || /*rasterLoading*/ ctx[6])) {
 				button.disabled = button_disabled_value;
 			}
 		},
@@ -22682,7 +22834,7 @@ function create_else_block_1(ctx) {
 function create_if_block_6(ctx) {
 	let button;
 
-	let t_value = (/*exportingMap*/ ctx[16]
+	let t_value = (/*exportingMap*/ ctx[18]
 	? 'Cancel MP4 export'
 	: 'Cancel preparation') + "";
 
@@ -22702,12 +22854,12 @@ function create_if_block_6(ctx) {
 			append(button, t);
 
 			if (!mounted) {
-				dispose = listen(button, "click", /*cancelMapPreparation*/ ctx[35]);
+				dispose = listen(button, "click", /*cancelMapPreparation*/ ctx[36]);
 				mounted = true;
 			}
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*exportingMap*/ 65536 && t_value !== (t_value = (/*exportingMap*/ ctx[16]
+			if (dirty[0] & /*exportingMap*/ 262144 && t_value !== (t_value = (/*exportingMap*/ ctx[18]
 			? 'Cancel MP4 export'
 			: 'Cancel preparation') + "")) set_data(t, t_value);
 		},
@@ -22731,20 +22883,20 @@ function create_if_block_5(ctx) {
 		c() {
 			a = element("a");
 			t = text("Download MP4 again");
-			attr(a, "href", /*videoDownloadUrl*/ ctx[17]);
-			attr(a, "download", /*videoDownloadName*/ ctx[18]);
+			attr(a, "href", /*videoDownloadUrl*/ ctx[19]);
+			attr(a, "download", /*videoDownloadName*/ ctx[20]);
 		},
 		m(target, anchor) {
 			insert(target, a, anchor);
 			append(a, t);
 		},
 		p(ctx, dirty) {
-			if (dirty[0] & /*videoDownloadUrl*/ 131072) {
-				attr(a, "href", /*videoDownloadUrl*/ ctx[17]);
+			if (dirty[0] & /*videoDownloadUrl*/ 524288) {
+				attr(a, "href", /*videoDownloadUrl*/ ctx[19]);
 			}
 
-			if (dirty[0] & /*videoDownloadName*/ 262144) {
-				attr(a, "download", /*videoDownloadName*/ ctx[18]);
+			if (dirty[0] & /*videoDownloadName*/ 1048576) {
+				attr(a, "download", /*videoDownloadName*/ ctx[20]);
 			}
 		},
 		d(detaching) {
@@ -22775,7 +22927,7 @@ function create_if_block_2(ctx) {
 	let t6;
 	let t7;
 	let div3;
-	let t8_value = (/*mapDataStatus*/ ctx[29] || 'Forecast data not loaded') + "";
+	let t8_value = (/*mapDataStatus*/ ctx[30] || 'Forecast data not loaded') + "";
 	let t8;
 	let current;
 	let mounted;
@@ -22783,16 +22935,16 @@ function create_if_block_2(ctx) {
 	precipitationlegend = new PrecipitationLegend({});
 
 	function v21panel_unitSystem_binding_1(value) {
-		/*v21panel_unitSystem_binding_1*/ ctx[59](value);
+		/*v21panel_unitSystem_binding_1*/ ctx[62](value);
 	}
 
 	let v21panel_props = {
-		activeRunTime: /*activeRunTime*/ ctx[27],
+		activeRunTime: /*activeRunTime*/ ctx[28],
 		settingsOnly: true
 	};
 
-	if (/*unitSystem*/ ctx[11] !== void 0) {
-		v21panel_props.unitSystem = /*unitSystem*/ ctx[11];
+	if (/*unitSystem*/ ctx[12] !== void 0) {
+		v21panel_props.unitSystem = /*unitSystem*/ ctx[12];
 	}
 
 	v21panel = new V21Panel({ props: v21panel_props });
@@ -22864,8 +23016,8 @@ function create_if_block_2(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button, "click", /*click_handler_6*/ ctx[58]),
-					listen(div6, "click", self$1(/*click_handler_7*/ ctx[60]))
+					listen(button, "click", /*click_handler_6*/ ctx[61]),
+					listen(div6, "click", self$1(/*click_handler_7*/ ctx[63]))
 				];
 
 				mounted = true;
@@ -22873,11 +23025,11 @@ function create_if_block_2(ctx) {
 		},
 		p(ctx, dirty) {
 			const v21panel_changes = {};
-			if (dirty[0] & /*activeRunTime*/ 134217728) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[27];
+			if (dirty[0] & /*activeRunTime*/ 268435456) v21panel_changes.activeRunTime = /*activeRunTime*/ ctx[28];
 
-			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 2048) {
+			if (!updating_unitSystem && dirty[0] & /*unitSystem*/ 4096) {
 				updating_unitSystem = true;
-				v21panel_changes.unitSystem = /*unitSystem*/ ctx[11];
+				v21panel_changes.unitSystem = /*unitSystem*/ ctx[12];
 				add_flush_callback(() => updating_unitSystem = false);
 			}
 
@@ -22894,7 +23046,7 @@ function create_if_block_2(ctx) {
 				if_block = null;
 			}
 
-			if ((!current || dirty[0] & /*mapDataStatus*/ 536870912) && t8_value !== (t8_value = (/*mapDataStatus*/ ctx[29] || 'Forecast data not loaded') + "")) set_data(t8, t8_value);
+			if ((!current || dirty[0] & /*mapDataStatus*/ 1073741824) && t8_value !== (t8_value = (/*mapDataStatus*/ ctx[30] || 'Forecast data not loaded') + "")) set_data(t8, t8_value);
 		},
 		i(local) {
 			if (current) return;
@@ -22949,23 +23101,24 @@ function create_if_block_1(ctx) {
 	let current;
 
 	function snowlinechart_tab_binding(value) {
-		/*snowlinechart_tab_binding*/ ctx[61](value);
+		/*snowlinechart_tab_binding*/ ctx[64](value);
 	}
 
 	let snowlinechart_props = {
-		point: /*clickedPoint*/ ctx[24],
+		point: /*clickedPoint*/ ctx[13],
 		terrainM: /*clickedMapElevationM*/ ctx[25],
+		terrainSlopes: /*clickedTerrainSlopes*/ ctx[27],
 		placeName: /*clickedPlaceName*/ ctx[26] || 'Selected point',
-		units: /*unitSystem*/ ctx[11]
+		units: /*unitSystem*/ ctx[12]
 	};
 
-	if (/*forecastTab*/ ctx[9] !== void 0) {
-		snowlinechart_props.tab = /*forecastTab*/ ctx[9];
+	if (/*forecastTab*/ ctx[10] !== void 0) {
+		snowlinechart_props.tab = /*forecastTab*/ ctx[10];
 	}
 
 	snowlinechart = new SnowlineChart({ props: snowlinechart_props });
 	binding_callbacks.push(() => bind(snowlinechart, 'tab', snowlinechart_tab_binding));
-	snowlinechart.$on("close", /*close_handler*/ ctx[62]);
+	snowlinechart.$on("close", /*close_handler*/ ctx[65]);
 
 	return {
 		c() {
@@ -22977,14 +23130,15 @@ function create_if_block_1(ctx) {
 		},
 		p(ctx, dirty) {
 			const snowlinechart_changes = {};
-			if (dirty[0] & /*clickedPoint*/ 16777216) snowlinechart_changes.point = /*clickedPoint*/ ctx[24];
+			if (dirty[0] & /*clickedPoint*/ 8192) snowlinechart_changes.point = /*clickedPoint*/ ctx[13];
 			if (dirty[0] & /*clickedMapElevationM*/ 33554432) snowlinechart_changes.terrainM = /*clickedMapElevationM*/ ctx[25];
+			if (dirty[0] & /*clickedTerrainSlopes*/ 134217728) snowlinechart_changes.terrainSlopes = /*clickedTerrainSlopes*/ ctx[27];
 			if (dirty[0] & /*clickedPlaceName*/ 67108864) snowlinechart_changes.placeName = /*clickedPlaceName*/ ctx[26] || 'Selected point';
-			if (dirty[0] & /*unitSystem*/ 2048) snowlinechart_changes.units = /*unitSystem*/ ctx[11];
+			if (dirty[0] & /*unitSystem*/ 4096) snowlinechart_changes.units = /*unitSystem*/ ctx[12];
 
-			if (!updating_tab && dirty[0] & /*forecastTab*/ 512) {
+			if (!updating_tab && dirty[0] & /*forecastTab*/ 1024) {
 				updating_tab = true;
-				snowlinechart_changes.tab = /*forecastTab*/ ctx[9];
+				snowlinechart_changes.tab = /*forecastTab*/ ctx[10];
 				add_flush_callback(() => updating_tab = false);
 			}
 
@@ -23005,7 +23159,7 @@ function create_if_block_1(ctx) {
 	};
 }
 
-// (78:0) {#if infoOpen}
+// (79:0) {#if infoOpen}
 function create_if_block(ctx) {
 	let div16;
 	let div15;
@@ -23030,7 +23184,7 @@ function create_if_block(ctx) {
 			button.textContent = "×";
 			t3 = space();
 			div14 = element("div");
-			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show estimated rain, snow, wet snow, mix, ice pellets, and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. Opening or enabling the plugin selects Windy&#39;s Precipitation type layer; you can then choose another background. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Above-model-ground pressure levels available from some neighbouring columns are retained with renormalized weights and a limited-detail flag, rather than discarding warm valley air because a mountain corner lacks those levels. This is an approximate spatial estimate, not restored observations. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Entire missing columns and missing precipitation remain unavailable. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Estimated types:</b> colours and icons show the estimated physical precipitation type. Limited-detail and borderline point labels say “possible”. This is model guidance, not a calibrated probability. If the profile cannot be classified, no type colour or icon is invented.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>Thermal snowline:</b> the wet-bulb zero level is an atmospheric proxy, not an exact rain/snow boundary. Values are rounded to 100 m (500 ft); this is display precision, not a validated error range. A value extrapolated below the lowest profile level is withheld.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> estimated timing and snowfall through +144 h. Limited atmospheric detail cannot establish a dry or non-wintry outlook.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. Snowfall amounts are withheld where wet-period atmospheric detail is insufficient and displayed with coarse rounding, not uncertainty bounds. Remaining ground snow and wind–terrain exposure are excluded from the user interface because those experimental estimates are uncalibrated.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
+			div14.innerHTML = `<div class="svelte-1gu5mnn"><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy&#39;s layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div> <div class="svelte-1gu5mnn"><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div> <div class="svelte-1gu5mnn"><b>Prepare &amp; download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy&#39;s weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div> <div class="svelte-1gu5mnn"><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div> <div class="svelte-1gu5mnn"><b>Terrain flow:</b> the point graph compares above-terrain model winds with a fixed 4 km terrain slope. Upslope/down-slope is an experimental exposure diagnostic; it does not predict additional precipitation, resolve blocked flow, or alter ECMWF amounts. Missing wind/terrain data leaves this diagnostic unavailable.</div> <div class="svelte-1gu5mnn"><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div> <details><summary>Terrain data credits</summary> <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p></details> <div class="svelte-1gu5mnn"><b>Lightning symbols:</b> raw ECMWF lightning-density forecast from Windy’s thunder layer, for the selected map time. Symbols indicate areas of forecast lightning activity, not observed or individually predicted strikes. Values below 0.025 in Windy’s native lightning-density units are omitted. Symbol spacing adapts to every map zoom. The raw ECMWF lightning forecast retains its native resolution; symbol placement does not use terrain. Missing data displays no symbols.</div> <div class="svelte-1gu5mnn"><b>At a glance:</b> precipitation type, terrain, snowline and precipitation for the selected point.</div> <div class="svelte-1gu5mnn"><b>Next wintry period:</b> timing and estimated snowfall through +144 h.</div> <div class="svelte-1gu5mnn"><b>Forecast intervals:</b> contours update hourly; gaps between available profiles are interpolated. Point forecasts show the average precipitation rate in mm/h or in/h over the source interval. Three-hour-equivalent inputs are divided by three; this is not instantaneous intensity. Next-24-hour liquid totals sum supported intervals and remain unavailable when coverage is incomplete. Snowfall totals use these intervals, precipitation type and a heuristic snow-to-water ratio. The separate experimental remaining-layer estimate tracks snow water and depth, with settling and wet-bulb-based melt even in dry weather. It excludes existing snow, ground heat, radiation and drifting; it is not a snow-depth observation or a full energy-balance model.</div> <div class="svelte-1gu5mnn"><b>Forecast:</b> snowline, precipitation, precipitation type and estimated snowfall on one timeline.</div> <div class="svelte-1gu5mnn"><b>Sounding:</b> optional vertical detail with hover/touch temperature, dew point and wet bulb.</div> <div class="info-caveat svelte-1gu5mnn">Estimated snowfall is a forecast estimate, not existing snow depth. Valid times use your device timezone; ECMWF cycle labels remain UTC.</div>`;
 			attr(button, "type", "button");
 			attr(button, "aria-label", "Close information");
 			attr(button, "title", "Close");
@@ -23056,8 +23210,8 @@ function create_if_block(ctx) {
 
 			if (!mounted) {
 				dispose = [
-					listen(button, "click", /*click_handler_8*/ ctx[63]),
-					listen(div16, "click", self$1(/*click_handler_9*/ ctx[64]))
+					listen(button, "click", /*click_handler_8*/ ctx[66]),
+					listen(div16, "click", self$1(/*click_handler_9*/ ctx[67]))
 				];
 
 				mounted = true;
@@ -23093,9 +23247,9 @@ function create_fragment$1(ctx) {
 
 	current_block_type_index = select_block_type(ctx);
 	if_block0 = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
-	let if_block1 = /*settingsOpen*/ ctx[21] && create_if_block_2(ctx);
-	let if_block2 = /*chartOpen*/ ctx[22] && /*clickedPoint*/ ctx[24] && create_if_block_1(ctx);
-	let if_block3 = /*infoOpen*/ ctx[20] && create_if_block(ctx);
+	let if_block1 = /*settingsOpen*/ ctx[23] && create_if_block_2(ctx);
+	let if_block2 = /*chartOpen*/ ctx[9] && /*clickedPoint*/ ctx[13] && create_if_block_1(ctx);
+	let if_block3 = /*infoOpen*/ ctx[22] && create_if_block(ctx);
 
 	return {
 		c() {
@@ -23146,11 +23300,11 @@ function create_fragment$1(ctx) {
 				if_block0.m(t0.parentNode, t0);
 			}
 
-			if (/*settingsOpen*/ ctx[21]) {
+			if (/*settingsOpen*/ ctx[23]) {
 				if (if_block1) {
 					if_block1.p(ctx, dirty);
 
-					if (dirty[0] & /*settingsOpen*/ 2097152) {
+					if (dirty[0] & /*settingsOpen*/ 8388608) {
 						transition_in(if_block1, 1);
 					}
 				} else {
@@ -23169,11 +23323,11 @@ function create_fragment$1(ctx) {
 				check_outros();
 			}
 
-			if (/*chartOpen*/ ctx[22] && /*clickedPoint*/ ctx[24]) {
+			if (/*chartOpen*/ ctx[9] && /*clickedPoint*/ ctx[13]) {
 				if (if_block2) {
 					if_block2.p(ctx, dirty);
 
-					if (dirty[0] & /*chartOpen, clickedPoint*/ 20971520) {
+					if (dirty[0] & /*chartOpen, clickedPoint*/ 8704) {
 						transition_in(if_block2, 1);
 					}
 				} else {
@@ -23192,7 +23346,7 @@ function create_fragment$1(ctx) {
 				check_outros();
 			}
 
-			if (/*infoOpen*/ ctx[20]) {
+			if (/*infoOpen*/ ctx[22]) {
 				if (if_block3) {
 					if_block3.p(ctx, dirty);
 				} else {
@@ -23242,7 +23396,8 @@ const MAX_CONCURRENT = 12,
 	MAX_FORECAST_HOURS = 144,
 	PROFILE_CACHE_MAX = 1600,
 	MIN_VALID_FRACTION = 0.32,
-	POSITION_NEAR_SNOWLINE_METRES = 100;
+	POSITION_NEAR_SNOWLINE_METRES = 100,
+	TENDENCY_HOURS = 1;
 
 const FAVOURITES_STORAGE_KEY = 'snowline:favourites:v1',
 	FAVOURITES_CHANGED_EVENT = 'wintry:favourites-changed',
@@ -23497,6 +23652,9 @@ function instance$1($$self, $$props, $$invalidate) {
 		pointSource = null,
 		clickedNextEventTime = null;
 
+	let clickedTerrainSlopes = null;
+	let exposureGeneration = -1;
+
 	let moveTimer = null,
 		generation = 0,
 		clickGeneration = 0,
@@ -23581,12 +23739,12 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (run === null || isOlderRun(run, activeRunTime)) return;
 
 		if (activeRunTime === null) {
-			$$invalidate(27, activeRunTime = run);
+			$$invalidate(28, activeRunTime = run);
 			return;
 		}
 
 		if (run > activeRunTime + 60_000) {
-			$$invalidate(27, activeRunTime = run);
+			$$invalidate(28, activeRunTime = run);
 			profileCache.clear();
 			stormFrames.clear();
 			clearStorms();
@@ -23758,7 +23916,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		refreshQueued = false;
 		const my = ++generation;
 		$$invalidate(42, weatherLoadProgress = 0);
-		$$invalidate(10, viewportLoading = true);
+		$$invalidate(11, viewportLoading = true);
 		const { points, rows, cols } = buildViewportPoints();
 		const progressive = Array.from({ length: rows }, () => Array(cols).fill(null));
 		let completed = 0, settled = 0, paintedAt = 0;
@@ -23806,9 +23964,9 @@ function instance$1($$self, $$props, $$invalidate) {
 				cache = [];
 				clearContours();
 				clearShading();
-				$$invalidate(29, mapDataStatus = 'Forecast unavailable for this area');
-				$$invalidate(30, mapDataMissing = false);
-				$$invalidate(28, refreshError = 'Map forecast unavailable.');
+				$$invalidate(30, mapDataStatus = 'Forecast unavailable for this area');
+				$$invalidate(31, mapDataMissing = false);
+				$$invalidate(29, refreshError = 'Map forecast unavailable.');
 				return;
 			}
 
@@ -23818,11 +23976,11 @@ function instance$1($$self, $$props, $$invalidate) {
 			weatherRevision++;
 			frameCache.clear();
 			lastChecked = Date.now();
-			$$invalidate(28, refreshError = '');
+			$$invalidate(29, refreshError = '');
 			renderFromCache();
 			if (clickedPoint && clickedLatLon && !profileIsFresh(clickedPoint.fetchedAt, clickedPoint.runTime, activeRunTime)) void probeLocation(...clickedLatLon, pointSource ?? 'map-click', clickedPlaceName);
 		} finally {
-			if (my === generation) $$invalidate(10, viewportLoading = false);
+			if (my === generation) $$invalidate(11, viewportLoading = false);
 
 			if (refreshQueued && enabled && !destroyed) {
 				refreshQueued = false;
@@ -23855,11 +24013,11 @@ function instance$1($$self, $$props, $$invalidate) {
 		terrainJobKey = '';
 		refreshEpoch++;
 		generation++;
-		$$invalidate(10, viewportLoading = false);
+		$$invalidate(11, viewportLoading = false);
 		refreshQueued = false;
 		profileCache.clear();
 		pendingProfiles.clear();
-		$$invalidate(28, refreshError = '');
+		$$invalidate(29, refreshError = '');
 		if (clickedLatLon) void probeLocation(...clickedLatLon, pointSource ?? 'map-click', clickedPlaceName);
 		void refreshViewport();
 	}
@@ -23901,7 +24059,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		clearGeography();
 		$$invalidate(4, terrainLoading = false);
-		$$invalidate(13, terrainDetailStatus = '');
+		$$invalidate(15, terrainDetailStatus = '');
 		rasterEpoch++;
 
 		if (rasterTimer) {
@@ -23925,7 +24083,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	function clearGeography() {
 		geographyEpoch++;
-		$$invalidate(19, geographyError = '');
+		$$invalidate(21, geographyError = '');
 
 		if (geographyLayer) try {
 			map.removeLayer(geographyLayer);
@@ -24007,7 +24165,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				
 			}
 
-			$$invalidate(19, geographyError = frame.geographyError);
+			$$invalidate(21, geographyError = frame.geographyError);
 		}
 	}
 
@@ -24026,11 +24184,11 @@ function instance$1($$self, $$props, $$invalidate) {
 	function clearPointState(closeChart = true) {
 		placeAbort?.abort();
 		placeAbort = null;
-		clickGeneration++;
-		$$invalidate(23, probeLoading = false);
-		if (closeChart) $$invalidate(22, chartOpen = false);
-		$$invalidate(24, clickedPoint = null);
-		clickedLatLon = null;
+		$$invalidate(49, clickGeneration++, clickGeneration);
+		$$invalidate(24, probeLoading = false);
+		if (closeChart) $$invalidate(9, chartOpen = false);
+		$$invalidate(13, clickedPoint = null);
+		$$invalidate(47, clickedLatLon = null);
 		$$invalidate(25, clickedMapElevationM = null);
 		$$invalidate(26, clickedPlaceName = null);
 		pointSource = null;
@@ -24049,17 +24207,69 @@ function instance$1($$self, $$props, $$invalidate) {
 				? `Well ${side} snowline`
 				: `Slightly ${side} snowline`;
 
-		return `<strong>${label}</strong><small>${formatSnowline(a, unitSystem)} ${side}</small>`;
+		return `<strong>${label}</strong><small>${formatElevation(a, unitSystem)} ${side}</small>`;
 	}
 
 	function snowlineAt(point, index) {
-		return resolvedSnowlineM(buildProfile(point.forecast, index));
+		const r = wetBulbZeroHeight(buildProfile(point.forecast, index));
+
+		return r.snowLevelM !== null && Number.isFinite(r.snowLevelM)
+		? r.snowLevelM
+		: null;
+	}
+
+	function tendencyText(point, index) {
+		const now = snowlineAt(point, index);
+		if (now === null) return '';
+		const target = point.times[index] + TENDENCY_HOURS * 3600_000;
+		if (target > point.times.at(-1) + 30 * 60_000) return '';
+		const fi = nearestIndex(point.times, target);
+		if (fi === index) return '';
+		const future = snowlineAt(point, fi);
+		if (future === null) return '';
+		const d = Math.round((future - now) / ((point.times[fi] - point.times[index]) / 3600_000) / 10) * 10;
+
+		return Math.abs(d) < 20
+		? '→ Steady'
+		: `${d > 0 ? '↑' : '↓'} ${formatElevation(Math.abs(d), unitSystem)}/h`;
 	}
 
 	function phaseAt(point, index, terrainM) {
 		return isPrecipitating(precipMmAt(point.forecast, index))
 		? buildSnowForecast(point, terrainM).thermalPhases[index]
 		: null;
+	}
+
+	async function loadTerrainSlopes(lat, lon, my) {
+		$$invalidate(27, clickedTerrainSlopes = null);
+		if (Math.abs(lat) > 80) return;
+
+		const dy = 2000 / 111195,
+			dx = dy / Math.cos(lat * Math.PI / 180),
+			west = wrappedLongitude(lon) - dx,
+			east = wrappedLongitude(lon) + dx;
+
+		if (west < -180 || east > 180) return;
+
+		const bounds = {
+			south: lat - dy,
+			north: lat + dy,
+			west,
+			east
+		};
+
+		const current = () => my === clickGeneration && enabled && !destroyed;
+
+		try {
+			await terrainTiles.ensure(bounds, 12, current, () => {
+				
+			});
+
+			if (!current()) return;
+			$$invalidate(27, clickedTerrainSlopes = terrainSlopes(terrainTiles.sample(lat, west, 12), terrainTiles.sample(lat, east, 12), terrainTiles.sample(lat - dy, wrappedLongitude(lon), 12), terrainTiles.sample(lat + dy, wrappedLongitude(lon), 12)));
+		} catch {
+			if (current()) $$invalidate(27, clickedTerrainSlopes = null);
+		}
 	}
 
 	async function resolvePlaceName(lat, lon, signal) {
@@ -24181,7 +24391,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			place,
 			'Valid: ' + formatLocal(validTime),
 			conditionLabel(precip, phase),
-			'Estimated thermal snowline: ' + formatSnowline(snowline, units),
+			'Snowline: ' + formatElevation(snowline, units),
 			'Terrain: ' + formatElevation(terrain, units),
 			'Average precipitation: ' + formatPrecip(precip, units),
 			event
@@ -24190,7 +24400,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			event
 			? event.incomplete
 				? 'Snow amount uncertain'
-				: 'Estimated snowfall' + (event.activeNow ? ' still to fall' : '') + ': ' + formatSnow(event.newSnowCm, units)
+				: 'Estimated snowfall' + (event.activeNow ? ' remaining' : '') + ': ' + formatSnow(event.newSnowCm, units)
 			: '',
 			'ECMWF atmospheric profile · Windy terrain. Snow amounts are estimates.'
 		].filter(Boolean).join('\n');
@@ -24224,8 +24434,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		const amount = event.incomplete
 		? ' · amount uncertain'
-		: event.newSnowCm > 0
-			? ' · est. ' + formatSnow(event.newSnowCm, unitSystem) + (event.activeNow ? ' still to fall' : '')
+		: event.newSnowCm > 0.05
+			? ' · est. ' + formatSnow(event.newSnowCm, unitSystem) + (event.activeNow ? ' remaining' : '')
 			: '';
 
 		if (event.activeNow) return {
@@ -24241,7 +24451,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	function labelGrid(args) {
 		const terrain = metricTile('Terrain', formatElevation(args.terrain, unitSystem), 'metric-terrain');
-		const snowline = metricTile('Est. snowline', formatSnowline(args.snowline, unitSystem), 'metric-snowline');
+		const snowline = metricTile('Snowline', formatElevation(args.snowline, unitSystem), 'metric-snowline');
 
 		const relation = `<div class="snowline-compact-relation">${positionText(args.difference)}<span>${args.precip === null
 		? 'Precip unavailable'
@@ -24326,8 +24536,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			if (graph) {
 				if (clickedPoint) {
-					$$invalidate(9, forecastTab = 'graph');
-					$$invalidate(22, chartOpen = true);
+					$$invalidate(10, forecastTab = 'graph');
+					$$invalidate(9, chartOpen = true);
 				}
 
 				return;
@@ -24340,8 +24550,8 @@ function instance$1($$self, $$props, $$invalidate) {
 					
 				}
 
-				$$invalidate(9, forecastTab = 'graph');
-				$$invalidate(22, chartOpen = true);
+				$$invalidate(10, forecastTab = 'graph');
+				$$invalidate(9, chartOpen = true);
 				return;
 			}
 
@@ -24370,9 +24580,8 @@ function instance$1($$self, $$props, $$invalidate) {
 
 		const [lat, lon] = clickedLatLon,
 			target = getStoreTimestamp(),
-			first = clickedPoint.times[0];
-
-		const end = Math.min(clickedPoint.times.at(-1), first + MAX_FORECAST_HOURS * 3600_000);
+			first = clickedPoint.times[0],
+			end = Math.min(clickedPoint.times.at(-1), first + MAX_FORECAST_HOURS * 3600_000);
 
 		if (target < first - 30 * 60_000 || target > end + 30 * 60_000) {
 			showClickLabel(lat, lon, 'Outside +144 h');
@@ -24386,79 +24595,98 @@ function instance$1($$self, $$props, $$invalidate) {
 			return;
 		}
 
-		const profile = buildProfile(clickedPoint.forecast, index),
-			snowline = resolvedSnowlineM(profile);
+		const valid = clickedPoint.times[index],
+			profile = buildProfile(clickedPoint.forecast, index),
+			slr = wetBulbZeroHeight(profile),
+			snowline = slr.snowLevelM !== null && Number.isFinite(slr.snowLevelM)
+			? slr.snowLevelM
+			: null;
 
-		const precip = precipMmAtTime(clickedPoint.forecast, clickedPoint.times, target),
+		if (snowline === null) {
+			const precip = precipMmAtTime(clickedPoint.forecast, clickedPoint.times, target),
+				phase = clickedMapElevationM !== null && isPrecipitating(precip)
+				? phaseAt(clickedPoint, index, clickedMapElevationM)
+				: null;
+
+			const reason = slr.status === 'below-lowest-level'
+			? 'WBZ is below the lowest resolved level or absent in a cold column'
+			: 'No atmospheric crossing resolved';
+
+			const detail = `<div class="snowline-valid">${shortValid(valid)}</div><div class="snowline-label-grid">${metricTile('Terrain', formatElevation(clickedMapElevationM, unitSystem), 'metric-terrain')}${metricTile('Avg precip', formatPrecip(precip, unitSystem), '')}</div><div class="snowline-event-line">${reason}. ${phase
+			? precipitationLabel(phase)
+			: precip === 0 ? 'Dry' : 'Precipitation type unavailable'}</div>`;
+
+			showClickLabel(
+				lat,
+				lon,
+				phase
+				? `${phase.icon} ${precipitationLabel(phase).toUpperCase()}`
+				: precip === 0 ? 'DRY' : 'WBZ unresolved',
+				detail,
+				'#fff',
+				'neutral',
+				phase?.key ?? null
+			);
+
+			return;
+		}
+
+		const rounded = Math.round(snowline / 10) * 10,
+			tendency = tendencyText(clickedPoint, index),
+			precip = precipMmAtTime(clickedPoint.forecast, clickedPoint.times, target),
 			hasPrecip = isPrecipitating(precip);
 
-		const phase = clickedMapElevationM !== null && hasPrecip
-		? phaseAt(clickedPoint, index, clickedMapElevationM)
-		: null;
+		if (clickedMapElevationM !== null && Number.isFinite(clickedMapElevationM)) {
+			const terrain = Math.round(clickedMapElevationM / 10) * 10,
+				difference = clickedMapElevationM - snowline,
+				status = statusForDifference(difference),
+				phase = hasPrecip
+				? terrainPrecipitationType(profile, clickedMapElevationM)
+				: null,
+				summary = compactEventSummary(clickedPoint, clickedMapElevationM, target);
 
-		const summary = clickedMapElevationM !== null
-		? compactEventSummary(clickedPoint, clickedMapElevationM, target)
-		: null;
+			clickedNextEventTime = summary.jumpTime;
 
-		clickedNextEventTime = summary?.jumpTime ?? null;
-		let detail;
-
-		if (snowline !== null && clickedMapElevationM !== null) {
-			detail = labelGrid({
-				valid: shortValid(clickedPoint.times[index]),
-				terrain: clickedMapElevationM,
-				snowline,
-				difference: clickedMapElevationM - snowline,
+			const grid = labelGrid({
+				valid: shortValid(valid),
+				terrain,
+				snowline: rounded,
+				difference,
 				precip,
 				hasPrecip,
 				eventLine: summary.text,
 				canJump: summary.jumpTime !== null
-			});
-		} else {
-			const reason = wetBulbZeroHeight(profile).status === 'below-lowest-level'
-			? 'Thermal snowline below resolved profile; no height assigned'
-			: 'Thermal snowline unresolved';
+			}) + (slr.extrapolated
+			? '<div class="forecast-quality">Snowline estimated below the resolved profile</div>'
+			: '') + (phase?.confidence === 'low'
+			? '<div class="forecast-quality">Limited atmospheric detail; type may differ</div>'
+			: '');
 
-			const event = summary
-			? summary.jumpTime !== null
-				? `<button class="snowline-event-line snowline-event-jump" type="button" aria-label="Jump to next wintry period">${summary.text}<span>›</span></button>`
-				: `<div class="snowline-event-line">${summary.text}</div>`
-			: '';
+			if (phase) {
+				showClickLabel(lat, lon, `${phase.icon} ${precipitationLabel(phase).toUpperCase()}`, grid, colorForLevel(snowline), status, phase?.key ?? null);
+				return;
+			}
 
-			detail = `<div class="snowline-valid">${shortValid(clickedPoint.times[index])}</div><div class="snowline-label-grid">${metricTile('Terrain', formatElevation(clickedMapElevationM, unitSystem), 'metric-terrain')}${metricTile('Avg precip', formatPrecip(precip, unitSystem), '')}</div><div class="forecast-quality">${reason}</div>${event}`;
+			showClickLabel(lat, lon, conditionLabel(precip, phase).toUpperCase(), grid, colorForLevel(snowline), status, phase?.key ?? null);
+			return;
 		}
 
-		if (phase?.confidence === 'low') detail += '<div class="forecast-quality">Limited atmospheric detail · type is approximate</div>';
-
-		const main = phase
-		? `${phase.icon} ${precipitationLabel(phase).toUpperCase()}`
-		: conditionLabel(precip, phase).toUpperCase();
-
-		showClickLabel(
-			lat,
-			lon,
-			main,
-			detail,
-			snowline !== null ? colorForLevel(snowline) : '#fff',
-			snowline !== null && clickedMapElevationM !== null
-			? statusForDifference(clickedMapElevationM - snowline)
-			: 'neutral',
-			phase?.key ?? null
-		);
+		showClickLabel(lat, lon, formatElevation(rounded, unitSystem), `<div class="snowline-label-grid"><span><small>Valid</small><strong>${shortValid(valid)}</strong></span><span><small>Trend</small><strong>${tendency || '—'}</strong></span></div>`, colorForLevel(snowline), 'neutral');
 	}
 
 	async function probeLocation(lat, lon, source, placeName = null) {
 		if (!enabled || destroyed || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
 		placeAbort?.abort();
 		placeAbort = null;
-		const keep = chartOpen, my = ++clickGeneration;
-		$$invalidate(24, clickedPoint = null);
+		const keep = chartOpen, my = $$invalidate(49, ++clickGeneration);
+		$$invalidate(13, clickedPoint = null);
 		$$invalidate(25, clickedMapElevationM = null);
 		clickedNextEventTime = null;
-		clickedLatLon = [lat, lon];
+		$$invalidate(27, clickedTerrainSlopes = null);
+		$$invalidate(47, clickedLatLon = [lat, lon]);
 		$$invalidate(26, clickedPlaceName = placeName);
 		pointSource = source;
-		$$invalidate(23, probeLoading = true);
+		$$invalidate(24, probeLoading = true);
 		showClickLabel(lat, lon, 'Loading forecast…', '<div class="snowline-loading">Checking snow, timing and amounts</div>');
 		if (!placeName) void updatePointPlaceName(lat, lon, my);
 
@@ -24478,7 +24706,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			const aligned = alignSelectedPrecipFields(fields, point.times, point.runTime);
 
-			$$invalidate(24, clickedPoint = Object.keys(aligned).length
+			$$invalidate(13, clickedPoint = Object.keys(aligned).length
 			? {
 					...point,
 					forecast: { ...point.forecast, ...aligned }
@@ -24486,12 +24714,12 @@ function instance$1($$self, $$props, $$invalidate) {
 			: point);
 
 			$$invalidate(25, clickedMapElevationM = elev);
-			$$invalidate(24, clickedPoint.terrainM = elev, clickedPoint);
+			$$invalidate(13, clickedPoint.terrainM = elev, clickedPoint);
 			lastChecked = Date.now();
-			if (keep) $$invalidate(22, chartOpen = true);
+			if (keep) $$invalidate(9, chartOpen = true);
 			updatePersistentClickLabel();
 		} finally {
-			if (my === clickGeneration) $$invalidate(23, probeLoading = false);
+			if (my === clickGeneration) $$invalidate(24, probeLoading = false);
 		}
 	}
 
@@ -24510,7 +24738,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 		const name = [primary, secondary].map(v => String(v ?? '').trim()).filter(Boolean).join(', ');
 		pointSource = 'search';
-		const selection = ++clickGeneration;
+		const selection = $$invalidate(49, ++clickGeneration);
 		map.panTo([lat, lon], { animate: true });
 
 		setTimeout(
@@ -24585,7 +24813,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				interactive: false,
 				icon: L.divIcon({
 					className: 'snowline-label' + (c.isMajor ? ' snowline-label-major' : ' '),
-					html: '<span style="--snowline-color:' + c.color + '">' + formatSnowline(c.level, unitSystem) + '</span>',
+					html: '<span style="--snowline-color:' + c.color + '">' + formatElevation(c.level, unitSystem) + '</span>',
 					iconSize: [96, 22],
 					iconAnchor: [48, 11]
 				})
@@ -24643,16 +24871,16 @@ function instance$1($$self, $$props, $$invalidate) {
 		prepareGeneration++;
 		videoAbort?.abort();
 		videoAbort = null;
-		$$invalidate(16, exportingMap = false);
-		$$invalidate(14, preparingMap = false);
-		$$invalidate(15, prepareMessage = `Stopped · ${preparedKeys.size} times prepared`);
+		$$invalidate(18, exportingMap = false);
+		$$invalidate(16, preparingMap = false);
+		$$invalidate(17, prepareMessage = `Stopped · ${preparedKeys.size} times prepared`);
 	}
 
 	function resetMapPreparation() {
 		cancelMapPreparation();
 		preparedKeys.clear();
 		preparedReadKey = '';
-		$$invalidate(15, prepareMessage = '');
+		$$invalidate(17, prepareMessage = '');
 	}
 
 	function restorePreparedFrame(record) {
@@ -24716,9 +24944,9 @@ function instance$1($$self, $$props, $$invalidate) {
 		const options = JSON.stringify([showContours, showIcons, unitSystem]);
 		const current = () => my === prepareGeneration && enabled && !destroyed && scene === phaseFrameKey(reference) && options === JSON.stringify([showContours, showIcons, unitSystem]);
 		const started = Date.now();
-		$$invalidate(14, preparingMap = true);
+		$$invalidate(16, preparingMap = true);
 		preparedKeys.clear();
-		$$invalidate(15, prepareMessage = `0 / ${times.length} times…`);
+		$$invalidate(17, prepareMessage = `0 / ${times.length} times…`);
 
 		if (prefetchTimer) {
 			clearTimeout(prefetchTimer);
@@ -24735,7 +24963,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			if (videoDownloadUrl) {
 				URL.revokeObjectURL(videoDownloadUrl);
-				$$invalidate(17, videoDownloadUrl = '');
+				$$invalidate(19, videoDownloadUrl = '');
 			}
 
 			await preparedMapCache.clear();
@@ -24760,16 +24988,16 @@ function instance$1($$self, $$props, $$invalidate) {
 				preparedKeys.add(key);
 				i++;
 				const minutes = Math.ceil((Date.now() - started) / 60000 / i * (times.length - i));
-				$$invalidate(15, prepareMessage = `${i} / ${times.length} times${i > 1 && minutes > 0 ? ` · ~${minutes} min left` : '…'}`);
+				$$invalidate(17, prepareMessage = `${i} / ${times.length} times${i > 1 && minutes > 0 ? ` · ~${minutes} min left` : '…'}`);
 				await new Promise(resolve => setTimeout(resolve, 0));
 			}
 
 			if (current()) {
-				if (exportAvailable) await downloadMapForecastVideo(videoTimes, current); else $$invalidate(15, prepareMessage = `Map ready · ${preparedKeys.size} times · MP4 unavailable in this browser`);
-			} else if (my === prepareGeneration) $$invalidate(15, prepareMessage = 'Preparation stopped · forecast changed; refresh to try again');
+				if (exportAvailable) await downloadMapForecastVideo(videoTimes, current); else $$invalidate(17, prepareMessage = `Map ready · ${preparedKeys.size} times · MP4 unavailable in this browser`);
+			} else if (my === prepareGeneration) $$invalidate(17, prepareMessage = 'Preparation stopped · forecast changed; refresh to try again');
 		} catch(error) {
 			if (current()) {
-				$$invalidate(15, prepareMessage = error instanceof Error
+				$$invalidate(17, prepareMessage = error instanceof Error
 				? `${error.message} · ${preparedKeys.size} times prepared`
 				: 'Preparation unavailable · normal timeline still works');
 
@@ -24777,8 +25005,8 @@ function instance$1($$self, $$props, $$invalidate) {
 			}
 		} finally {
 			if (my === prepareGeneration) {
-				$$invalidate(14, preparingMap = false);
-				$$invalidate(16, exportingMap = false);
+				$$invalidate(16, preparingMap = false);
+				$$invalidate(18, exportingMap = false);
 				scheduleNextFrame();
 			}
 		}
@@ -24787,7 +25015,7 @@ function instance$1($$self, $$props, $$invalidate) {
 	async function downloadMapForecastVideo(times, current) {
 		const abort = new AbortController();
 		videoAbort = abort;
-		$$invalidate(16, exportingMap = true);
+		$$invalidate(18, exportingMap = true);
 
 		const requireCurrent = () => {
 			if (!current()) abort.abort();
@@ -24819,7 +25047,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		};
 
 		try {
-			$$invalidate(15, prepareMessage = 'MP4 · loading map background…');
+			$$invalidate(17, prepareMessage = 'MP4 · loading map background…');
 			requireCurrent();
 
 			const z = rasterZoom(),
@@ -24906,24 +25134,24 @@ function instance$1($$self, $$props, $$invalidate) {
 				},
 				abort.signal,
 				(done, total) => {
-					if (current()) $$invalidate(15, prepareMessage = `Encoding MP4 · ${done} / ${total} times`);
+					if (current()) $$invalidate(17, prepareMessage = `Encoding MP4 · ${done} / ${total} times`);
 				}
 			);
 
 			requireCurrent();
-			$$invalidate(17, videoDownloadUrl = URL.createObjectURL(blob));
-			$$invalidate(18, videoDownloadName = `wintry-forecast-${new Date(times[0]).toISOString().replace(/[:.]/g, '-')}.mp4`);
+			$$invalidate(19, videoDownloadUrl = URL.createObjectURL(blob));
+			$$invalidate(20, videoDownloadName = `wintry-forecast-${new Date(times[0]).toISOString().replace(/[:.]/g, '-')}.mp4`);
 			const link = document.createElement('a');
 			link.href = videoDownloadUrl;
 			link.download = videoDownloadName;
 			document.body.appendChild(link);
 			link.click();
 			link.remove();
-			$$invalidate(15, prepareMessage = `MP4 ready · ${times.length} times · download available below`);
+			$$invalidate(17, prepareMessage = `MP4 ready · ${times.length} times · download available below`);
 		} finally {
 			if (videoAbort === abort) {
 				videoAbort = null;
-				$$invalidate(16, exportingMap = false);
+				$$invalidate(18, exportingMap = false);
 			}
 
 			canvas.width = canvas.height = base.width = base.height = 0;
@@ -25048,7 +25276,6 @@ function instance$1($$self, $$props, $$invalidate) {
 		});
 
 		return JSON.stringify([
-			config.version,
 			weatherRevision,
 			terrainRevision,
 			activeRunTime,
@@ -25099,9 +25326,9 @@ function instance$1($$self, $$props, $$invalidate) {
 			
 		}
 
-		$$invalidate(19, geographyError = frame.geographyError);
+		$$invalidate(21, geographyError = frame.geographyError);
 
-		$$invalidate(13, terrainDetailStatus = frame.fallback && !terrainLoading
+		$$invalidate(15, terrainDetailStatus = frame.fallback && !terrainLoading
 		? 'Terrain detail unavailable here · coarse estimate'
 		: '');
 
@@ -25161,7 +25388,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			const epoch = ++terrainGeneration;
 			$$invalidate(43, terrainLoadProgress = 0);
 			$$invalidate(4, terrainLoading = true);
-			$$invalidate(13, terrainDetailStatus = '');
+			$$invalidate(15, terrainDetailStatus = '');
 
 			void terrainTiles.ensure(b, z, () => epoch === terrainGeneration && enabled && !destroyed, (done, total) => {
 				$$invalidate(43, terrainLoadProgress = total ? done / total : 1);
@@ -25327,7 +25554,7 @@ function instance$1($$self, $$props, $$invalidate) {
 				wetBulbFromDewpoint
 			);
 
-			const phase = supportedPrecipitationType(profile, terrain);
+			const phase = terrainPrecipitationType(profile, terrain);
 			if (!phase) return null;
 
 			return {
@@ -25502,7 +25729,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 			if (epoch === rasterEpoch && !background) {
 				$$invalidate(6, rasterLoading = false);
-				$$invalidate(13, terrainDetailStatus = 'Shading unavailable · retry refresh');
+				$$invalidate(15, terrainDetailStatus = 'Shading unavailable · retry refresh');
 			}
 		}
 	}
@@ -25538,7 +25765,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			clearStorms();
 			stormKey = key;
 			stormLayer = saved.layer.addTo(map);
-			$$invalidate(12, stormStatus = saved.status);
+			$$invalidate(14, stormStatus = saved.status);
 			stormFrames.delete(key);
 			stormFrames.set(key, saved);
 			return;
@@ -25549,7 +25776,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		const epoch = stormEpoch, abort = stormAbort = new AbortController();
 		$$invalidate(45, stormLoadProgress = 0);
 		$$invalidate(5, stormLoading = true);
-		$$invalidate(12, stormStatus = '⚡ Forecast lightning');
+		$$invalidate(14, stormStatus = '⚡ Forecast lightning');
 		const tiles = new Map();
 
 		const deadline = setTimeout(
@@ -25558,7 +25785,7 @@ function instance$1($$self, $$props, $$invalidate) {
 
 				if (epoch === stormEpoch) {
 					stormKey = '';
-					$$invalidate(12, stormStatus = '⚡ ECMWF lightning unavailable');
+					$$invalidate(14, stormStatus = '⚡ ECMWF lightning unavailable');
 					$$invalidate(5, stormLoading = false);
 				}
 			},
@@ -25634,7 +25861,7 @@ function instance$1($$self, $$props, $$invalidate) {
 			next.addTo(map);
 			stormLayer = next;
 
-			$$invalidate(12, stormStatus = known
+			$$invalidate(14, stormStatus = known
 			? `⚡ ECMWF forecast lightning · ${count ? 'activity shown' : 'none at sampled points'}`
 			: '⚡ ECMWF lightning unavailable');
 
@@ -25652,7 +25879,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		} catch(error) {
 			if (epoch !== stormEpoch || abort.signal.aborted) return;
 			stormKey = '';
-			$$invalidate(12, stormStatus = '⚡ ECMWF lightning unavailable');
+			$$invalidate(14, stormStatus = '⚡ ECMWF lightning unavailable');
 			console.warn('Wintry ECMWF lightning unavailable', error);
 		} finally {
 			if (epoch === stormEpoch) $$invalidate(5, stormLoading = false);
@@ -25673,8 +25900,8 @@ function instance$1($$self, $$props, $$invalidate) {
 		void renderStorms();
 
 		if (!enabled || !cache.length) {
-			$$invalidate(29, mapDataStatus = '');
-			$$invalidate(30, mapDataMissing = false);
+			$$invalidate(30, mapDataStatus = '');
+			$$invalidate(31, mapDataMissing = false);
 			clearContours();
 			clearShading();
 			return;
@@ -25687,8 +25914,8 @@ function instance$1($$self, $$props, $$invalidate) {
 			fresh = samples.filter(p => !!p && profileIsFresh(p.fetchedAt, p.runTime, activeRunTime) && forecastIntervalIndex(p.times, target) >= 0);
 
 		const known = fresh.filter(p => mapPrecipAt(p, target) !== null).length;
-		$$invalidate(29, mapDataStatus = `Profiles ${fresh.length}/${samples.length} · precip ${known}/${samples.length}`);
-		$$invalidate(30, mapDataMissing = fresh.length < samples.length || (showShading || showIcons) && precipDetailAvailable && known < samples.length);
+		$$invalidate(30, mapDataStatus = `Profiles ${fresh.length}/${samples.length} · precip ${known}/${samples.length}`);
+		$$invalidate(31, mapDataMissing = fresh.length < samples.length || (showShading || showIcons) && precipDetailAvailable && known < samples.length);
 
 		if (!firstPoint) {
 			clearContours();
@@ -25816,12 +26043,12 @@ function instance$1($$self, $$props, $$invalidate) {
 			if (typeof p.showShading === 'boolean') $$invalidate(1, showShading = p.showShading);
 			if (typeof p.showIcons === 'boolean') $$invalidate(2, showIcons = p.showIcons);
 			if (typeof p.panelHidden === 'boolean') $$invalidate(8, panelHidden = p.panelHidden);
-			if (p.forecastTab === 'graph' || p.forecastTab === 'sounding') $$invalidate(9, forecastTab = p.forecastTab);
+			if (p.forecastTab === 'graph' || p.forecastTab === 'sounding') $$invalidate(10, forecastTab = p.forecastTab);
 		} catch {
 			
 		}
 
-		$$invalidate(11, unitSystem = loadUnitSystem());
+		$$invalidate(12, unitSystem = loadUnitSystem());
 		$$invalidate(46, prefsReady = true);
 	}
 
@@ -25852,10 +26079,6 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	let lastNavigationKey = '';
 
-	function activatePrecipitationLayer() {
-		if (enabled && store.get('overlay') !== 'ptype') store.set('overlay', 'ptype');
-	}
-
 	function handleMapNavigation() {
 		const size = map.getSize(),
 			key = JSON.stringify([currentBounds(), Number(map.getZoom()), size.x, size.y]);
@@ -25863,7 +26086,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		if (key === lastNavigationKey) return;
 		const wasPrepared = preparingMap || preparedKeys.size > 0;
 		resetMapPreparation();
-		if (wasPrepared) $$invalidate(15, prepareMessage = 'Map changed · prepare this area');
+		if (wasPrepared) $$invalidate(17, prepareMessage = 'Map changed · prepare this area');
 		lastNavigationKey = key;
 		$$invalidate(3, precipDetailAvailable = Number(map.getZoom()) >= PRECIP_DETAIL_MIN_ZOOM);
 		if (!precipDetailAvailable) clearShading();
@@ -25888,7 +26111,6 @@ function instance$1($$self, $$props, $$invalidate) {
 		lastNavigationKey = '';
 
 		if (enabled) {
-			activatePrecipitationLayer();
 			register(config.name, 'high');
 			void renderStorms();
 			refreshViewport();
@@ -25901,7 +26123,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		generation++;
 		refreshEpoch++;
 		pendingProfiles.clear();
-		$$invalidate(10, viewportLoading = false);
+		$$invalidate(11, viewportLoading = false);
 		refreshQueued = false;
 
 		if (moveTimer) {
@@ -25917,7 +26139,6 @@ function instance$1($$self, $$props, $$invalidate) {
 
 	onMount(() => {
 		loadPreferences();
-		activatePrecipitationLayer();
 		if (!enabled) release(config.name, 'high');
 		freshnessTimer = setInterval(checkAutomaticRefresh, 30_000);
 		document.addEventListener('visibilitychange', checkAutomaticRefresh);
@@ -25953,7 +26174,7 @@ function instance$1($$self, $$props, $$invalidate) {
 		document.removeEventListener('visibilitychange', checkAutomaticRefresh);
 		window.removeEventListener('online', checkAutomaticRefresh);
 		generation++;
-		clickGeneration++;
+		$$invalidate(49, clickGeneration++, clickGeneration);
 		refreshQueued = false;
 		if (moveTimer) clearTimeout(moveTimer);
 		map.off('moveend', handleMapNavigation);
@@ -25977,7 +26198,7 @@ function instance$1($$self, $$props, $$invalidate) {
 	});
 
 	const click_handler = () => $$invalidate(8, panelHidden = false);
-	const click_handler_1 = () => $$invalidate(21, settingsOpen = true);
+	const click_handler_1 = () => $$invalidate(23, settingsOpen = true);
 	const click_handler_2 = () => $$invalidate(8, panelHidden = true);
 
 	function input0_change_handler() {
@@ -26001,42 +26222,42 @@ function instance$1($$self, $$props, $$invalidate) {
 	}
 
 	const click_handler_3 = () => {
-		$$invalidate(9, forecastTab = 'graph');
-		$$invalidate(22, chartOpen = true);
+		$$invalidate(10, forecastTab = 'graph');
+		$$invalidate(9, chartOpen = true);
 	};
 
 	const click_handler_4 = () => {
-		$$invalidate(9, forecastTab = 'sounding');
-		$$invalidate(22, chartOpen = true);
+		$$invalidate(10, forecastTab = 'sounding');
+		$$invalidate(9, chartOpen = true);
 	};
 
 	function v21panel_unitSystem_binding(value) {
 		unitSystem = value;
-		$$invalidate(11, unitSystem);
+		$$invalidate(12, unitSystem);
 	}
 
-	const click_handler_5 = () => $$invalidate(20, infoOpen = true);
-	const click_handler_6 = () => $$invalidate(21, settingsOpen = false);
+	const click_handler_5 = () => $$invalidate(22, infoOpen = true);
+	const click_handler_6 = () => $$invalidate(23, settingsOpen = false);
 
 	function v21panel_unitSystem_binding_1(value) {
 		unitSystem = value;
-		$$invalidate(11, unitSystem);
+		$$invalidate(12, unitSystem);
 	}
 
-	const click_handler_7 = () => $$invalidate(21, settingsOpen = false);
+	const click_handler_7 = () => $$invalidate(23, settingsOpen = false);
 
 	function snowlinechart_tab_binding(value) {
 		forecastTab = value;
-		$$invalidate(9, forecastTab);
+		$$invalidate(10, forecastTab);
 	}
 
-	const close_handler = () => $$invalidate(22, chartOpen = false);
-	const click_handler_8 = () => $$invalidate(20, infoOpen = false);
-	const click_handler_9 = () => $$invalidate(20, infoOpen = false);
+	const close_handler = () => $$invalidate(9, chartOpen = false);
+	const click_handler_8 = () => $$invalidate(22, infoOpen = false);
+	const click_handler_9 = () => $$invalidate(22, infoOpen = false);
 
 	$$self.$$.update = () => {
-		if ($$self.$$.dirty[0] & /*viewportLoading, precipDetailAvailable, showShading, showIcons, terrainLoading, rasterLoading, stormLoading*/ 1150 | $$self.$$.dirty[1] & /*weatherLoadProgress, terrainLoadProgress, rasterLoadProgress, stormLoadProgress*/ 30720) {
-			$$invalidate(31, layerLoadPercent = Math.max(0, Math.min(99, Math.floor(100 * (.35 * (viewportLoading ? weatherLoadProgress : 1) + (precipDetailAvailable && (showShading || showIcons)
+		if ($$self.$$.dirty[0] & /*viewportLoading, precipDetailAvailable, showShading, showIcons, terrainLoading, rasterLoading, stormLoading*/ 2174 | $$self.$$.dirty[1] & /*weatherLoadProgress, terrainLoadProgress, rasterLoadProgress, stormLoadProgress*/ 30720) {
+			$$invalidate(32, layerLoadPercent = Math.max(0, Math.min(99, Math.floor(100 * (.35 * (viewportLoading ? weatherLoadProgress : 1) + (precipDetailAvailable && (showShading || showIcons)
 			? .15 * (terrainLoading ? terrainLoadProgress : 1) + .4 * (rasterLoading ? rasterLoadProgress : 1)
 			: 0) + (precipDetailAvailable && showIcons
 			? .1 * (stormLoading ? stormLoadProgress : 1)
@@ -26045,13 +26266,20 @@ function instance$1($$self, $$props, $$invalidate) {
 			: 0) + (precipDetailAvailable && showIcons ? .1 : 0))))));
 		}
 
-		if ($$self.$$.dirty[0] & /*enabled, panelHidden, forecastTab, showContours, showShading, showIcons*/ 903 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
+		if ($$self.$$.dirty[0] & /*chartOpen, clickedPoint*/ 8704 | $$self.$$.dirty[1] & /*clickedLatLon, exposureGeneration, clickGeneration*/ 458752) {
+			if (chartOpen && clickedPoint && clickedLatLon && exposureGeneration !== clickGeneration) {
+				$$invalidate(48, exposureGeneration = clickGeneration);
+				void loadTerrainSlopes(clickedLatLon[0], clickedLatLon[1], clickGeneration);
+			}
+		}
+
+		if ($$self.$$.dirty[0] & /*enabled, panelHidden, forecastTab, showContours, showShading, showIcons*/ 1415 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
 			if (prefsReady) {
 				persistPreferences();
 			}
 		}
 
-		if ($$self.$$.dirty[0] & /*unitSystem*/ 2048 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
+		if ($$self.$$.dirty[0] & /*unitSystem*/ 4096 | $$self.$$.dirty[1] & /*prefsReady*/ 32768) {
 			if (prefsReady) {
 				refreshUnitDependentUi();
 			}
@@ -26068,9 +26296,11 @@ function instance$1($$self, $$props, $$invalidate) {
 		rasterLoading,
 		enabled,
 		panelHidden,
+		chartOpen,
 		forecastTab,
 		viewportLoading,
 		unitSystem,
+		clickedPoint,
 		stormStatus,
 		terrainDetailStatus,
 		preparingMap,
@@ -26081,11 +26311,10 @@ function instance$1($$self, $$props, $$invalidate) {
 		geographyError,
 		infoOpen,
 		settingsOpen,
-		chartOpen,
 		probeLoading,
-		clickedPoint,
 		clickedMapElevationM,
 		clickedPlaceName,
+		clickedTerrainSlopes,
 		activeRunTime,
 		refreshError,
 		mapDataStatus,
@@ -26100,12 +26329,14 @@ function instance$1($$self, $$props, $$invalidate) {
 		toggleEnabled,
 		isEnabled,
 		selectMapPoint,
-		activatePrecipitationLayer,
 		weatherLoadProgress,
 		terrainLoadProgress,
 		rasterLoadProgress,
 		stormLoadProgress,
 		prefsReady,
+		clickedLatLon,
+		exposureGeneration,
+		clickGeneration,
 		click_handler,
 		click_handler_1,
 		click_handler_2,
@@ -26130,32 +26361,14 @@ function instance$1($$self, $$props, $$invalidate) {
 class Plugin extends SvelteComponent {
 	constructor(options) {
 		super();
-
-		init(
-			this,
-			options,
-			instance$1,
-			create_fragment$1,
-			safe_not_equal,
-			{
-				isEnabled: 39,
-				selectMapPoint: 40,
-				activatePrecipitationLayer: 41
-			},
-			add_css,
-			[-1, -1, -1, -1, -1, -1]
-		);
+		init(this, options, instance$1, create_fragment$1, safe_not_equal, { isEnabled: 40, selectMapPoint: 41 }, add_css, [-1, -1, -1, -1, -1, -1, -1]);
 	}
 
 	get isEnabled() {
-		return this.$$.ctx[39];
-	}
-
-	get selectMapPoint() {
 		return this.$$.ctx[40];
 	}
 
-	get activatePrecipitationLayer() {
+	get selectMapPoint() {
 		return this.$$.ctx[41];
 	}
 }
@@ -26215,7 +26428,6 @@ function instance($$self, $$props, $$invalidate) {
 	}
 
 	const onopen = params => {
-		plugin?.activatePrecipitationLayer?.();
 		selectLocation(params);
 	};
 

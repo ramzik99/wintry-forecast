@@ -3,34 +3,11 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const js=ts.transpileModule(readFileSync(new URL('../src/precipRasterLayer.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
-const {precipRasterLayer,terrainMapTemplate,PRECIP_RASTER_OPACITY,precipitationPane,terrainIllumination}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
-test('categorical shading uses geographic image bounds and decodes before display without changing WebGL state',async()=>{
- const previousImage=globalThis.Image;globalThis.Image=class{decode(){return Promise.resolve()}};
- let args;const expected={};
- const L={imageOverlay:(...values)=>{args=values;return expected}};
- assert.equal(precipRasterLayer(L,'data:image/png,test',{lat:48,lon:12},{lat:47,lon:13},'precip'),expected);
- assert.equal(args[0].src,'data:image/png,test');assert.deepEqual(args[1],[[47,12],[48,13]]);
- assert.equal(await expected.ready,true);globalThis.Image=previousImage;
- assert.equal(args[2].pane,'precip');assert.equal(args[2].interactive,false);
- assert.equal(args[2].opacity,PRECIP_RASTER_OPACITY);assert.equal(PRECIP_RASTER_OPACITY,1);
-});
-test('video uses the selected geographic template at every zoom',()=>{
- const tiles={sznmap:'outdoor',winter:'winter',graymap:'transparent labels'};
- assert.equal(terrainMapTemplate(tiles,'winter'),'winter');assert.equal(terrainMapTemplate(tiles,'unknown'),'outdoor');
- assert.match(terrainMapTemplate({},'unknown'),/outdoor/);
-});
-
-test('full-opacity colour pane retains the underlying terrain luminance',()=>{
- const pane={style:{}};let created=0;
- const map={getPane:()=>created?pane:null,createPane:()=>{created++;return pane}};
- assert.equal(precipitationPane(map,'precip'),pane);assert.equal(precipitationPane(map,'precip'),pane);
- assert.equal(created,1);assert.equal(pane.style.mixBlendMode,undefined);
-assert.equal(pane.style.zIndex,'390');assert.equal(pane.style.pointerEvents,'none');
-});
-
-test('terrain relief uses actual slopes with ambient light and bounded missing-data fallback',()=>{
- assert.equal(terrainIllumination(100,100,100,100,50),235);
- const lit=terrainIllumination(0,100,0,0,50),shade=terrainIllumination(100,0,0,0,50);
- assert.ok(lit>shade);assert.ok(shade>=100&&lit<=255);
- assert.equal(terrainIllumination(NaN,100,100,100,50),235);
+const {precipRasterLayer}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+test('precipitation is opaque below geographic map and releases native resources',()=>{
+ const sources=new Map(),layers=new Map();let bucket;
+ const gl={addSource:(id,s)=>sources.set(id,s),addLayerToBucket:(s,b)=>{layers.set(s.id,s);bucket=b},getLayer:id=>layers.get(id),getSource:id=>sources.get(id),removeLayer:id=>layers.delete(id),removeSource:id=>sources.delete(id)};
+ const layer=precipRasterLayer({Layer:class{}},'data:image/png,test',{lat:48,lon:12},{lat:47,lon:13},400,'precip');
+ layer.onAdd({maplibreMap:gl});assert.equal(bucket,399);assert.equal([...layers.values()][0].paint['raster-opacity'],1);assert.deepEqual([...sources.values()][0].coordinates,[[12,48],[13,48],[13,47],[12,47]]);
+ layer.onRemove({});assert.equal(layers.size,0);assert.equal(sources.size,0);
 });

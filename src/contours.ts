@@ -8,12 +8,85 @@ export type LatLon = [number, number];
 export type ContourSegment = [LatLon, LatLon];
 export type ContourPolyline = LatLon[];
 
-/** Missing or invalid samples remain gaps; contours never invent support there. */
+type IndexedGridPoint = GridPoint & { r: number; c: number };
+
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : 0.5 * (sorted[mid - 1] + sorted[mid]);
+}
+
+function reconstructAxis(known: Array<{ index: number; value: number }>, length: number): number[] {
+  if (!known.length) return Array.from({ length }, (_, i) => i);
+  if (known.length === 1) return Array.from({ length }, () => known[0].value);
+
+  const ordered = [...known].sort((a, b) => a.index - b.index);
+  const slopes: number[] = [];
+  for (let i = 1; i < ordered.length; i++) {
+    const di = ordered[i].index - ordered[i - 1].index;
+    if (di > 0) slopes.push((ordered[i].value - ordered[i - 1].value) / di);
+  }
+  const step = median(slopes);
+  const anchor = ordered[Math.floor(ordered.length / 2)];
+  return Array.from({ length }, (_, i) => anchor.value + (i - anchor.index) * step);
+}
+
+/**
+ * Contours are a visual interpolation of a regularly sampled viewport field.
+ * A single failed profile request must not punch a four-cell hole in marching
+ * squares. Reconstruct missing grid geometry and fill missing values from the
+ * nearest available samples in grid space. The raw point data remain untouched.
+ */
 function continuousContourGrid(grid: GridPoint[][]): GridPoint[][] {
-  return grid.map(row => row.map(p => ({
-    lat: p?.lat ?? NaN, lon: p?.lon ?? NaN,
-    value: p && p.value !== null && [p.value,p.lat,p.lon].every(Number.isFinite) ? p.value : null,
-  })));
+  const rows = grid.length;
+  const cols = grid[0]?.length ?? 0;
+  if (!rows || !cols) return grid;
+
+  const valid: IndexedGridPoint[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const p = grid[r][c];
+      if (p && p.value !== null && Number.isFinite(p.value)) valid.push({ ...p, r, c });
+    }
+  }
+  if (!valid.length) return grid;
+
+  const rowLatKnown: Array<{ index: number; value: number }> = [];
+  for (let r = 0; r < rows; r++) {
+    const latitudes = valid.filter(p => p.r === r).map(p => p.lat).filter(Number.isFinite);
+    if (latitudes.length) rowLatKnown.push({ index: r, value: latitudes.reduce((a, b) => a + b, 0) / latitudes.length });
+  }
+  const colLonKnown: Array<{ index: number; value: number }> = [];
+  for (let c = 0; c < cols; c++) {
+    const longitudes = valid.filter(p => p.c === c).map(p => p.lon).filter(Number.isFinite);
+    if (longitudes.length) colLonKnown.push({ index: c, value: longitudes.reduce((a, b) => a + b, 0) / longitudes.length });
+  }
+
+  const rowLat = reconstructAxis(rowLatKnown, rows);
+  const colLon = reconstructAxis(colLonKnown, cols);
+
+  return grid.map((row, r) => row.map((p, c) => {
+    if (p.value !== null && Number.isFinite(p.value)) return p;
+
+    const neighbours = valid
+      .map(v => ({ v, d2: (v.r - r) ** 2 + (v.c - c) ** 2 }))
+      .sort((a, b) => a.d2 - b.d2)
+      .slice(0, 8);
+    let weighted = 0;
+    let weights = 0;
+    for (const item of neighbours) {
+      const weight = 1 / Math.max(0.25, item.d2);
+      weighted += (item.v.value as number) * weight;
+      weights += weight;
+    }
+
+    return {
+      lat: Number.isFinite(p.lat) && (p.lat !== 0 || rowLat[r] === 0) ? p.lat : rowLat[r],
+      lon: Number.isFinite(p.lon) && (p.lon !== 0 || colLon[c] === 0) ? p.lon : colLon[c],
+      value: weights > 0 ? weighted / weights : null,
+    };
+  }));
 }
 
 function interp(
@@ -38,8 +111,8 @@ function interp(
  * Marching-squares line segments for one contour level.
  * Grid is rows x cols; rows increase northward and columns eastward.
  *
- * Saddle cases (5 and 10) use the bilinear asymptotic decider. Its determinant
- * chooses the correct connected diagonal; averaging corners can reverse topology.
+ * Saddle cases (5 and 10) use a centre-value decider rather than a fixed
+ * connection. This reduces artificial contour flips and broken-looking lines.
  */
 export function contourSegments(
   grid: GridPoint[][],
@@ -89,9 +162,18 @@ export function contourSegments(
       let pairs: number[][];
 
       if (code === 5 || code === 10) {
-        const determinant = (v[0]-level)*(v[2]-level) - (v[1]-level)*(v[3]-level);
-        // Positive determinant connects the SW/NE sign region; ties use a stable pairing.
-        pairs = determinant >= 0 ? [[0,1],[2,3]] : [[3,0],[1,2]];
+        const centre = (v[0] + v[1] + v[2] + v[3]) / 4;
+        const centreHigh = centre >= level;
+
+        if (code === 5) {
+          pairs = centreHigh
+            ? [[3, 0], [1, 2]]
+            : [[3, 2], [0, 1]];
+        } else {
+          pairs = centreHigh
+            ? [[0, 1], [2, 3]]
+            : [[0, 3], [1, 2]];
+        }
       } else {
         const table: Record<number, number[][]> = {
           0: [],

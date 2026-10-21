@@ -1,29 +1,13 @@
 import { tileLocation, tilePosition, visibleRasterTiles } from './shadingRaster';
 
 export function decodeTerrarium(r:number,g:number,b:number){return r*256+g+b/256-32768;}
-type Bounds={south:number;north:number;west:number;east:number};
-function terrainViewTiles(bounds:Bounds,z:number){
-  const nw=tilePosition(bounds.north,bounds.west,z),se=tilePosition(bounds.south,bounds.east,z),pad=1/256;
-  const a=tileLocation(nw.x-pad,nw.y-pad,z),b=tileLocation(se.x+pad,se.y+pad,z);
-  return visibleRasterTiles({north:a.lat,south:b.lat,west:a.lon,east:b.lon},z);
-}
-export function terrainTileZoom(mapZoom:number,bounds?:Bounds){
-  let z=Math.max(0,Math.min(14,Math.floor(mapZoom)));
-  // Keep the complete viewport in the 16 MiB DEM cache, including edge neighbours.
-  while(bounds&&z>0){
-    const nw=tilePosition(bounds.north,bounds.west,z),se=tilePosition(bounds.south,bounds.east,z),n=2**z,pad=1/256;
-    const cols=Math.ceil(se.x+pad)-Math.floor(nw.x-pad),rows=Math.min(n,Math.ceil(se.y+pad))-Math.max(0,Math.floor(nw.y-pad));
-    if(cols*rows<=64)break;z--;
-  }
-  return z;
-}
+export function terrainTileZoom(mapZoom:number){return Math.max(0,Math.min(14,Math.floor(mapZoom)-2));}
 type DemTile={pixels:Float32Array;width:number;height:number};
 const URL='https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
 
 /** 16 MiB decoded LRU, four concurrent requests, ten-second timeout, shared pending tiles. */
 export class TerrainTiles {
   private cache=new Map<string,DemTile>();
-  private samplingZoom=new Map<number,number>();
   private pending=new Map<string,Promise<boolean>>();
   private failed=new Map<string,number>();
   private controllers=new Set<AbortController>();
@@ -31,10 +15,10 @@ export class TerrainTiles {
   private waiting:(()=>void)[]=[];
   private alive=true;
   async ensure(bounds:{south:number;north:number;west:number;east:number},zoom:number,isCurrent:()=>boolean,progress:(completed:number,total:number)=>void){
-    const z=terrainTileZoom(zoom,bounds);this.samplingZoom.set(zoom,z);
-    const tiles=terrainViewTiles(bounds,z);let next=0,completed=0,complete=true;
-    await Promise.all(Array.from({length:Math.min(4,tiles.length)},async()=>{while(this.alive&&isCurrent()){const tile=tiles[next++];if(!tile)return;if(!await this.load(tile.x,tile.y,z))complete=false;if(isCurrent())progress(++completed,tiles.length);}}));
-    return complete&&completed===tiles.length&&tiles.every(t=>this.cache.has(`${z}/${((t.x%2**z)+2**z)%2**z}/${t.y}`));
+    const z=terrainTileZoom(zoom),nw=tilePosition(bounds.north,bounds.west,z),se=tilePosition(bounds.south,bounds.east,z);
+    const pad=1/256,a=tileLocation(nw.x-pad,nw.y-pad,z),b=tileLocation(se.x+pad,se.y+pad,z);
+    const tiles=visibleRasterTiles({north:a.lat,south:b.lat,west:a.lon,east:b.lon},z);let next=0,completed=0;
+    await Promise.all(Array.from({length:Math.min(4,tiles.length)},async()=>{while(this.alive&&isCurrent()){const tile=tiles[next++];if(!tile)return;await this.load(tile.x,tile.y,z);if(isCurrent())progress(++completed,tiles.length);}}));
   }
   private load(x:number,y:number,z:number):Promise<boolean>{
     const n=2**z;x=((x%n)+n)%n;const key=`${z}/${x}/${y}`;
@@ -60,7 +44,7 @@ export class TerrainTiles {
     })();this.pending.set(key,promise);return promise;
   }
   sample(lat:number,lon:number,zoom:number):number|null{
-    const z=this.samplingZoom.get(zoom)??terrainTileZoom(zoom),p=tilePosition(lat,lon,z),n=2**z;
+    const z=terrainTileZoom(zoom),p=tilePosition(lat,lon,z),n=2**z;
     // Elevation pixels represent their centres; read adjacent tiles at boundaries.
     const xx=p.x*256-.5,yy=p.y*256-.5,x0=Math.floor(xx),y0=Math.floor(yy),fx=xx-x0,fy=yy-y0;
     let sum=0;
@@ -72,5 +56,5 @@ export class TerrainTiles {
     return sum;
   }
   retry(){this.failed.clear();}
-  destroy(){this.alive=false;for(const abort of this.controllers)abort.abort();for(const resume of this.waiting)resume();this.waiting=[];this.cache.clear();this.samplingZoom.clear();this.failed.clear();}
+  destroy(){this.alive=false;for(const abort of this.controllers)abort.abort();for(const resume of this.waiting)resume();this.waiting=[];this.cache.clear();this.failed.clear();}
 }

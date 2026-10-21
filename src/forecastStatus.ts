@@ -1,6 +1,6 @@
 import { buildProfile } from './snowLevel';
 import { precipMmAt, isPrecipitating } from './precip';
-import { precipitationLabel, supportedPrecipitationType, type TerrainPrecipType } from './precipType';
+import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType } from './precipType';
 import { forecastIntervalHours } from './forecastTime';
 import { supportedIntervalEnd } from './forecastIntervals';
 
@@ -9,7 +9,7 @@ export type ForecastPoint = { times: number[]; forecast: Record<string, unknown>
 export function conditionLabel(precip: number | null, phase: TerrainPrecipType | null): string {
   if (precip === null || !Number.isFinite(precip) || precip < 0) return 'Precipitation unavailable';
   if (precip === 0) return 'Dry';
-  return phase ? precipitationLabel(phase) : 'Precipitation type unavailable';
+  return phase ? precipitationLabel(phase) : 'Precipitation';
 }
 
 /** Absence of an event is only meaningful over intervals we could classify. */
@@ -29,12 +29,8 @@ export function noEventMessage(point: ForecastPoint, terrainM: number | null, fr
     const start = point.times[i], intervalEnd = Math.min(end, supportedIntervalEnd(point.times, i, point.forecast.__precipPeriodsH));
     if (intervalEnd <= fromTime) continue;
     const precip = precipMmAt(point.forecast, i);
-    const phase = isPrecipitating(precip) ? supportedPrecipitationType(buildProfile(point.forecast, i), terrainM) : null;
-    if (start <= coveredUntil && isPrecipitating(precip) && phase?.confidence === 'low') {
-      return 'Limited atmospheric detail · wintry outlook unavailable';
-    }
     if (start > coveredUntil || intervalEnd <= start || precip === null ||
-      (isPrecipitating(precip) && !phase)) {
+      (isPrecipitating(precip) && !terrainPrecipitationType(buildProfile(point.forecast, i), terrainM))) {
       return partialOutlook();
     }
     coveredUntil = intervalEnd;

@@ -1,35 +1,3 @@
-# Release history
-
-## 1000.1.10 — 20 October 2026
-
-Fixes reversed contour connections in diagonal saddle cells using the bilinear asymptotic decider. Adds three numerical regressions and live Norway/date-line contour checks. 122 unit tests, live desktop/mobile checks and independent MP4 decoding passed. [Release notes](../RELEASE_1000_1_10.md) · [QA report](../QA_1000_1_10.md).
-
-## 1000.1.9 — 20 October 2026
-
-Full-opacity precipitation colours with label-free relief derived from the loaded elevation data. Map and MP4 share the same shaded tiles. Windy's interface remains above them.
-
-119 unit tests, live desktop/mobile checks and independent MP4 decoding passed. [Release notes](../RELEASE_1000_1_9.md).
-
-## 1000.1.8 — 20 October 2026
-
-Automatically selects Windy's Precipitation type when opened or enabled. Lighter, 55% plugin shading retains underlying terrain visibility without an extra opaque map. Compact controls, smooth edges and streaming MP4 retained.
-
-117 unit tests, live desktop/mobile controls and layer behavior, complete MP4 download and independent decoding passed. [Release notes](../RELEASE_1000_1_8.md).
-
-## 1000.1.7 — 20 October 2026
-
-Preserves the selected Windy weather layer beneath translucent Wintry shading. Removes the extra opaque geographic overlay and automatic Precipitation type selection. Smooth edges, terrain diagnosis, compact controls and streaming MP4 remain.
-
-117 unit tests, live desktop/mobile selection and shading checks, complete MP4 download and independent H.264 decoding passed. [Release notes](../RELEASE_1000_1_7.md).
-
-## 1000.1.6 — 20 October 2026
-
-Continuous geographic terrain background, translucent precipitation colours, smooth wet/dry edges and decoded frame swaps. Repairs the black WebGL raster textures and close-zoom shading loss. Screen and MP4 rendering share the same background and opacity.
-
-117 unit tests, live Windy desktop/mobile-host checks and a complete independently decoded MP4 passed. [Release notes](../RELEASE_1000_1_6.md).
-
-## Archived notes
-
 # Wintry forecast for Windy
 
 A convenience-first Windy external plugin for terrain-aware winter-weather guidance using **ECMWF vertical profiles** and **Windy local terrain**.

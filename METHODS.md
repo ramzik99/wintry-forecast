@@ -1,4 +1,4 @@
-# Method and interpretation — 1000.1.3 candidate
+# Method and interpretation — 1000.1.0
 
 ## What the product estimates
 
@@ -26,56 +26,13 @@ remaining atmospheric profile at the local site height. Missing model terrain
 does not justify inventing a ground mask. Below-profile site values remain
 approximations and retain the existing limited-detail warning.
 
-For map shading/icons, horizontal interpolation uses the union of valid pressure
-levels in the surrounding columns. At each level, T, Td and height are weighted
-over the available above-model-ground contributors and divided by their summed
-weight before solving Tw. Previously, requiring every corner to contain a level
-could remove warm valley air whenever one mountain corner masked that level;
-the surviving cold upper levels could then produce large rectangular snow areas.
-Partial horizontal support sets a low-detail flag in the analysed column. This
-is an approximate spatial interpolation across terrain-masked samples, not an
-independently validated recovery of valley temperatures. It does not reuse
-below-model-ground fields, bridge an entirely missing column, infer missing
-precipitation or change point-profile precipitation amounts.
-
 The classifier integrates positive and negative wet-bulb areas in **°C·m**.
 The plugin's thresholds are heuristic, not a verified implementation of the
 published Bourgouin energy algorithm. Its high/medium/low labels are input-detail
 and threshold flags, **not calibrated probabilities**. Melting/refreezing layer
 methods are motivated by [Bourgouin (2000)](https://journals.ametsoc.org/view/journals/wefo/15/5/1520-0434_2000_015_0583_amtdpt_2_0_co_2.xml).
 
-## Public guidance guardrails
-
-The public map and point views use the classifier's six physical precipitation
-types. A low-detail diagnosis retains its estimated physical key and colour;
-point/forecast/sounding labels qualify it with “possible”. There is no seventh
-unresolved-type category, slate overlay, question-mark icon or exported legend
-entry. A profile too short to classify remains unavailable; no replacement type
-is invented. Exactly matching the lowest sampled height is not extrapolation.
-
-The existing low-detail flag still applies to site extrapolation or analysis-level
-spacing above 1400 m. Medium-detail/borderline labels also say “possible”; surface
-Tw within 0.2°C of a surface threshold sets this flag. These provisional rules
-are not validated probabilities. Map colours alone do not encode these flags.
-
-Liquid totals remain available independently of type. Wet intervals with low
-detail or no classifiable profile cannot support snowfall totals, zero-snow
-claims or a no-wintry-weather outlook. Event timing still excludes low-detail
-intervals and events do not bridge them. The change restores estimated type
-display without removing quantitative guards.
-
-The displayed thermal snowline is the resolved atmospheric wet-bulb-zero proxy.
-Public views/contours omit all-cold-column extrapolations and zero crossings wider
-than 1400 m. The raw research diagnostic remains unchanged. Contours do not fill
-missing samples. Snowline numbers use 100 m / 500 ft rounding; snowfall uses whole
-cm / in, with `<1` for smaller positive amounts. These are display steps, not error
-bounds. No claim of improved forecast skill follows from these changes. More
-withheld guidance is the deliberate trade-off for avoiding unsupported specificity.
-
 ## Snowfall versus the remaining new layer
-
-Only gross snowfall estimates are exposed in the public UI. The remaining-layer
-budget below is retained as research code; its uncalibrated output is not displayed.
 
 Gross estimated snowfall is `P3 * dt / 3 * f_s * SLR / 10` cm, where `f_s` is the
 snow fraction of liquid input (0–1), and `SLR` is fresh snow depth divided by liquid
@@ -100,9 +57,6 @@ energy/mass-balance models include substantially more processes:
 [NOAA NOHRSC model description](https://www.nohrsc.noaa.gov/technology/).
 
 ## Terrain-flow diagnostic
-
-This experiment is retained in source only. The public UI no longer computes or
-displays terrain-flow exposure, and no auxiliary exposure DEM requests are made.
 
 At an inspected point, a lazy DEM request samples four points 2 km away in the
 cardinal directions. Central differences give dimensionless broad terrain slopes

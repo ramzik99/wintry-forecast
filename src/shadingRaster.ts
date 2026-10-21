@@ -1,12 +1,12 @@
 import type { ProfilePoint } from './snowLevel';
 
 export type Weighted<T> = { value:T; weight:number };
-export const TILE_SIZE=256, RASTER_SAMPLES=128;
+export const TILE_SIZE=256, RASTER_SAMPLES=96;
 /** Infer physical Web-Mercator zoom from viewport geometry, independent of wrapper zoom conventions. */
 export function viewportRasterZoom(width:number,west:number,east:number,fallback:number){
   const span=east-west;
   const zoom=width>0&&span>0?Math.log2(width*360/(TILE_SIZE*span)):fallback;
-  return Math.max(0,Math.min(22,Math.ceil((Number.isFinite(zoom)?zoom:fallback)-1e-9)));
+  return Math.max(0,Math.min(22,Math.ceil(Number.isFinite(zoom)?zoom:fallback)));
 }
 export function mercatorY(lat:number){return Math.log(Math.tan(Math.PI/4+Math.max(-85,Math.min(85,lat))*Math.PI/360));}
 export function tilePosition(lat:number,lon:number,z:number){const n=2**z;return{x:(lon+180)/360*n,y:(1-mercatorY(lat)/Math.PI)/2*n};}
@@ -41,44 +41,14 @@ export function weightedScalar<T>(values:Weighted<T>[],read:(p:T)=>number|null){
 /** Fractional wet coverage softens wet/dry edges without blending phase colours or intensity bands. */
 export function wetCoverage<T>(values:Weighted<T>[],read:(p:T)=>number|null){return weightedScalar(values,p=>{const n=read(p);return n===null||!Number.isFinite(n)?null:n>0?1:0;});}
 
-// Each source profile is reused by thousands of raster pixels. Index its levels
-// once, without retaining old forecasts after their profile arrays are released.
-const profileLevels=new WeakMap<ProfilePoint[],Map<ProfilePoint['level'],ProfilePoint>>();
-function indexedProfile(profile:ProfilePoint[]){
-  let index=profileLevels.get(profile);
-  if(!index){index=new Map(profile.map(p=>[p.level,p]));profileLevels.set(profile,index);}
-  return index;
-}
-
-/** Interpolate available above-model-ground samples at each pressure, then solve Tw.
- * A high-terrain corner must not discard the valid lower-air levels from every
- * valley corner. Partial support is tracked for conservative detail flags. Entire
- * missing columns are not bridged; no below-ground field is reconstructed.
- */
+/** Interpolate continuous T/Td/height by pressure, then calculate Tw; never mix categorical colours. */
 export function blendedProfile(values:Weighted<ProfilePoint[]>[],wetBulb:(t:number,td:number,p:number)=>number):ProfilePoint[]{
-  if(!values.length||values.some(v=>!v.value.length))return [];
   if(values.length===1)return values[0].value;
   const result:ProfilePoint[]=[];
-  const columns=values.map(v=>({weight:v.weight,levels:indexedProfile(v.value)}));
-  const levels=new Map<ProfilePoint['level'],ProfilePoint>();
-  for(const column of columns)for(const [level,p] of column.levels)levels.set(level,p);
-  const total=values.reduce((sum,v)=>sum+v.weight,0);
-  for(const first of levels.values()){
-    let temp=0,dew=0,height=0,support=0;
-    for(const v of columns){
-      const p=v.levels.get(first.level);
-      if(!p||![p.tempC,p.dewpointC,p.heightM].every(Number.isFinite))continue;
-      support+=v.weight;temp+=v.weight*p.tempC;dew+=v.weight*p.dewpointC;height+=v.weight*p.heightM;
-    }
-    if(support<=1e-10||total<=0)continue;
-    temp/=support;dew=Math.min(temp,dew/support);height/=support;
-    const tw=wetBulb(temp,dew,first.pressureHpa);
-    if(Number.isFinite(tw))result.push({...first,tempC:temp,dewpointC:dew,heightM:height,wetBulbC:tw,spatialSupport:support/total});
+  for(const first of values[0].value){
+    let temp=0,dew=0,height=0,complete=true;
+    for(const v of values){const p=v.value.find(p=>p.level===first.level);if(!p){complete=false;break;}temp+=v.weight*p.tempC;dew+=v.weight*p.dewpointC;height+=v.weight*p.heightM;}
+    if(complete)result.push({...first,tempC:temp,dewpointC:Math.min(temp,dew),heightM:height,wetBulbC:wetBulb(temp,Math.min(temp,dew),first.pressureHpa)});
   }
   return result.sort((a,b)=>a.heightM-b.heightM);
-}
-
-/** Sample the same global pixel lattice on every tile and after panning. */
-export function rasterSampleLocation(tileX:number,tileY:number,zoom:number,x:number,y:number){
-  return tileLocation(tileX+(x+.5)/RASTER_SAMPLES,tileY+(y+.5)/RASTER_SAMPLES,zoom);
 }

@@ -21,7 +21,6 @@
   }
 
   export const onopen = (params: unknown) => {
-    plugin?.activatePrecipitationLayer?.();
     selectLocation(params);
   };
 

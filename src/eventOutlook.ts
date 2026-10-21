@@ -63,7 +63,7 @@ export function nextWintryEvent(
     const precip = series.amounts[i];
     if (!isPrecipitating(precip)) continue;
     const phase = series.thermalPhases[i];
-    if (!phase || phase.confidence === 'low' || !WINTRY_KEYS.has(phase.key)) continue;
+    if (!phase || !WINTRY_KEYS.has(phase.key)) continue;
     const hours = Math.max(0, Math.min(horizonEnd, intervalEnd) - Math.max(fromTime, times[i])) / 3600_000;
     if (hours > 0) qualifying.push({ index: i, time: times[i], precip, phase, liquidMm: precip * hours / 3 });
   }
@@ -73,7 +73,7 @@ export function nextWintryEvent(
   const event = [qualifying[0]];
   for (let i = 1; i < qualifying.length; i++) {
     const gapH = (qualifying[i].time - event[event.length - 1].time) / 3600_000;
-    if (gapH > MAX_EVENT_GAP_HOURS || qualifying[i].index !== event[event.length - 1].index + 1) break;
+    if (gapH > MAX_EVENT_GAP_HOURS) break;
     event.push(qualifying[i]);
   }
 
@@ -105,8 +105,7 @@ export function nextWintryEvent(
   // Do not present an event cut off by missing data as a complete storm total.
   const following = last.index + 1;
   const boundaryKnown = endTime >= horizonEnd || (following < times.length && times[following] === endTime &&
-    series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) ||
-      (series.thermalPhases[following] !== null && series.thermalPhases[following]?.confidence !== 'low')) &&
+    series.amounts[following] !== null && (!isPrecipitating(series.amounts[following]) || series.thermalPhases[following] !== null) &&
     supportedIntervalEnd(times,following,series.sourcePeriods) > endTime);
 
   return {

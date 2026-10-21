@@ -25,7 +25,6 @@ const fixture=(step=3)=>{
   const times=Array.from({length:144/step+1},(_,i)=>i*step*h),n=times.length;
   return {times,forecast:{__precipMm3h:Array(n).fill(6),__precipPeriodsH:Array(n).fill(step),
     'temp-850h':Array(n).fill(-5),'dewpoint-850h':Array(n).fill(-5),'gh-850h':Array(n).fill(1000),
-    'temp-800h':Array(n).fill(-7.5),'dewpoint-800h':Array(n).fill(-7.5),'gh-800h':Array(n).fill(2000),
     'temp-700h':Array(n).fill(-10),'dewpoint-700h':Array(n).fill(-10),'gh-700h':Array(n).fill(3000)}};
 };
 const close=(a,b)=>assert.ok(Math.abs(a-b)<1e-9,`${a} != ${b}`);
@@ -82,9 +81,9 @@ test('unknown wet phase/precipitation and unsupported time cannot become zero sn
     assert.equal(snowfallAtTime(series,7*h),null);
     assert.equal(snowForecastWindow(series,9*h,33*h).complete,true);
   }
-  const p=fixture();delete p.forecast['temp-700h'];delete p.forecast['temp-800h'];
+  const p=fixture();delete p.forecast['temp-700h'];
   assert.equal(snowForecastWindow(buildSnowForecast(p,1000),0,24*h).complete,false);
-  const dry=fixture();dry.forecast.__precipMm3h.fill(0);delete dry.forecast['temp-700h'];delete dry.forecast['temp-800h'];
+  const dry=fixture();dry.forecast.__precipMm3h.fill(0);delete dry.forecast['temp-700h'];
   assert.equal(snowForecastWindow(buildSnowForecast(dry,1000),0,24*h).snowfallCm,0);
   const gaps=fixture();gaps.forecast.__precipPeriodsH.fill(1);
   assert.equal(snowForecastWindow(buildSnowForecast(gaps,1000),0,24*h).complete,false);
@@ -94,7 +93,7 @@ test('unknown wet phase/precipitation and unsupported time cannot become zero sn
 
 test('a missing dry thermal profile leaves gross snowfall known but retained snow unknown',()=>{
   const p=fixture();p.forecast.__precipMm3h.fill(0);p.forecast.__precipMm3h[0]=6;
-  p.forecast['temp-700h'][1]=null;p.forecast['temp-800h'][1]=null;
+  p.forecast['temp-700h'][1]=null;
   const result=snowForecastWindow(buildSnowForecast(p,1000),0,24*h);
   assert.equal(result.complete,true);close(result.snowfallCm,9);assert.equal(result.remainingLayerCm,null);
   assert.equal(snowBudgetStep(0,null,{sweMm:5,depthCm:7},3).complete,false);
@@ -130,9 +129,9 @@ test('positive traces are wet consistently; negative source values stay unavaila
 
 test('below-model-terrain levels are masked only with explicit model terrain metadata',()=>{
   const p=fixture();p.forecast.__modelTerrainM=1500;
-  assert.deepEqual(buildProfile(p.forecast,0).map(v=>v.heightM),[2000,3000]);
+  assert.deepEqual(buildProfile(p.forecast,0).map(v=>v.heightM),[3000]);
   delete p.forecast.__modelTerrainM;
-  assert.deepEqual(buildProfile(p.forecast,0).map(v=>v.heightM),[1000,2000,3000]);
+  assert.deepEqual(buildProfile(p.forecast,0).map(v=>v.heightM),[1000,3000]);
   assert.ok(Number.isNaN(wetBulbFromDewpoint(NaN,0,850)));
   assert.ok(Number.isNaN(wetBulbFromDewpoint(0,-2,-1)));
 });

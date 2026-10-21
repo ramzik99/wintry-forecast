@@ -16,7 +16,6 @@
   </div>
 
   {#if sounding}
-    {#if embedded}<div class="selected-valid">{validLabel} · local time</div>{/if}
     <div class="phase-banner" class:dry={!sounding.phaseKey} class:snow={sounding.phaseKey === 'snow'} class:wet-snow={sounding.phaseKey === 'wet-snow'} class:mix={sounding.phaseKey === 'mix'} class:rain={sounding.phaseKey === 'rain'} class:ice={sounding.phaseKey === 'ice-pellets'} class:freezing-rain={sounding.phaseKey === 'freezing-rain'}>
       <small>At terrain</small><b>{sounding.phaseLabel}</b>
     </div>
@@ -39,6 +38,12 @@
           <line x1="48" x2="310" y1={sounding.terrainY} y2={sounding.terrainY} class="terrain-line" />
           <text x="306" y={Math.max(31, sounding.terrainY - 4)} text-anchor="end" class="terrain-text">terrain</text>
         {/if}
+        {#if sounding.snowlineY !== null}
+          <line x1="48" x2="310" y1={sounding.snowlineY} y2={sounding.snowlineY} class="snowline-marker" />
+          <rect x="222" y={Math.max(24, sounding.snowlineY - 10)} width="84" height="12" rx="3" class="snowline-tag-bg" />
+          <text x="302" y={Math.max(33, sounding.snowlineY - 1)} text-anchor="end" class="snowline-tag">Snowline {sounding.snowline}</text>
+        {/if}
+
         <polyline points={sounding.tempPoints} class="temp-line" />
         <polyline points={sounding.dewPoints} class="dew-line" />
         <polyline points={sounding.wetBulbPoints} class="wetbulb-line" />
@@ -65,7 +70,7 @@
     </div>
     <div class="stats">
       <span><small>Terrain Tw</small><b>{sounding.surfaceTw}</b></span>
-
+      <span><small>Snowline</small><b>{sounding.snowline}</b></span>
     </div>
     <div class="hint">Hover/touch for T, Td and Tw · +/- to zoom · Fit to reset</div>
   {:else}
@@ -76,8 +81,8 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
-  import { buildProfile, type ProfilePoint } from './snowLevel';
-  import { supportedPrecipitationType } from './precipType';
+  import { buildProfile, wetBulbZeroHeight, type ProfilePoint } from './snowLevel';
+  import { precipitationLabel, terrainPrecipitationType } from './precipType';
   import { terrainDiagnostics } from './terrainDiagnostics';
   import { precipMmAtTime, isPrecipitating } from './precip';
   import { conditionLabel } from './forecastStatus';
@@ -114,8 +119,8 @@
     nodes: { tx:number; dx:number; wx:number; y:number; pressure:number; height:number; temp:number; dew:number; wet:number }[];
     tempGrid: { x: number; value: number }[];
     pressureGrid: { y: number; label: string }[];
-    terrainY: number | null;
-    surfaceTw: string;
+    terrainY: number | null; snowlineY: number | null;
+    surfaceTw: string; snowline: string; warmEnergy: string; coldEnergy: string;
     phaseLabel: string; phaseDetail: string; phaseKey: string | null;
   };
 
@@ -249,7 +254,7 @@
       await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = () => reject(new Error('Sounding image failed')); img.src = url; });
       const canvas = document.createElement('canvas'); canvas.width = 1320; canvas.height = 1760; const ctx = canvas.getContext('2d'); if (!ctx) throw new Error('No canvas');
       ctx.fillStyle = '#0b141a'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#fff'; ctx.font = '700 48px Arial'; ctx.fillText('Precipitation type · sounding', 54, 70);
+      ctx.fillStyle = '#fff'; ctx.font = '700 48px Arial'; ctx.fillText('Wintry forecast · sounding', 54, 70);
       ctx.fillStyle = '#c3d0d7'; ctx.font = '26px Arial'; ctx.fillText(placeName || 'Selected point', 54, 112);
       ctx.fillStyle = '#6ecdf2'; ctx.font = '22px Arial'; ctx.fillText(validLabel, 54, 148);
       ctx.drawImage(img, 0, 170, 1320, 1560); URL.revokeObjectURL(url);
@@ -281,14 +286,20 @@
     const pressureGrid = profile.filter(node => pressureLevels.includes(node.pressureHpa))
       .map(node => ({y:y(node.heightM),label:String(node.pressureHpa)}));
     const terrainY = terrain !== null && Number.isFinite(terrain) && terrain >= bottomH && terrain <= topH ? y(terrain) : null;
+    const wbz = wetBulbZeroHeight(profile);
+    const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM) ? wbz.snowLevelM : null;
+    const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH ? y(snowlineM) : null;
     const precip = precipMmAtTime(p.forecast,p.times,target);
     const hasPrecip = isPrecipitating(precip);
     const diagnostics = terrain !== null && Number.isFinite(terrain) ? terrainDiagnostics(profile, terrain) : null;
-    const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? supportedPrecipitationType(profile, terrain) : null;
+    const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? terrainPrecipitationType(profile, terrain) : null;
     return {
-      tempPoints, dewPoints, wetBulbPoints, nodes, tempGrid, pressureGrid, terrainY,
+      tempPoints, dewPoints, wetBulbPoints, nodes, tempGrid, pressureGrid, terrainY, snowlineY,
       surfaceTw: diagnostics ? `${diagnostics.extrapolated ? '~' : ''}${formatTemperature(diagnostics.wetBulbC,units)}` : '—',
-      phaseLabel: phase ? `${phase.icon} ${phase.label}` : conditionLabel(precip,phase),
+      snowline: snowlineM === null ? '—' : (wbz.extrapolated?'~ ':'')+formatElevation(snowlineM,units),
+      warmEnergy: phase ? `${Math.round(phase.meltingDegreeMetres)} °C·m` : '—',
+      coldEnergy: phase ? `${Math.round(phase.refreezingDegreeMetres)} °C·m` : '—',
+      phaseLabel: phase ? `${phase.icon} ${precipitationLabel(phase)}` : conditionLabel(precip,phase),
       phaseDetail: phase ? phase.detail : conditionLabel(precip,phase),
       phaseKey: phase?.key ?? null,
     };
@@ -309,8 +320,6 @@
 </script>
 
 <style lang="less">
-  .selected-valid{font-size:12px;color:#b8cbd6;margin:6px 0}.sounding-embedded .actions button{min-width:40px;min-height:40px}.sounding-embedded .phase-banner small{font-size:10px}.sounding-embedded .phase-banner b{font-size:13px}.sounding-embedded .key{font-size:11px}.stats{grid-template-columns:1fr!important}
-
   .sounding-shell{position:fixed;z-index:10025;width:min(390px,calc(100vw - 12px));padding:10px 11px;border:1px solid rgba(139,213,244,.34);border-radius:13px;background:linear-gradient(180deg,rgba(14,23,30,.995),rgba(8,15,20,.995));color:#fff;box-shadow:0 16px 42px rgba(0,0,0,.56)}
   .sounding-shell.sounding-embedded{position:relative;left:auto!important;top:auto!important;z-index:auto;width:100%;box-sizing:border-box;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
   .sounding-shell.sounding-embedded .sounding-hover{top:54px;right:10px}
