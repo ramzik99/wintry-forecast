@@ -2,6 +2,9 @@ name: publish-plugin
 
 on:
   workflow_dispatch:
+  push:
+    branches: [publish-actual-terrain-1000-1-20]
+    paths: ['.github/workflows/publish-plugin.yml']
 
 jobs:
   publish-plugin:
@@ -10,6 +13,8 @@ jobs:
       WINDY_API_KEY: '${{ secrets.WINDY_API_KEY }}'
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: 4f3d47fa6a1c3a99149176f35524fa85570ac349
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -44,7 +49,7 @@ jobs:
 
           cd dist
           echo "Creating plugin archive..."
-          echo "{\"repositoryName\": \"${{ github.repository }}\", \"commitSha\": \"${{ github.sha }}\", \"repositoryOwner\": \"${{ github.repository_owner }}\"}" > /tmp/plugin-info.json
+          echo "{\"repositoryName\": \"${{ github.repository }}\", \"commitSha\": \"4f3d47fa6a1c3a99149176f35524fa85570ac349\", \"repositoryOwner\": \"${{ github.repository_owner }}\"}" > /tmp/plugin-info.json
           mv plugin.json /tmp/plugin.json
           jq -s '.[0] * .[1]' /tmp/plugin.json /tmp/plugin-info.json > plugin.json
           tar --exclude='*.map' -cf ../plugin.tar .
@@ -54,3 +59,11 @@ jobs:
             -X POST 'https://node.windy.com/plugins/v1.0/upload' \
             -H "x-windy-api-key: ${WINDY_API_KEY}" \
             -F "plugin_archive=@../plugin.tar"
+
+          echo
+
+      - name: Verify public plugin bundle
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-delay 5 'https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.20/plugin.min.js' -o /tmp/wintry-published.js
+          node --check /tmp/wintry-published.js
+          node --input-type=module -e "import fs from 'node:fs';const s=fs.readFileSync('/tmp/wintry-published.js','utf8');for(const t of ['1000.1.20','wintry-raster-tile','Atmospheric layer count','above terrain','ptype'])if(!s.includes(t))throw new Error('Missing '+t);console.log('Verified public 1000.1.20',s.length,'bytes');"
