@@ -358,3 +358,19 @@ test('1000 hPa upward retains and counts every supplied pressure layer even belo
  assert.equal(atmosphericLayerCount(data,0).pressure,14,'A supplied layer is counted even when one source value is missing');
  assert.equal(atmosphericLayerCount(data,0).plottedPressure,13,'Incomplete source values are never invented');
 });
+
+test('actual terrain clips underground layers and retains an interpolated surface boundary',async()=>{
+  const { terrainProfile, terrainPrecipitationType }=await import(moduleUrl('precipType'));
+  const node=(heightM,tw,pressureHpa)=>({level:`${pressureHpa}h`,heightM,pressureHpa,tempC:tw,dewpointC:tw,wetBulbC:tw});
+  const raw=[node(100,12,1000),node(1000,6,900),node(2000,-4,800),node(3500,-12,650)];
+  const clipped=terrainProfile(raw,1500);
+  assert.equal(clipped.points[0].heightM,1500);
+  assert.equal(clipped.points[0].wetBulbC,1);
+  assert.ok(clipped.points.every(p=>p.heightM>=1500));
+  assert.equal(raw.length,4,'source levels remain intact');
+  assert.deepEqual(terrainPrecipitationType(raw,1500),terrainPrecipitationType(clipped.points,1500));
+  const exact=terrainProfile(raw,1000);
+  assert.equal(exact.points.filter(p=>p.heightM===1000).length,1);
+  assert.equal(terrainProfile(raw,4000),null);
+  assert.equal(terrainProfile(raw,-400).points[0].heightM,-400);
+});

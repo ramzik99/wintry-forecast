@@ -16,7 +16,7 @@
   </div>
 
   {#if sounding}
-    <div class="layer-count" aria-label="Atmospheric layer count">{sounding.layerCount} pressure levels · {sounding.bottomPressure}–{sounding.topPressure} hPa{#if sounding.plottedCount !== sounding.layerCount} · {sounding.plottedCount} plotted{/if}</div>
+    <div class="layer-count" aria-label="Atmospheric layer count">{sounding.layerCount} supplied pressure levels · {sounding.bottomPressure}–{sounding.topPressure} hPa · {sounding.aboveTerrainCount} above terrain</div>
     <div class="phase-banner" class:dry={!sounding.phaseKey} class:snow={sounding.phaseKey === 'snow'} class:wet-snow={sounding.phaseKey === 'wet-snow'} class:mix={sounding.phaseKey === 'mix'} class:rain={sounding.phaseKey === 'rain'} class:ice={sounding.phaseKey === 'ice-pellets'} class:freezing-rain={sounding.phaseKey === 'freezing-rain'}>
       <small>At terrain</small><b>{sounding.phaseLabel}</b>
     </div>
@@ -45,7 +45,7 @@
           <text x="302" y={Math.max(33, sounding.snowlineY - 1)} text-anchor="end" class="snowline-tag">Snowline {sounding.snowline}</text>
         {/if}
 
-        <polyline points={sounding.tempPoints} class="temp-line" />
+        <polyline points={sounding.tempPoints} data-lowest-height={sounding.nodes[0]?.height} data-terrain-height={terrainM} class="temp-line" />
         <polyline points={sounding.dewPoints} class="dew-line" />
         <polyline points={sounding.wetBulbPoints} class="wetbulb-line" />
 
@@ -83,7 +83,7 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
   import { buildProfile, wetBulbZeroHeight, atmosphericLayerCount, type ProfilePoint } from './snowLevel';
-  import { precipitationLabel, terrainPrecipitationType } from './precipType';
+  import { precipitationLabel, terrainPrecipitationType, terrainProfile } from './precipType';
   import { terrainDiagnostics } from './terrainDiagnostics';
   import { precipMmAtTime, isPrecipitating } from './precip';
   import { conditionLabel } from './forecastStatus';
@@ -116,7 +116,7 @@
   let hoverNode: {tx:number;dx:number;wx:number;y:number;pressure:number;height:number;temp:number;dew:number;wet:number}|null=null;
 
   type SoundingData = {
-    layerCount:number;plottedCount:number;bottomPressure:number|null;topPressure:number|null;
+    layerCount:number;plottedCount:number;aboveTerrainCount:number;bottomPressure:number|null;topPressure:number|null;
     tempPoints: string; dewPoints: string; wetBulbPoints: string;
     nodes: { tx:number; dx:number; wx:number; y:number; pressure:number; height:number; temp:number; dew:number; wet:number }[];
     tempGrid: { x: number; value: number }[];
@@ -273,7 +273,14 @@
     try { profile = buildProfile(p.forecast, idx).filter(v => Number.isFinite(v.heightM) && Number.isFinite(v.tempC) && Number.isFinite(v.dewpointC) && Number.isFinite(v.wetBulbC)).sort((a, b) => a.heightM - b.heightM); } catch { return null; }
     if (profile.length < 3) return null;
 
-    const bottomH = Math.min(...profile.map(v => v.heightM)), topH = Math.max(...profile.map(v => v.heightM));
+    const sourceProfile = profile;
+    if (terrain === null || !Number.isFinite(terrain)) return null;
+    const clipped = terrainProfile(sourceProfile, terrain);
+    if (!clipped) return null;
+    profile = clipped.points;
+    // Keep the full supplied height axis so the actual terrain boundary is visible,
+    // while curves, dots and hover values contain no underground levels.
+    const bottomH = Math.min(terrain,...sourceProfile.map(v => v.heightM)), topH = Math.max(...sourceProfile.map(v => v.heightM));
     const temps = profile.flatMap(v => [v.tempC, v.dewpointC, v.wetBulbC]);
     let minT = Math.floor((Math.min(...temps) - 4) / 10) * 10, maxT = Math.ceil((Math.max(...temps) + 4) / 10) * 10;
     minT = Math.min(minT, -20); maxT = Math.max(maxT, 10); if (maxT - minT < 40) maxT = minT + 40;
@@ -285,19 +292,20 @@
     const nodes = profile.map(v => ({ tx:x(v.tempC), dx:x(v.dewpointC), wx:x(v.wetBulbC), y:y(v.heightM), pressure:v.pressureHpa, height:v.heightM, temp:v.tempC, dew:v.dewpointC, wet:v.wetBulbC }));
     const tempGrid: { x: number; value: number }[] = []; for (let t = Math.ceil(minT / 10) * 10; t <= maxT; t += 10) tempGrid.push({ x: x(t), value: t });
     const pressureLevels = [1000, 925, 850, 700, 500, 300, 200];
-    const pressureGrid = profile.filter(node => pressureLevels.includes(node.pressureHpa))
+    const pressureGrid = sourceProfile.filter(node => pressureLevels.includes(node.pressureHpa))
       .map(node => ({y:y(node.heightM),label:String(node.pressureHpa)}));
     const terrainY = terrain !== null && Number.isFinite(terrain) && terrain >= bottomH && terrain <= topH ? y(terrain) : null;
-    const wbz = wetBulbZeroHeight(profile);
+    const wbz = wetBulbZeroHeight(sourceProfile);
     const snowlineM = wbz.snowLevelM !== null && Number.isFinite(wbz.snowLevelM) ? wbz.snowLevelM : null;
     const snowlineY = snowlineM !== null && snowlineM >= bottomH && snowlineM <= topH ? y(snowlineM) : null;
     const precip = precipMmAtTime(p.forecast,p.times,target);
     const hasPrecip = isPrecipitating(precip);
-    const diagnostics = terrain !== null && Number.isFinite(terrain) ? terrainDiagnostics(profile, terrain) : null;
-    const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? terrainPrecipitationType(profile, terrain) : null;
+    const diagnostics = terrain !== null && Number.isFinite(terrain) ? terrainDiagnostics(sourceProfile, terrain) : null;
+    const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? terrainPrecipitationType(sourceProfile, terrain) : null;
     return {
       layerCount:atmosphericLayerCount(p.forecast,idx,profile.length).pressure,
       plottedCount:profile.length,
+      aboveTerrainCount:sourceProfile.filter(v=>v.heightM>=terrain).length,
       bottomPressure:atmosphericLayerCount(p.forecast,idx,profile.length).bottomHpa,
       topPressure:atmosphericLayerCount(p.forecast,idx,profile.length).topHpa,
       tempPoints, dewPoints, wetBulbPoints, nodes, tempGrid, pressureGrid, terrainY, snowlineY,

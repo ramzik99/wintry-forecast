@@ -59,6 +59,11 @@ try{
   const countText=await chart.getByLabel('Atmospheric layer count').innerText();
   const supplied=Number(countText.match(/^(\d+)/)?.[1]);
   assert.ok(supplied>=plotted&&plotted>=3,countText);
+  const line=chart.locator('.temp-line');
+  const lowest=Number(await line.getAttribute('data-lowest-height'));
+  const terrain=Number(await line.getAttribute('data-terrain-height'));
+  assert.ok(Number.isFinite(terrain)&&lowest>=terrain,'Sounding must stop at actual terrain');
+  assert.ok(countText.includes('above terrain'),countText);
   assert.ok(countText.includes('1000'),countText);
   console.log('Sounding levels',mobile?'mobile':'desktop',JSON.stringify({supplied,plotted,countText}));
   assert.ok(!/limited atmospheric|unresolved|type uncertain/i.test(await chart.innerText()));

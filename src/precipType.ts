@@ -47,7 +47,8 @@ function interpolateAtHeight(a: ProfilePoint, b: ProfilePoint, heightM: number):
   };
 }
 
-function terrainProfile(profile: ProfilePoint[], terrainM: number): { points: ProfilePoint[]; extrapolated: boolean } | null {
+/** Clip at actual local terrain, interpolating its boundary; never use model orography. */
+export function terrainProfile(profile: ProfilePoint[], terrainM: number): { points: ProfilePoint[]; extrapolated: boolean } | null {
   // Map columns are already valid and ordered. Keep that fast path allocation-free.
   let p=profile;
   for(let i=0;i<p.length;i++){
@@ -62,7 +63,7 @@ function terrainProfile(profile: ProfilePoint[], terrainM: number): { points: Pr
   let extrapolated = false;
   let start = 0;
 
-  if (terrainM <= p[0].heightM) {
+  if (terrainM < p[0].heightM) {
     surface = { ...p[0], heightM: terrainM };
     extrapolated = true;
   } else {

@@ -88,3 +88,6 @@ conditions; snow already on a slope cannot verify current falling phase or depth
 
 Runtime and synthetic tests check accounting, coverage and implementation. They
 cannot establish meteorological accuracy. No AI model has been trained here.
+
+
+Actual-terrain masking: source profiles retain all complete supplied pressure levels from 1000 hPa upward. Sounding curves and precipitation-type melting/refreezing stop at actual local terrain, with an interpolated terrain boundary. Model orography does not remove source levels. The atmospheric snowline diagnostic remains available for comparison with terrain.
