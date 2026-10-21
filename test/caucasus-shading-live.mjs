@@ -111,7 +111,7 @@ async function run(name,url,location=[43.05,44.0],zoom=8){
  await page.close();
 }
 try{
- await run('released','https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.17/plugin.min.js');
+ await run('released','https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.18/plugin.min.js');
  await run('fixed',pluginURL);
  console.log('Caucasus shading measurements',JSON.stringify(results));
  await writeFile('test-output/caucasus-measurements.json',JSON.stringify(results,null,2));

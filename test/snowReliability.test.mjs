@@ -127,9 +127,9 @@ test('positive traces are wet consistently; negative source values stay unavaila
   for(const field of ['__precipMm3h','past3hprecip-surface','precip'])assert.equal(precipMmAt({[field]:[-1]},0),null);
 });
 
-test('below-model-terrain levels are masked only with explicit model terrain metadata',()=>{
+test('all complete pressure levels remain visible regardless of model terrain metadata',()=>{
   const p=fixture();p.forecast.__modelTerrainM=1500;
-  assert.deepEqual(buildProfile(p.forecast,0).map(v=>v.heightM),[3000]);
+  assert.deepEqual(buildProfile(p.forecast,0).map(v=>v.heightM),[1000,3000]);
   delete p.forecast.__modelTerrainM;
   assert.deepEqual(buildProfile(p.forecast,0).map(v=>v.heightM),[1000,3000]);
   assert.ok(Number.isNaN(wetBulbFromDewpoint(NaN,0,850)));

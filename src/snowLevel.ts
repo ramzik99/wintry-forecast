@@ -174,7 +174,7 @@ export function wetBulbZeroHeight(profile: ProfilePoint[]): SnowLevelResult {
   return { snowLevelM: null, status: 'no-crossing' };
 }
 
-type ProfileMemo={terrain:number|null;entries:{level:PressureLevel;t:number|null;td:number|null;gh:number|null}[];profile:ProfilePoint[]};
+type ProfileMemo={entries:{level:PressureLevel;t:number|null;td:number|null;gh:number|null}[];profile:ProfilePoint[]};
 const profileMemo=new WeakMap<Record<string,unknown>,Map<number,ProfileMemo>>();
 
 export function buildProfile(
@@ -185,23 +185,22 @@ export function buildProfile(
   const levels=Object.keys(data).map(key=>/^temp-(\d+(?:\.\d+)?)h$/.exec(key))
     .filter((match):match is RegExpExecArray=>!!match)
     .map(match=>`${Number(match[1])}h` as PressureLevel)
-    .filter(level=>Number(level.slice(0,-1))>0&&Number(level.slice(0,-1))<=1100)
+    .filter(level=>Number(level.slice(0,-1))>0&&Number(level.slice(0,-1))<=1000)
     .sort((a,b)=>Number(b.slice(0,-1))-Number(a.slice(0,-1)));
   const entries=levels.map(level=>({level,t:valueAt(data[`temp-${level}`],timeIndex),
     td:valueAt(data[`dewpoint-${level}`],timeIndex),gh:valueAt(data[`gh-${level}`],timeIndex)}));
   // Source values are checked before reusing a profile, including mutated feeds.
   // This cache is shared by map, chart, tooltip and sounding calculations.
-  // Explicit source-model terrain, never the DEM/site elevation. Pressure-level
-  // fields beneath model ground can contain extrapolated values, not real air.
-  const modelTerrainM = valueAt(data.__modelTerrainM,0);
+  // Retain all complete supplied pressure levels, including values below model
+  // terrain. No orography mask is applied to the source profile.
 
   let cached=profileMemo.get(data);
   const previous=cached?.get(timeIndex);
-  if(previous&&previous.terrain===modelTerrainM&&previous.entries.length===entries.length&&
+  if(previous&&previous.entries.length===entries.length&&
     entries.every((e,i)=>{const p=previous.entries[i];return e.level===p.level&&e.t===p.t&&e.td===p.td&&e.gh===p.gh;}))return previous.profile;
   for (const {level,t,td,gh} of entries) {
 
-    if (t === null || td === null || gh === null || (modelTerrainM !== null && gh < modelTerrainM)) continue;
+    if (t === null || td === null || gh === null) continue;
 
     const tempC = t > 150 ? t - 273.15 : t;
     const dewpointC = Math.min(tempC,td > 150 ? td - 273.15 : td);
@@ -228,7 +227,7 @@ export function buildProfile(
 
   profile.sort((a,b)=>a.heightM-b.heightM);
   if(!cached){cached=new Map();profileMemo.set(data,cached);}
-  cached.set(timeIndex,{terrain:modelTerrainM,entries,profile});
+  cached.set(timeIndex,{entries,profile});
   while(cached.size>64)cached.delete(cached.keys().next().value!);
   return profile;
 }
@@ -259,4 +258,14 @@ export function valueAt(value: unknown, i: number): number | null {
   }
 
   return null;
+}
+
+/** Count unique supplied pressure levels from 1000 hPa upward; never count variables as layers. */
+export function atmosphericLayerCount(data:Record<string,unknown>,timeIndex:number,plottedPressure=buildProfile(data,timeIndex).length){
+  const levels=new Set(Object.keys(data).flatMap(key=>{
+    const match=/^(?:temp|dewpoint|gh|rh|wind_u|wind_v)-(\d+(?:\.\d+)?)h$/.exec(key),pressure=match?Number(match[1]):NaN;
+    return pressure>0&&pressure<=1000?[pressure]:[];
+  }));
+  const pressures=[...levels];
+  return{pressure:levels.size,plottedPressure,bottomHpa:pressures.length?Math.max(...pressures):null,topHpa:pressures.length?Math.min(...pressures):null};
 }

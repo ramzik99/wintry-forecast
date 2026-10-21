@@ -55,7 +55,12 @@ try{
   if(mobile)await soundingTab.tap();else await soundingTab.click();
   const svg=chart.getByRole('img',{name:'Temperature, dew point and wet-bulb vertical profile'});
   await svg.waitFor();
-  assert.ok((await chart.locator('.temp-line').getAttribute('points')).split(' ').length>=3);
+  const plotted=(await chart.locator('.temp-line').getAttribute('points')).trim().split(' ').length;
+  const countText=await chart.getByLabel('Atmospheric layer count').innerText();
+  const supplied=Number(countText.match(/^(\d+)/)?.[1]);
+  assert.ok(supplied>=plotted&&plotted>=3,countText);
+  assert.ok(countText.includes('1000'),countText);
+  console.log('Sounding levels',mobile?'mobile':'desktop',JSON.stringify({supplied,plotted,countText}));
   assert.ok(!/limited atmospheric|unresolved|type uncertain/i.test(await chart.innerText()));
   const zoom=chart.getByRole('button',{name:'Zoom in',exact:true}),fit=chart.getByRole('button',{name:'Fit sounding',exact:true});
   if(mobile)await zoom.tap();else await zoom.click();

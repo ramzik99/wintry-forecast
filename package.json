@@ -1,6 +1,6 @@
 {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.1.18",
+  "version": "1000.1.19",
   "description": "Snowline contours and terrain-aware precipitation type, with point forecasts and soundings.",
   "main": "dist/plugin.min.js",
   "type": "module",

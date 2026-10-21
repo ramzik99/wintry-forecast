@@ -20,11 +20,13 @@ map, point forecast, sounding and event detection.
 ## Thermodynamics and precipitation type
 
 The pressure-aware numerical wet-bulb calculation and phase thresholds are
-unchanged. When explicitly supplied, source-model terrain masks pressure levels
-below model ground before diagnostics. This is separate from clipping the
-remaining atmospheric profile at the local site height. Missing model terrain
-does not justify inventing a ground mask. Below-profile site values remain
-approximations and retain the existing limited-detail warning.
+unchanged. All complete supplied pressure levels from 1000 hPa upward are retained,
+including levels below source-model terrain. Below-model-ground source values may
+be extrapolated. The sounding counts all supplied pressure levels and shows how
+many can be plotted when source values are incomplete. The surface entry is
+separate and is not counted as a pressure level. Precipitation diagnosis follows
+the retained column down to local site terrain; wet/dry shading still uses
+forecast precipitation.
 
 The classifier integrates positive and negative wet-bulb areas in **°C·m**.
 The plugin's thresholds are heuristic, not a verified implementation of the

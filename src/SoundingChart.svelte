@@ -16,6 +16,7 @@
   </div>
 
   {#if sounding}
+    <div class="layer-count" aria-label="Atmospheric layer count">{sounding.layerCount} pressure levels · {sounding.bottomPressure}–{sounding.topPressure} hPa{#if sounding.plottedCount !== sounding.layerCount} · {sounding.plottedCount} plotted{/if}</div>
     <div class="phase-banner" class:dry={!sounding.phaseKey} class:snow={sounding.phaseKey === 'snow'} class:wet-snow={sounding.phaseKey === 'wet-snow'} class:mix={sounding.phaseKey === 'mix'} class:rain={sounding.phaseKey === 'rain'} class:ice={sounding.phaseKey === 'ice-pellets'} class:freezing-rain={sounding.phaseKey === 'freezing-rain'}>
       <small>At terrain</small><b>{sounding.phaseLabel}</b>
     </div>
@@ -81,7 +82,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import store from '@windy/store';
-  import { buildProfile, wetBulbZeroHeight, type ProfilePoint } from './snowLevel';
+  import { buildProfile, wetBulbZeroHeight, atmosphericLayerCount, type ProfilePoint } from './snowLevel';
   import { precipitationLabel, terrainPrecipitationType } from './precipType';
   import { terrainDiagnostics } from './terrainDiagnostics';
   import { precipMmAtTime, isPrecipitating } from './precip';
@@ -115,6 +116,7 @@
   let hoverNode: {tx:number;dx:number;wx:number;y:number;pressure:number;height:number;temp:number;dew:number;wet:number}|null=null;
 
   type SoundingData = {
+    layerCount:number;plottedCount:number;bottomPressure:number|null;topPressure:number|null;
     tempPoints: string; dewPoints: string; wetBulbPoints: string;
     nodes: { tx:number; dx:number; wx:number; y:number; pressure:number; height:number; temp:number; dew:number; wet:number }[];
     tempGrid: { x: number; value: number }[];
@@ -294,6 +296,10 @@
     const diagnostics = terrain !== null && Number.isFinite(terrain) ? terrainDiagnostics(profile, terrain) : null;
     const phase = hasPrecip && terrain !== null && Number.isFinite(terrain) ? terrainPrecipitationType(profile, terrain) : null;
     return {
+      layerCount:atmosphericLayerCount(p.forecast,idx,profile.length).pressure,
+      plottedCount:profile.length,
+      bottomPressure:atmosphericLayerCount(p.forecast,idx,profile.length).bottomHpa,
+      topPressure:atmosphericLayerCount(p.forecast,idx,profile.length).topHpa,
       tempPoints, dewPoints, wetBulbPoints, nodes, tempGrid, pressureGrid, terrainY, snowlineY,
       surfaceTw: diagnostics ? `${diagnostics.extrapolated ? '~' : ''}${formatTemperature(diagnostics.wetBulbC,units)}` : '—',
       snowline: snowlineM === null ? '—' : (wbz.extrapolated?'~ ':'')+formatElevation(snowlineM,units),
@@ -320,6 +326,8 @@
 </script>
 
 <style lang="less">
+ .layer-count{font-size:10px;line-height:1.4;color:#a8b7c0;margin:4px 0;}
+
   .sounding-shell{position:fixed;z-index:10025;width:min(390px,calc(100vw - 12px));padding:10px 11px;border:1px solid rgba(139,213,244,.34);border-radius:13px;background:linear-gradient(180deg,rgba(14,23,30,.995),rgba(8,15,20,.995));color:#fff;box-shadow:0 16px 42px rgba(0,0,0,.56)}
   .sounding-shell.sounding-embedded{position:relative;left:auto!important;top:auto!important;z-index:auto;width:100%;box-sizing:border-box;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
   .sounding-shell.sounding-embedded .sounding-hover{top:54px;right:10px}

@@ -11,7 +11,7 @@ function moduleUrl(name, replacements = []) {
   return `data:text/javascript;base64,${Buffer.from(js).toString('base64')}`;
 }
 const coreUrl = moduleUrl('snowLevel');
-const { wetBulbZeroHeight, buildProfile } = await import(coreUrl);
+const { wetBulbZeroHeight, buildProfile, atmosphericLayerCount } = await import(coreUrl);
 const { valueAt } = await import(coreUrl);
 const { buildForecastTimes, intervalEnd, coversWindow } = await import(moduleUrl('forecastTimeline'));
 const { contourLinesForLevels, contourPolylines: singleLevelLines } = await import(moduleUrl('contours'));
@@ -344,4 +344,17 @@ test('all complete supplied pressure levels are used and cached profiles track s
  d['temp-975h'][0]=279.15;
  const changed=buildProfile(d,0);
  assert.notEqual(changed,a);assert.ok(changed[0].wetBulbC>a[0].wetBulbC);
+});
+
+test('1000 hPa upward retains and counts every supplied pressure layer even below model terrain',()=>{
+ const levels=[1000,950,925,900,850,800,700,600,500,400,300,250,200,150],data={__modelTerrainM:4000,
+  'temp-surface':[280],'dewpoint-surface':[278],'gh-surface':[null],
+  'temp-1100h':[290],'dewpoint-1100h':[288],'gh-1100h':[-500]};
+ levels.forEach((p,i)=>{data['temp-'+p+'h']=[280-i*5];data['dewpoint-'+p+'h']=[278-i*5];data['gh-'+p+'h']=[i*1000];});
+ const profile=buildProfile(data,0),counts=atmosphericLayerCount(data,0);
+ assert.equal(profile.length,14);assert.equal(profile[0].pressureHpa,1000);assert.equal(profile.at(-1).pressureHpa,150);
+ assert.deepEqual(counts,{pressure:14,plottedPressure:14,bottomHpa:1000,topHpa:150});
+ data['dewpoint-950h'][0]=null;
+ assert.equal(atmosphericLayerCount(data,0).pressure,14,'A supplied layer is counted even when one source value is missing');
+ assert.equal(atmosphericLayerCount(data,0).plottedPressure,13,'Incomplete source values are never invented');
 });
