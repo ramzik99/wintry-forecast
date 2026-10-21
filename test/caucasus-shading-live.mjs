@@ -22,16 +22,19 @@ async function settled(){
 async function run(name,url,location=[43.05,44.0],zoom=8){
  page=await browser.newPage({viewport:{width:1910,height:870}});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ page.on('console',m=>{if(m.text().startsWith('Live profile source'))console.log(m.text());});
  await page.goto('https://www.windy.com/',{waitUntil:'domcontentloaded',timeout:60000});
  await page.waitForFunction(()=>window.W?.map?.map?.maplibreMap&&window.W?.fetch?.getMeteogramForecastData,null,{timeout:60000});
- await page.evaluate(({location,zoom})=>{
+ await page.evaluate(({location,zoom,name})=>{
   localStorage.setItem('wintry:prefs:v1',JSON.stringify({enabled:true,showShading:true,showContours:false,showIcons:false}));
-  W.store.set('particlesAnim','off');W.store.set('overlay','ptype');W.map.map.setView(location,zoom,{animate:false});
- },{location,zoom});
+  W.store.set('particlesAnim','off');W.store.set('overlay',name==='fixed'?'temp':'ptype');W.map.map.setView(location,zoom,{animate:false});
+ },{location,zoom,name});
  await page.waitForTimeout(1500);
  const valid=await page.evaluate(async({timelineURL,precipURL,selectedURL,location})=>{
   const {buildForecastTimes}=await import(timelineURL),{precipMmAt}=await import(precipURL),{loadSelectedPrecipFields,alignSelectedPrecipFields}=await import(selectedURL);
   const r=await W.fetch.getMeteogramForecastData('ecmwf',{lat:location[0],lon:location[1],step:1});
+  console.log('Live profile source',JSON.stringify({header:r.data.header,keys:Object.keys(r.data.data),
+    levels:Object.keys(r.data.data).filter(k=>/^temp-/.test(k)),surfaceTemperature:r.data.data['temp-surface']?.[0],surfaceDewpoint:r.data.data['dewpoint-surface']?.[0],surfaceHeight:r.data.data['gh-surface']?.[0]}));
   const f=r.data.data,ref=Date.parse(r.data.header.refTime),times=buildForecastTimes(f,ref);
   if(!times.some((_,i)=>precipMmAt(f,i)>0))Object.assign(f,alignSelectedPrecipFields(await loadSelectedPrecipFields(...location),times,ref));
   const requested=Date.parse('2026-10-21T09:00:00Z');
@@ -49,11 +52,24 @@ async function run(name,url,location=[43.05,44.0],zoom=8){
   await host.open({params:{},disableOpeningAnimation:true});
  },url);
  await settled();
+ if(name==='fixed')assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype');
  results[name]={loadMs:Date.now()-start,requests,elevations,valid,tiles:await page.locator('.wintry-raster-tile').count()};
  assert.ok(results[name].tiles>0,'Wet Caucasus forecast must draw shading');
  await page.screenshot({path:'test-output/caucasus-'+name+'.png'});
+ // Measure the complete point forecast, including the graph, then an identical repeat.
+ for(const warm of [false,true]){
+  const started=Date.now();
+  await page.evaluate(location=>shadingHost.svelteApp.onopen({lat:location[0],lon:location[1]}),location);
+  await page.locator('.point-tools').waitFor({timeout:45000});
+  await page.locator('.point-tools button').filter({hasText:'Forecast'}).click();
+  const chart=page.getByRole('dialog',{name:'Wintry forecast graph'});
+  await chart.getByRole('img',{name:'Terrain-aware wintry forecast through 144 hours'}).waitFor();
+  results[name][warm?'repeatForecastMs':'pointForecastMs']=Date.now()-started;
+  await chart.getByRole('button',{name:'Close graph',exact:true}).click();
+  await chart.waitFor({state:'detached'});
+ }
  if(name==='fixed'){
-  assert.equal(elevations,0,'Viewport shading must not request individual point elevations');
+  assert.equal(results[name].elevations,0,'Viewport shading must not request individual point elevations');
   assert.equal(await page.locator('.wintry-geographic-tile').count(),0);
   // Real atmospheric columns: check jumps on either side of weather-cell boundaries.
   const diagnostics=await page.evaluate(async({rasterURL,snowURL,phaseURL})=>{
@@ -65,7 +81,7 @@ async function run(name,url,location=[43.05,44.0],zoom=8){
     const f={...r.data.data,__modelTerrainM:r.data.header.modelElevation};
     return{lat,lon,profile:buildProfile(f,0)};
    }))));
-   const locate=weatherInterpolator(grid),blend=continuousProfileBlender();let oldJumps=0,newJumps=0,maxOld=0,maxNew=0;
+   const locate=weatherInterpolator(grid),blend=continuousProfileBlender({reuseResult:true});let oldJumps=0,newJumps=0,maxOld=0,maxNew=0;
    for(const lon of longitudes.slice(1,-1))for(let lat=42.65;lat<43.4;lat+=.05){
     const values=x=>locate(lat,x)?.map(v=>({value:v.value.profile,weight:v.weight}));
     const left=values(lon-1e-7),right=values(lon+1e-7);if(!left||!right)continue;
@@ -95,7 +111,7 @@ async function run(name,url,location=[43.05,44.0],zoom=8){
  await page.close();
 }
 try{
- await run('released','https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.16/plugin.min.js');
+ await run('released','https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.17/plugin.min.js');
  await run('fixed',pluginURL);
  console.log('Caucasus shading measurements',JSON.stringify(results));
  await writeFile('test-output/caucasus-measurements.json',JSON.stringify(results,null,2));

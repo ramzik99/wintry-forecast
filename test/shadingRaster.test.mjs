@@ -94,3 +94,15 @@ test('direct DEM raster matches geographic sampling across DEM tile seams',()=>{
  }
  dem.destroy();
 });
+
+test('borrowed map profiles preserve numeric results while reusing storage and extra levels',()=>{
+ const p=(level,heightM,t)=>({level,heightM,tempC:t,dewpointC:t-1,wetBulbC:t-.5,pressureHpa:Number(level.slice(0,-1))});
+ const profile=[p('975h',200,4),p('850h',1500,-2),p('100h',16000,-55)];
+ const levels=['1000h','975h','850h','700h','100h'];
+ const normal=continuousProfileBlender({levels}),fast=continuousProfileBlender({levels,reuseResult:true});
+ const values=[{value:profile,weight:1}];
+ const a=fast(values);assert.deepEqual(a,normal(values));
+ const copy=structuredClone(a);
+ const b=fast(values);assert.equal(a,b);assert.deepEqual(b,copy);
+ assert.ok(b.some(p=>p.level==='975h'));assert.ok(b.some(p=>p.level==='100h'));
+});

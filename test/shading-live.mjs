@@ -31,7 +31,7 @@ async function mount(){
  },pluginURL);
  await settled();
  assert.equal(await page.locator('.wintry-terrain-tile').count(),0,'Plugin must not cover Windy with an extra base map');
- assert.equal(await page.evaluate(()=>W.store.get('overlay')),'temp','Opening preserves the selected Windy layer');
+ assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype','Opening selects precipitation type automatically');
  assert.equal(await page.locator('.wintry-geographic-tile').count(),0,'No duplicate geographic map over shading');
 }
 async function colour(x,y){

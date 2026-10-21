@@ -31,7 +31,6 @@ const MIN_MELTING_DM = 150;
 const PARTIAL_MELTING_DM = 500;
 const FULL_MELTING_DM = 1100;
 const ICE_PELLET_REFREEZE_DM = 800;
-const MAX_ANALYSIS_DEPTH_M = 5500;
 
 function interpolateAtHeight(a: ProfilePoint, b: ProfilePoint, heightM: number): ProfilePoint {
   const dz = b.heightM - a.heightM;
@@ -49,9 +48,13 @@ function interpolateAtHeight(a: ProfilePoint, b: ProfilePoint, heightM: number):
 }
 
 function terrainProfile(profile: ProfilePoint[], terrainM: number): { points: ProfilePoint[]; extrapolated: boolean } | null {
-  const p = profile
-    .filter(v => Number.isFinite(v.heightM) && Number.isFinite(v.wetBulbC))
-    .sort((a, b) => a.heightM - b.heightM);
+  // Map columns are already valid and ordered. Keep that fast path allocation-free.
+  let p=profile;
+  for(let i=0;i<p.length;i++){
+    if(!Number.isFinite(p[i].heightM)||!Number.isFinite(p[i].wetBulbC)||(i>0&&p[i].heightM<p[i-1].heightM)){
+      p=profile.filter(v=>Number.isFinite(v.heightM)&&Number.isFinite(v.wetBulbC)).sort((a,b)=>a.heightM-b.heightM);break;
+    }
+  }
   if (p.length < 2 || !Number.isFinite(terrainM)) return null;
   if (terrainM > p[p.length - 1].heightM) return null;
 
@@ -75,8 +78,8 @@ function terrainProfile(profile: ProfilePoint[], terrainM: number): { points: Pr
     start = bracket + 1;
   }
 
-  const top = terrainM + MAX_ANALYSIS_DEPTH_M;
-  const points = [surface, ...p.slice(start).filter(v => v.heightM > terrainM + 1 && v.heightM <= top)];
+  const points=[surface];
+  for(let i=start;i<p.length;i++)if(p[i].heightM>terrainM+1)points.push(p[i]);
   if (points.length < 2) return null;
   return { points, extrapolated };
 }
@@ -147,8 +150,8 @@ export function terrainPrecipitationType(profile: ProfilePoint[], terrainM: numb
   const points = prepared.points;
   const surfaceTw = points[0].wetBulbC;
 
-  const warmPoints = points.filter(v => v.wetBulbC > WARM_NODE_C);
-  const warmBottom = warmPoints.length ? Math.min(...warmPoints.map(v => v.heightM)) : Infinity;
+  let warmBottom=Infinity;
+  for(const point of points)if(point.wetBulbC>WARM_NODE_C){warmBottom=point.heightM;break;}
   const warmDM = integrateSigned(points, 'positive');
   const coldDM = Number.isFinite(warmBottom) ? integrateSigned(points, 'negative', warmBottom) : integrateSigned(points, 'negative');
   const confidence = classifyConfidence(points, prepared.extrapolated, warmDM, coldDM);

@@ -321,3 +321,27 @@ test('cached profiles expire and an older model run cannot replace a newer run',
   assert.equal(isOlderRun(run,run+3600000),true);
   assert.equal(isOlderRun(run+3600000,run),false);
 });
+
+test('snowline resolves elevated melting layers above a cold surface',()=>{
+ const p=[point(0,-3),point(1000,2),point(2000,-2),point(9000,-45)];
+ assert.equal(wetBulbZeroHeight(p).snowLevelM,1500);
+ p[0]=point(0,0);
+ assert.equal(wetBulbZeroHeight(p).snowLevelM,1500);
+});
+test('precipitation diagnosis includes melting above the previous 5.5 km cutoff',()=>{
+ const p=[point(0,-2),point(1000,-4),point(6000,3),point(7000,-5),point(10000,-35)];
+ const result=terrainPrecipitationType(p,0);
+ assert.ok(result.meltingDegreeMetres>1000);
+ assert.notEqual(result.key,'snow');
+});
+test('all complete supplied pressure levels are used and cached profiles track source changes',()=>{
+ const d={'temp-975h':[275.15],'dewpoint-975h':[274.15],'gh-975h':[250],
+          'temp-775h':[270.15],'gh-775h':[2500],
+          'temp-100h':[215.15],'dewpoint-100h':[212.15],'gh-100h':[16000]};
+ const a=buildProfile(d,0),b=buildProfile(d,0);
+ assert.deepEqual(a.map(p=>p.level),['975h','100h']);
+ assert.equal(a,b);
+ d['temp-975h'][0]=279.15;
+ const changed=buildProfile(d,0);
+ assert.notEqual(changed,a);assert.ok(changed[0].wetBulbC>a[0].wetBulbC);
+});

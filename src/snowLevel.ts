@@ -4,7 +4,7 @@ export const PRESSURE_LEVELS = [
   '300h', '250h', '200h', '150h'
 ] as const;
 
-export type PressureLevel = typeof PRESSURE_LEVELS[number];
+export type PressureLevel = `${number}h`;
 
 export interface ProfilePoint {
   level: PressureLevel;
@@ -131,23 +131,7 @@ export function wetBulbZeroHeight(profile: ProfilePoint[]): SnowLevelResult {
     .sort((a, b) => a.heightM - b.heightM);
 
   if (!p.length) return { snowLevelM: null, status: 'insufficient-profile' };
-  if (p[0].wetBulbC === 0) {
-    return { snowLevelM: p[0].heightM, status: 'resolved', lower: p[0], upper: p[0] };
-  }
-  // In an already-cold lowest level the true WBZ is below the resolved
-  // profile. Retain that status, but provide a bounded operational estimate so
-  // the map, chart and terrain comparison do not develop artificial gaps.
-  if (p[0].wetBulbC < 0) {
-    return {
-      snowLevelM: coldColumnSnowLevel(p),
-      status: 'below-lowest-level',
-      upperBoundM: p[0].heightM,
-      belowLowestLevel: true,
-      extrapolated: true,
-    };
-  }
-  if (p.length < 2) return { snowLevelM: null, status: 'insufficient-profile' };
-
+  // Inspect elevated melting layers before treating a cold surface as a cold column.
   for (let i = 0; i < p.length - 1; i++) {
     const lower = p[i];
     const upper = p[i + 1];
@@ -169,22 +153,53 @@ export function wetBulbZeroHeight(profile: ProfilePoint[]): SnowLevelResult {
     }
   }
 
+  if (p[0].wetBulbC === 0) {
+    return { snowLevelM: p[0].heightM, status: 'resolved', lower: p[0], upper: p[0] };
+  }
+  // In an already-cold lowest level the true WBZ is below the resolved
+  // profile. Retain that status, but provide a bounded operational estimate so
+  // the map, chart and terrain comparison do not develop artificial gaps.
+  if (p.every(v => v.wetBulbC <= 0)) {
+    return {
+      snowLevelM: coldColumnSnowLevel(p),
+      status: 'below-lowest-level',
+      upperBoundM: p[0].heightM,
+      belowLowestLevel: true,
+      extrapolated: true,
+    };
+  }
+  if (p.length < 2) return { snowLevelM: null, status: 'insufficient-profile' };
+
+
   return { snowLevelM: null, status: 'no-crossing' };
 }
+
+type ProfileMemo={terrain:number|null;entries:{level:PressureLevel;t:number|null;td:number|null;gh:number|null}[];profile:ProfilePoint[]};
+const profileMemo=new WeakMap<Record<string,unknown>,Map<number,ProfileMemo>>();
 
 export function buildProfile(
   data: Record<string, unknown>,
   timeIndex: number
 ): ProfilePoint[] {
   const profile: ProfilePoint[] = [];
+  const levels=Object.keys(data).map(key=>/^temp-(\d+(?:\.\d+)?)h$/.exec(key))
+    .filter((match):match is RegExpExecArray=>!!match)
+    .map(match=>`${Number(match[1])}h` as PressureLevel)
+    .filter(level=>Number(level.slice(0,-1))>0&&Number(level.slice(0,-1))<=1100)
+    .sort((a,b)=>Number(b.slice(0,-1))-Number(a.slice(0,-1)));
+  const entries=levels.map(level=>({level,t:valueAt(data[`temp-${level}`],timeIndex),
+    td:valueAt(data[`dewpoint-${level}`],timeIndex),gh:valueAt(data[`gh-${level}`],timeIndex)}));
+  // Source values are checked before reusing a profile, including mutated feeds.
+  // This cache is shared by map, chart, tooltip and sounding calculations.
   // Explicit source-model terrain, never the DEM/site elevation. Pressure-level
   // fields beneath model ground can contain extrapolated values, not real air.
   const modelTerrainM = valueAt(data.__modelTerrainM,0);
 
-  for (const level of PRESSURE_LEVELS) {
-    const t = valueAt(data[`temp-${level}`], timeIndex);
-    const td = valueAt(data[`dewpoint-${level}`], timeIndex);
-    const gh = valueAt(data[`gh-${level}`], timeIndex);
+  let cached=profileMemo.get(data);
+  const previous=cached?.get(timeIndex);
+  if(previous&&previous.terrain===modelTerrainM&&previous.entries.length===entries.length&&
+    entries.every((e,i)=>{const p=previous.entries[i];return e.level===p.level&&e.t===p.t&&e.td===p.td&&e.gh===p.gh;}))return previous.profile;
+  for (const {level,t,td,gh} of entries) {
 
     if (t === null || td === null || gh === null || (modelTerrainM !== null && gh < modelTerrainM)) continue;
 
@@ -211,7 +226,11 @@ export function buildProfile(
     });
   }
 
-  return profile.sort((a, b) => a.heightM - b.heightM);
+  profile.sort((a,b)=>a.heightM-b.heightM);
+  if(!cached){cached=new Map();profileMemo.set(data,cached);}
+  cached.set(timeIndex,{terrain:modelTerrainM,entries,profile});
+  while(cached.size>64)cached.delete(cached.keys().next().value!);
+  return profile;
 }
 
 /** Accept Arrays, TypedArrays, generic array-like values and scalars. */

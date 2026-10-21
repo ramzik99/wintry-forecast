@@ -2,7 +2,7 @@ import type { ExternalPluginConfig } from '@windy/interfaces';
 
 const config: ExternalPluginConfig = {
   name: 'windy-plugin-snowline-map-100m',
-  version: '1000.1.17',
+  version: '1000.1.18',
   icon: '❄️',
   title: 'Wintry forecast',
   description: 'Snowline contours and precipitation-type shading, with point forecasts and soundings.',
