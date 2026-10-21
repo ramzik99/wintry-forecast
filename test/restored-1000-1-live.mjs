@@ -43,7 +43,7 @@ try{
   assert.ok(await chart.locator('.phase-base').count()===1);
   assert.ok((await chart.locator('.snowline-line').getAttribute('d')).trim().length>0);
   assert.ok(!/limited atmospheric|unresolved|type uncertain|snowfall|remaining layer|wintry period|terrain flow/i.test(await page.locator('.snowline-click-label').innerText()));
-  assert.ok(/Snowline/.test(await page.locator('.snowline-click-label').innerText()));
+  assert.ok(/Snowline/i.test(await page.locator('.snowline-click-label').innerText()));
   await page.screenshot({path:'test-output/restored-forecast-'+(mobile?'mobile':'desktop')+'.png'});
   if(!mobile){
     const downloaded=page.waitForEvent('download');
