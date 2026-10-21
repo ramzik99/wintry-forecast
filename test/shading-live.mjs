@@ -100,7 +100,8 @@ try{
   }
   return count;
  });// Natural live conditions can be wet across the entire viewport; synthetic dry-gap pixels above are deterministic.
- console.log('Live smooth wet/dry edge pixels',edgePixels);
+ assert.equal(edgePixels,0,'Every live precipitation pixel must be fully opaque, including wet/dry boundaries');
+ console.log('Live partially transparent precipitation pixels',edgePixels);
  await page.screenshot({path:'test-output/windy-wintry-desktop.png'});
  await page.evaluate(()=>W.store.set('overlay','rain'));await page.waitForTimeout(1500);
  assert.equal(await page.evaluate(()=>W.store.get('overlay')),'rain');
@@ -123,6 +124,19 @@ try{
  page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'});
  await loadWindy(wet.time);await mount();
  assert.ok(await page.locator('.wintry-raster-tile').count()>0,'Wet forecast draws on mobile');
+ const mobileAlpha=await page.evaluate(()=>{
+  let wet=0,partial=0;
+  for(const image of document.querySelectorAll('.wintry-raster-tile')){
+   const canvas=document.createElement('canvas');canvas.width=canvas.height=256;
+   const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+   const pixels=ctx.getImageData(0,0,256,256).data;
+   for(let i=3;i<pixels.length;i+=4){if(pixels[i]===255)wet++;else if(pixels[i]>0)partial++;}
+  }
+  return{wet,partial};
+ });
+ assert.ok(mobileAlpha.wet>0,'Mobile precipitation must include opaque pixels');
+ assert.equal(mobileAlpha.partial,0,'Mobile precipitation cannot blend with Windy colours');
+ console.log('Mobile precipitation opacity',mobileAlpha);
  await page.screenshot({path:'test-output/shading-mobile.png'});
  await page.getByRole('checkbox',{name:'Enable Wintry forecast'}).uncheck();
  assert.equal(await page.locator('.wintry-raster-tile').count(),0);
