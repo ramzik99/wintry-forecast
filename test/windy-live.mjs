@@ -135,6 +135,31 @@ try{
  await settled();
  assert.equal(await pointDialog.locator('.forecast-rows button[aria-pressed="true"]').count(),1);
  await page.screenshot({path:'test-output/point-forecast-desktop.png'});
+ await pointDialog.getByRole('tab',{name:'Sounding',exact:true}).click();
+ const soundingImage=pointDialog.getByRole('img',{name:'Temperature, dew point and wet-bulb vertical profile'});
+ await soundingImage.waitFor();
+ assert.ok((await pointDialog.locator('.temp-line').getAttribute('points')).split(' ').length>=3);
+ assert.ok(!/snowline|limited atmospheric/i.test(await pointDialog.innerText()));
+ const validBefore=await pointDialog.locator('.selected-valid').innerText();
+ await page.evaluate(time=>W.store.set('timestamp',time),selectedTime+3*3600000);
+ await page.waitForFunction(before=>document.querySelector('.selected-valid')?.textContent!==before,validBefore);
+ await pointDialog.getByRole('button',{name:'Zoom in',exact:true}).click();
+ assert.ok((await soundingImage.getAttribute('style')).includes('125'));
+ await pointDialog.getByRole('button',{name:'Fit sounding',exact:true}).click();
+ assert.ok((await soundingImage.getAttribute('style')).includes('100'));
+ const soundingBox=await soundingImage.boundingBox();
+ await page.mouse.move(soundingBox.x+soundingBox.width*.6,soundingBox.y+soundingBox.height*.5);
+ await pointDialog.locator('.sounding-hover').waitFor();
+ await page.screenshot({path:'test-output/sounding-desktop.png'});
+ const soundingDownload=page.waitForEvent('download');
+ await pointDialog.getByRole('button',{name:'Save image',exact:true}).click();
+ const soundingFile=await soundingDownload;assert.equal(await soundingFile.failure(),null);
+ await soundingFile.saveAs('test-output/sounding-export.png');
+ assert.equal((await readFile('test-output/sounding-export.png')).subarray(1,4).toString(),'PNG');
+ await pointDialog.getByRole('tab',{name:'Forecast',exact:true}).click();
+ await pointDialog.getByRole('img',{name:'Precipitation amounts coloured by type'}).waitFor();
+ console.log('Desktop sounding profiles, timeline update, zoom, hover and PNG export passed.');
+
  await page.getByRole('button',{name:'Close point forecast',exact:true}).click();
  await pointDialog.waitFor({state:'detached'});
 
@@ -159,6 +184,17 @@ try{
  const mobileBox=await mobileForecast.boundingBox();
  assert.ok(mobileBox.x>=0&&mobileBox.x+mobileBox.width<=391&&mobileBox.y>=0&&mobileBox.y+mobileBox.height<=844);
  await page.screenshot({path:'test-output/point-forecast-mobile.png'});
+ await mobileForecast.getByRole('tab',{name:'Sounding',exact:true}).tap();
+ const mobileSounding=mobileForecast.getByRole('img',{name:'Temperature, dew point and wet-bulb vertical profile'});
+ await mobileSounding.waitFor();
+ await mobileForecast.getByRole('button',{name:'Zoom in',exact:true}).tap();
+ assert.ok((await mobileSounding.getAttribute('style')).includes('125'));
+ await mobileForecast.getByRole('button',{name:'Fit sounding',exact:true}).tap();
+ assert.ok((await mobileSounding.getAttribute('style')).includes('100'));
+ await page.screenshot({path:'test-output/sounding-mobile.png'});
+ await mobileForecast.getByRole('tab',{name:'Forecast',exact:true}).tap();
+ console.log('Mobile sounding tab and touch zoom controls passed.');
+
  await page.getByRole('button',{name:'Close point forecast',exact:true}).tap();
  await mobileForecast.waitFor({state:'detached'});
  await page.getByRole('button',{name:'Close precipitation type label',exact:true}).tap();

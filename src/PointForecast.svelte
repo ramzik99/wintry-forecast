@@ -1,8 +1,15 @@
 <div class="point-forecast-backdrop" role="presentation" on:click|self={() => dispatch('close')}>
   <section class="point-forecast" role="dialog" aria-modal="true" aria-label="Point forecast" on:keydown={handleKey}>
     <header><div><b>Point forecast</b><small>{placeName || 'Selected point'} · ECMWF</small></div><button bind:this={closeButton} type="button" aria-label="Close point forecast" on:click={() => dispatch('close')}>×</button></header>
+    <div class="forecast-tabs" role="tablist" aria-label="Point forecast view">
+      <button type="button" role="tab" id="point-forecast-tab" aria-controls="point-forecast-content" aria-selected={tab === 'forecast'} tabindex={tab === 'forecast' ? 0 : -1} on:click={() => tab = 'forecast'} on:keydown={changeTab}>Forecast</button>
+      <button type="button" role="tab" id="point-sounding-tab" aria-controls="point-sounding-content" aria-selected={tab === 'sounding'} tabindex={tab === 'sounding' ? 0 : -1} on:click={() => tab = 'sounding'} on:keydown={changeTab}>Sounding</button>
+    </div>
     {#if loading}<p role="status">Loading forecast…</p>
+    {:else if tab === 'sounding'}
+      <div class="sounding-tab" id="point-sounding-content" role="tabpanel" aria-labelledby="point-sounding-tab"><SoundingChart {point} {terrainM} {placeName} embedded={true} /></div>
     {:else if rows.length}
+      <div id="point-forecast-content" role="tabpanel" aria-labelledby="point-forecast-tab">
       <div class="chart" aria-label="Precipitation forecast">
         <svg viewBox="0 0 600 130" role="img" aria-label="Precipitation amounts coloured by type">
           <text x="8" y="15">Precipitation · mm per interval</text>
@@ -25,12 +32,14 @@
         {/each}
       </div>
       <footer>Select a time to update the map. Amounts cover each listed interval.</footer>
+      </div>
     {:else}<p>Forecast unavailable for this point.</p>{/if}
   </section>
 </div>
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import store from '@windy/store';
+  import SoundingChart from './SoundingChart.svelte';
   import { buildProfile } from './snowLevel';
   import { supportedPrecipitationType } from './precipType';
   import { precipMmAtTime } from './precip';
@@ -42,6 +51,8 @@
   export let placeName = '';
   export let loading = false;
   const dispatch = createEventDispatcher<{close:void}>();
+  let tab:'forecast'|'sounding' = 'forecast';
+  function changeTab(event:KeyboardEvent){if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();tab=event.key==='Home'?'forecast':event.key==='End'?'sounding':tab==='forecast'?'sounding':'forecast';(event.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>(tab==='forecast'?'#point-forecast-tab':'#point-sounding-tab')?.focus();}
   let timestamp = Number(store.get('timestamp')) || Date.now();
   let listener:number|null = null;
   let closeButton:HTMLButtonElement;
@@ -76,6 +87,8 @@
   onDestroy(()=>{if(listener!==null)store.off(listener);if(previousFocus?.isConnected)previousFocus.focus();});
 </script>
 <style>
+  .forecast-tabs{display:flex;gap:6px;padding:0 14px 10px}.forecast-tabs button{flex:1;min-height:40px;border:1px solid #547180;border-radius:6px;background:#172e3c;color:#c7dbe7;font:inherit;cursor:pointer}.forecast-tabs button[aria-selected="true"]{background:#2c536b;color:#fff;border-color:#71d6ff}.sounding-tab{padding:0 12px 12px;max-width:370px;margin:auto}
+
   .point-forecast-backdrop{position:fixed;inset:0;z-index:10000;background:#0005;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;pointer-events:auto}
   .point-forecast{width:600px;max-width:100%;max-height:85dvh;overflow:auto;background:#10232f;color:#e8f1f5;border:1px solid #546b79;border-radius:12px;box-shadow:0 6px 30px #0008;font:13px/1.4 sans-serif}
   header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;gap:12px}header b{font-size:16px}header small{display:block;color:#bccdd6;overflow-wrap:anywhere}

@@ -1,7 +1,7 @@
 {
   "name": "windy-plugin-snowline-map-100m",
-  "version": "1000.1.12",
-  "description": "Precipitation type from melting and refreezing, with point forecasts, terrain shading and MP4 download.",
+  "version": "1000.1.13",
+  "description": "Precipitation type from melting and refreezing, with point forecasts, sounding, terrain shading and MP4 download.",
   "main": "dist/plugin.min.js",
   "type": "module",
   "scripts": {
