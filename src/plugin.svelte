@@ -86,7 +86,7 @@
         <div><b>Coverage and accuracy:</b> precipitation uses sampled ECMWF amounts; coverage may differ from Windy's layer. Terrain adjusts precipitation type, not rainfall amounts. Accuracy has not been independently validated.</div>
         <div><b>Diagonal hatching:</b> sampled map terrain is above the atmospheric snowline estimate. This is not a snowfall forecast; precipitation and the vertical temperature profile determine precipitation type. Hatching appears only where forecast precipitation is zero. Wet or missing precipitation leaves a gap. Small terrain features may be missed between samples.</div>
         <div><b>Prepare & download MP4:</b> prepares the visible area through available forecast times, up to 144 hours, then downloads an MP4 with precipitation shading, enabled type icons and snowline contours, local timestamps and a legend. The video uses a geographic background; Windy's weather layer, lightning and dry-terrain hatching are excluded. Encoding requires browser H.264 support; map preparation still completes when video export is unavailable. Progress and cancellation remain available; keep this view and its controls unchanged until export completes. Already prepared times remain usable after cancellation. A download link is available if the automatic download is blocked.</div>
-        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one fixed colour at full opacity above weather and below geographic map details. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
+        <div><b>Precipitation shading:</b> the forecast legend colours show rain, snow, wet snow, mix, ice pellets and freezing rain. Each precipitation type uses one full-opacity colour with elevation relief. Windy’s selected weather layer remains beneath it. Intensity shading is removed; numerical amounts remain in point forecasts. The plugin keeps your selected Windy layer and adds its overlays above it. Small raster tiles keep the shading smooth at every zoom. Temperature, dew point, atmospheric height and precipitation are interpolated between available weather samples before diagnosis; categorical colours are never blended. Weather samples target 9 km locally, with bounded overview sampling on broad maps. Cached elevation tiles refine precipitation type with zoom; terrain source detail varies by region. Rainfall amounts retain the sampled ECMWF scale. Coarse interpolated terrain appears while elevation tiles load, and is identified if detailed terrain is unavailable. Missing weather data stays blank. Contours, shading and icons can be hidden independently. The Icons switch controls both precipitation symbols and forecast lightning from zoom 8. Icons use the same terrain-aware type diagnosis as shading, appear only in wet areas, and reuse existing samples.</div>
         <div><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts retain Windy’s elevation service.</div>
         <details><summary>Terrain data credits</summary>
           <p>ArcticDEM: DEMs created from DigitalGlobe imagery; funded by NSF awards 1043681, 1559691 and 1542736. Australia: © Commonwealth of Australia (Geoscience Australia) 2017. Austria: © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich. Canada: contains information licensed under the Open Government Licence – Canada. Europe: produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global ETOPO1: U.S. National Oceanic and Atmospheric Administration. Mexico: INEGI, Continental relief, 2016. New Zealand: Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved). Norway: © Kartverket. United Kingdom: © Environment Agency copyright and/or database right 2015. United States 3DEP and global GMTED2010/SRTM: courtesy of the U.S. Geological Survey.</p>
@@ -105,7 +105,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import PrecipitationLegend from './PrecipitationLegend.svelte';
-  import { map, layerOrder, getMapTiles } from '@windy/map';
+  import { map, getMapTiles } from '@windy/map';
   import store from '@windy/store';
   import { createFullRenderingParams, getDataZoom } from '@windy/renderUtils';
   import { TileLayerInterpolator } from '@windy/tileInterpolator';
@@ -122,7 +122,7 @@
   import { metricGrid, wrappedLongitude, viewportWeatherGrid } from './shadingGrid';
   import { weatherInterpolator, weightedScalar, wetCoverage, blendedProfile, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles, terrainTileZoom } from './terrainTiles';
-  import { precipRasterLayer } from './precipRasterLayer';
+  import { precipRasterLayer, colourTerrainTile, terrainIllumination } from './precipRasterLayer';
   import { GeographicTiles } from './geographicTiles';
   import { buildProfile, wetBulbZeroHeight, wetBulbFromDewpoint } from './snowLevel';
   import { precipMmAt, precipMmAtTime, isPrecipitating } from './precip';
@@ -191,7 +191,7 @@
   const GEOGRAPHY_ID=`wintry-geography-${Date.now()}`;
   let geographyLayer:any=null,geographyEpoch=0,geographyError='';
   const geographicTiles=new GeographicTiles(map.getSize().x<600?32:96);
-  let nativeMap:any=null;
+  const reliefCache=new Map<string,HTMLCanvasElement>();
   let enabled=true, panelHidden=false, infoOpen=false, settingsOpen=false, chartOpen=false, forecastTab:'graph'|'sounding'='graph', viewportLoading=false, refreshQueued=false, probeLoading=false, unitSystem:UnitSystem='metric', prefsReady=false;
   let cache:(CachedPoint|null)[][]=[], contourLayer:any=null, clickLayer:any=null, clickedPoint:CachedPoint|null=null, clickedLatLon:[number,number]|null=null, clickedMapElevationM:number|null=null, clickedPlaceName:string|null=null, pointSource:PointSource|null=null, clickedNextEventTime:number|null=null;
   let exposureGeneration = -1;
@@ -343,31 +343,8 @@
   }
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null;activePhaseKey=''}
-  function clearShading(){resetMapPreparation();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}clearGeography();terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
+  function clearShading(){reliefCache.clear();resetMapPreparation();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}clearGeography();terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
   function clearGeography(){geographyEpoch++;geographyError='';if(geographyLayer)try{map.removeLayer(geographyLayer)}catch{}geographyLayer=null}
-  async function renderGeography(frame:RasterFrame,key:string,masks:any[],z:number,preparationCurrent?:()=>boolean){
-    const epoch=geographyEpoch,next=L.layerGroup();let failed=false;
-    const tiles=typeof getMapTiles==='function'?getMapTiles():{},kind=String(store.get('map')??document.body.dataset.map??'sznmap');
-    const template=Math.floor(Number(map.getZoom()))<=11?(tiles as any).graymap:(tiles as any)[kind]??(tiles as any).sznmap;
-    const urlTemplate=template??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
-    const pane=map.getPane(GEOGRAPHY_ID)||map.createPane(GEOGRAPHY_ID);pane.style.zIndex='395';pane.style.pointerEvents='none';
-    const current=()=>epoch===geographyEpoch&&!destroyed&&(preparationCurrent?preparationCurrent():frameCache.get(key)===frame||activePhaseKey===key);
-    await mapLimit(masks,4,async m=>{
-      if(!current())return;
-      try{
-        const n=2**z,url=urlTemplate.replace('{z}',String(z)).replace('{x}',String(((m.tile.x%n)+n)%n)).replace('{y}',String(m.tile.y));
-        const image=await geographicTiles.get(url);if(!current())return;
-        const canvas=document.createElement('canvas');canvas.width=TILE_SIZE;canvas.height=TILE_SIZE;const ctx=canvas.getContext('2d');if(!ctx)return;
-        ctx.drawImage(image,0,0,TILE_SIZE,TILE_SIZE);ctx.globalCompositeOperation='destination-in';ctx.drawImage(m.canvas,0,0);
-        const paintedUrl=canvas.toDataURL('image/png');frame.record.geography.push({url:paintedUrl,nw:m.nw,se:m.se});
-        L.imageOverlay(paintedUrl,[[m.se.lat,m.nw.lon],[m.nw.lat,m.se.lon]],{pane:GEOGRAPHY_ID,opacity:.45,interactive:false,className:'wintry-geographic-tile'}).addTo(next);
-      }catch{failed=true;}
-    });
-    if(!current()){next.clearLayers();return;}
-    frame.geography=next;frame.geographyError=failed?'Some map detail tiles unavailable':'';
-    frame.record.geographyError=frame.geographyError;
-    if(!preparationCurrent&&activePhaseKey===key){next.addTo(map);const old=geographyLayer;geographyLayer=next;if(old&&old!==next)try{map.removeLayer(old)}catch{}geographyError=frame.geographyError;}
-  }
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
   function clearPointState(closeChart=true){placeAbort?.abort();placeAbort=null;clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function statusColor(s:ProbeStatus){return s==='above'?'#46d9ff':s==='below'?'#ff9d3d':s==='near'?'#ffe45c':'#fff'}
@@ -522,7 +499,7 @@
     const shading=L.layerGroup(),icons=L.layerGroup(),geography=L.layerGroup();
     const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
     const geoPane=map.getPane(GEOGRAPHY_ID)||map.createPane(GEOGRAPHY_ID);geoPane.style.zIndex='395';geoPane.style.pointerEvents='none';
-    for(const t of record.tiles)precipRasterLayer(L,t.url,t.nw,t.se,layerOrder?.BASE_MAP??400,PRECIP_PANE,gl=>nativeMap=gl).addTo(shading);
+    for(const t of record.tiles)precipRasterLayer(L,t.url,t.nw,t.se,PRECIP_PANE).addTo(shading);
     for(const s of record.symbols)L.marker([s.lat,s.lon],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html:s.html,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(icons);
     for(const t of record.geography)L.imageOverlay(t.url,[[t.se.lat,t.nw.lon],[t.nw.lat,t.se.lon]],{pane:GEOGRAPHY_ID,opacity:.45,interactive:false,className:'wintry-geographic-tile'}).addTo(geography);
     return {shading,icons,geography,fallback:record.fallback,geographyError:record.geographyError,bytes:record.bytes,record};
@@ -668,12 +645,16 @@
       frameCache.delete(oldest);
     }
   }
-  function applyFrame(key:string,frame:RasterFrame){
+  async function applyFrame(key:string,frame:RasterFrame){
+    const epoch=rasterEpoch;
+    const ready=await Promise.all(frame.shading.getLayers().map((layer:any)=>layer.ready??true));
+    if(destroyed||!enabled||epoch!==rasterEpoch||key!==phaseFrameKey(getStoreTimestamp()))return;
+    if(ready.some(value=>!value)){rasterLoading=false;terrainDetailStatus='Shading image unavailable · retry refresh';return;}
     const previous=[shadingLayer,precipIconLayer,geographyLayer];
     frame.shading.addTo(map);if(showIcons)frame.icons.addTo(map);frame.geography?.addTo(map);
     shadingLayer=frame.shading;precipIconLayer=showIcons?frame.icons:null;geographyLayer=frame.geography;activePhaseKey=key;pendingPhaseKey=key;
     for(const layer of previous)if(layer&&layer!==shadingLayer&&layer!==precipIconLayer&&layer!==geographyLayer)try{map.removeLayer(layer)}catch{}
-    geographyError=frame.geographyError;terrainDetailStatus=frame.fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';rasterLoading=false;
+    geographyError=frame.geographyError;terrainDetailStatus=frame.fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';rasterLoading=false;scheduleNextFrame();
   }
   function scheduleNextFrame(){
     if(preparingMap||prefetchTimer||prefetchBusy||viewportLoading||terrainLoading||destroyed||!enabled)return;
@@ -693,11 +674,13 @@
     rasterTarget=target;
     const b=currentBounds(),z=rasterZoom(),terrainKey=[z,b.south,b.north,b.west,b.east].join(':');
     if(terrainKey!==terrainJobKey){
-      terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoadProgress=0;terrainLoading=true;terrainDetailStatus='';
-      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;terrainRevision++;frameCache.clear();queueRasterPaint()}).then(()=>{
-        if(epoch!==terrainGeneration||destroyed||!enabled)return;terrainLoading=false;queueRasterPaint();
+      terrainJobKey=terrainKey;const epoch=++terrainGeneration;terrainLoadProgress=0;terrainLoading=true;terrainDetailStatus='';rasterEpoch++;
+      void terrainTiles.ensure(b,z,()=>epoch===terrainGeneration&&enabled&&!destroyed,(done,total)=>{terrainLoadProgress=total?done/total:1;}).then(()=>{
+        if(epoch!==terrainGeneration||destroyed||!enabled)return;terrainLoading=false;terrainRevision++;reliefCache.clear();frameCache.clear();renderPrecipitation(getStoreTimestamp());
       });
     }
+    // Finish the terrain batch before replacing the visible frame.
+    if(terrainLoading)return;
     const key=phaseFrameKey(target);
     if(key!==pendingPhaseKey){rasterLoadProgress=0;rasterEpoch++;pendingPhaseKey=key;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}}
     if(key===activePhaseKey&&shadingLayer){const current=frameCache.get(key);if(current&&showIcons!==!!precipIconLayer)applyFrame(key,current);else if(showIcons&&!precipIconLayer){rasterLoading=true;queueRasterPaint();return;}rasterLoading=false;scheduleNextFrame();return;}
@@ -714,11 +697,36 @@
     }
     rasterLoading=true;queueRasterPaint();
   }
+  async function terrainRelief(tile:{x:number;y:number},z:number){
+    const key=[terrainRevision,z,tile.x,tile.y].join(':'),hit=reliefCache.get(key);if(hit)return hit;
+    const side=TILE_SIZE+2,heights=new Float32Array(side*side);
+    for(let y=0;y<side;y++){
+      for(let x=0;x<side;x++){
+        const p=tileLocation(tile.x+(x-.5)/TILE_SIZE,tile.y+(y-.5)/TILE_SIZE,z);
+        heights[y*side+x]=terrainTiles.sample(p.lat,p.lon,z)??NaN;
+      }
+      if(y%32===0)await new Promise(resolve=>setTimeout(resolve,0));
+    }
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=TILE_SIZE;
+    const ctx=canvas.getContext('2d');if(!ctx)return null;
+    const image=ctx.createImageData(TILE_SIZE,TILE_SIZE);
+    for(let y=0;y<TILE_SIZE;y++){
+      const lat=tileLocation(tile.x+.5,tile.y+(y+.5)/TILE_SIZE,z).lat;
+      const metres=40075016.686*Math.cos(lat*Math.PI/180)/(TILE_SIZE*2**z);
+      for(let x=0;x<TILE_SIZE;x++){
+        const i=(y+1)*side+x+1,v=terrainIllumination(heights[i-1],heights[i+1],heights[i-side],heights[i+side],metres),o=(y*TILE_SIZE+x)*4;
+        image.data[o]=image.data[o+1]=image.data[o+2]=v;image.data[o+3]=255;
+      }
+    }
+    ctx.putImageData(image,0,0);reliefCache.set(key,canvas);
+    while(reliefCache.size>32)reliefCache.delete(reliefCache.keys().next().value!);
+    return canvas;
+  }
   async function paintShading(target:number,background=false,preparation=false):Promise<RasterFrame|undefined>{
-    if(!enabled||!precipDetailAvailable||(!showShading&&!showIcons)||destroyed||!cache.length)return;
+    if(!enabled||!precipDetailAvailable||(!showShading&&!showIcons)||destroyed||!cache.length||terrainLoading)return;
     const key=phaseFrameKey(target),mainKey=phaseFrameKey(getStoreTimestamp());
     if(background&&frameCache.has(key)){const cached=frameCache.get(key)!;if(preparation)await cached.geographyPromise;return cached;}
-    const epoch=background?rasterEpoch:++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup(),geographyMasks:any[]=[];
+    const epoch=background?rasterEpoch:++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup();
     const preparationEpoch=prepareGeneration;
     if(!background)rasterLoadProgress=0;
     const obsolete=()=>epoch!==rasterEpoch||destroyed||!enabled||(preparation&&preparationEpoch!==prepareGeneration)||(background&&!preparation&&mainKey!==phaseFrameKey(getStoreTimestamp()));
@@ -728,14 +736,6 @@
       const i=forecastIntervalIndex(p.times,target);profiles.set(p,i<0?[]:buildProfile(p.forecast,i));amounts.set(p,mapPrecipAt(p,target));
     }
     let fallback=false;
-    function terrainLight(lat:number,lon:number){
-      const step=360/(256*2**terrainTileZoom(z)),cos=Math.max(.1,Math.cos(lat*Math.PI/180));
-      const n=terrainTiles.sample(lat+step*cos,lon,z),s=terrainTiles.sample(lat-step*cos,lon,z),e=terrainTiles.sample(lat,lon+step,z),w=terrainTiles.sample(lat,lon-step,z);
-      if(n===null||s===null||e===null||w===null)return 1;
-      const distance=2*step*cos*111320,nx=-(e-w)/distance,ny=-(n-s)/distance;
-      const diffuse=Math.max(0,(-.5*nx+.5*ny+Math.SQRT1_2)/Math.hypot(nx,ny,1));
-      return .65+.45*diffuse;
-    }
     function diagnose(lat:number,lon:number){
       const neighbours=stencil(lat,lon);if(!neighbours||neighbours.some(v=>!profiles.has(v.value)))return null;
       const amount=weightedScalar(neighbours,p=>amounts.get(p)??null),shade=precipitationShade(amount,detailZoom);if(!shade)return null;
@@ -758,15 +758,17 @@
             const p=tileLocation(tile.x+(x+.5)/RASTER_SAMPLES,tile.y+(y+.5)/RASTER_SAMPLES,z);
             if(p.lat<b.south||p.lat>b.north||p.lon<b.west||p.lon>b.east)continue;
             const result=diagnose(p.lat,p.lon);if(!result)continue;wet=true;const rgb=hexToRgb(PRECIP_TYPE_COLOURS[result.phase.key]).map(v=>Math.round(result.shade.tone>=0?v+(255-v)*result.shade.tone:v*(1+result.shade.tone))),i=(y*RASTER_SAMPLES+x)*4;
-            const light=terrainLight(p.lat,p.lon);
-            image.data[i]=Math.min(255,Math.round(rgb[0]*light));image.data[i+1]=Math.min(255,Math.round(rgb[1]*light));image.data[i+2]=Math.min(255,Math.round(rgb[2]*light));image.data[i+3]=Math.round(PRECIP_SHADING_OPACITY*255);
+            const light=1;
+            image.data[i]=Math.min(255,Math.round(rgb[0]*light));image.data[i+1]=Math.min(255,Math.round(rgb[1]*light));image.data[i+2]=Math.min(255,Math.round(rgb[2]*light));image.data[i+3]=Math.round(PRECIP_SHADING_OPACITY*255*result.coverage);
           }
           }
           if(wet){
             ctx.putImageData(image,0,0);const full=document.createElement('canvas');full.width=TILE_SIZE;full.height=TILE_SIZE;const fc=full.getContext('2d');
             if(fc){fc.imageSmoothingEnabled=false;fc.drawImage(canvas,0,0,TILE_SIZE,TILE_SIZE);const nw=tileLocation(tile.x,tile.y,z),se=tileLocation(tile.x+1,tile.y+1,z);
-              const url=full.toDataURL('image/png');record.tiles.push({url,nw,se});
-              geographyMasks.push({canvas:full,nw,se,tile});precipRasterLayer(L,url,nw,se,layerOrder?.BASE_MAP??400,PRECIP_PANE,gl=>nativeMap=gl).addTo(next);}
+              const relief=await terrainRelief(tile,z);if(obsolete()){next.clearLayers();return;}
+              const textured=relief?colourTerrainTile(full,relief):full;
+              const url=textured.toDataURL('image/png');record.tiles.push({url,nw,se});
+              precipRasterLayer(L,url,nw,se,PRECIP_PANE).addTo(next);}
           }
           paintedTiles++;if(!background)rasterLoadProgress=.9*paintedTiles/tiles.length;
           // Yield between small tiles so dragging and the forecast controls stay responsive.
@@ -785,14 +787,14 @@
       }
       if(obsolete()){next.clearLayers();iconLayer.clearLayers();return;}
       if(!background)rasterLoadProgress=1;
-      record.fallback=fallback;record.bytes=geographyMasks.length*TILE_SIZE*TILE_SIZE*8+iconLayer.getLayers().length*4096;
+      record.fallback=fallback;record.bytes=record.tiles.length*TILE_SIZE*TILE_SIZE*4+iconLayer.getLayers().length*4096;
       const frame:RasterFrame={shading:next,icons:iconLayer,geography:null,fallback,geographyError:'',bytes:record.bytes,record};
-      if(preparation){await renderGeography(frame,key,geographyMasks,z,()=>!obsolete());if(obsolete()){next.clearLayers();iconLayer.clearLayers();return;}return frame;}
+      if(preparation)return frame;
       if(background&&frame.bytes+(frameCache.get(activePhaseKey)?.bytes??0)>FRAME_PIXEL_BUDGET){skippedPrefetchKey=key;next.clearLayers();iconLayer.clearLayers();return;}
       if(!background)applyFrame(key,frame);
       rememberFrame(key,frame);
       if(!background)scheduleNextFrame();
-      frame.geographyPromise=renderGeography(frame,key,geographyMasks,z);void frame.geographyPromise;return frame;
+      return frame;
     }catch(error){next.clearLayers();console.warn('Wintry raster rendering failed',error);if(preparation)throw error;if(epoch===rasterEpoch&&!background){rasterLoading=false;terrainDetailStatus='Shading unavailable · retry refresh';}}
   }
   function clearStorms(){

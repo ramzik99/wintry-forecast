@@ -40,6 +40,9 @@ jobs:
       - name: Test restored forecast and sounding on desktop and mobile
         run: node test/restored-1000-1-live.mjs
 
+      - name: Verify visible shading, terrain and map navigation
+        run: node test/shading-live.mjs
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
