@@ -38,9 +38,19 @@ try{
   if(mobile)await openForecast.tap();else await openForecast.click();
   const chart=page.getByRole('dialog',{name:'Wintry forecast graph'});
   await chart.getByRole('img',{name:'Terrain-aware wintry forecast through 144 hours'}).waitFor();
-  assert.ok(!/limited atmospheric|unresolved|type uncertain/i.test(await chart.innerText()));
-  assert.ok(!/limited atmospheric|unresolved|type uncertain/i.test(await page.locator('.snowline-click-label').innerText()));
+  assert.ok(!/limited atmospheric|unresolved|type uncertain|snowfall|remaining layer|wintry period|terrain flow/i.test(await chart.innerText()));
+  assert.ok(await chart.locator('.snowline-line').count()===1);
+  assert.ok(await chart.locator('.phase-base').count()===1);
+  assert.ok((await chart.locator('.snowline-line').getAttribute('d')).trim().length>0);
+  assert.ok(!/limited atmospheric|unresolved|type uncertain|snowfall|remaining layer|wintry period|terrain flow/i.test(await page.locator('.snowline-click-label').innerText()));
+  assert.ok(/Snowline/.test(await page.locator('.snowline-click-label').innerText()));
   await page.screenshot({path:'test-output/restored-forecast-'+(mobile?'mobile':'desktop')+'.png'});
+  if(!mobile){
+    const downloaded=page.waitForEvent('download');
+    await chart.getByRole('button',{name:'Save image',exact:true}).click();
+    const png=await downloaded;assert.equal(await png.failure(),null);await png.saveAs('test-output/core-forecast-export.png');
+    assert.equal((await readFile('test-output/core-forecast-export.png')).subarray(1,4).toString(),'PNG');
+  }
   const soundingTab=chart.getByRole('tab',{name:'Sounding',exact:true});
   if(mobile)await soundingTab.tap();else await soundingTab.click();
   const svg=chart.getByRole('img',{name:'Temperature, dew point and wet-bulb vertical profile'});
@@ -58,7 +68,7 @@ try{
   await chart.waitFor({state:'detached'});
   await page.evaluate(()=>rollbackHost.close());
   await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
-  console.log('Restored 1000.1.0 '+(mobile?'mobile':'desktop')+' forecast, sounding, zoom, wording and cleanup passed.');
+  console.log('Core Wintry forecast '+(mobile?'mobile':'desktop')+' forecast, sounding, zoom, wording and cleanup passed.');
   await page.close();
  }
 } catch(error){await page?.screenshot({path:'test-output/restored-failure.png'}).catch(()=>{});throw error;}
