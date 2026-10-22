@@ -98,7 +98,7 @@ try{
   await settings.getByRole('button',{name:'Close settings'}).click();
   await page.locator('.point-tools button').filter({hasText:'Forecast'}).click();
   await chart.waitFor();
-  assert.equal((await chart.locator('.snowline-title').innerText()).trim(),'SNOWLINE ft');
+  assert.equal((await chart.locator('.snowline-title').textContent()).trim(),'SNOWLINE ft');
   await chart.getByRole('button',{name:'Close graph',exact:true}).click();
   await page.getByRole('button',{name:'Open Wintry settings'}).click();
   await settings.getByRole('button',{name:'Metric',exact:true}).click();
