@@ -1,93 +1,51 @@
-# Method and interpretation — 1000.1.0
+# Method and interpretation
 
-## What the product estimates
+## Scope
 
-The plugin post-processes sampled ECMWF thermodynamic profiles at local terrain
-height. Fine terrain pixels add terrain detail; they do not create new atmospheric
-observations or increase the native resolution of ECMWF. Rainfall amounts remain
-the sampled ECMWF amounts. Independent forecast-skill validation remains required.
+Wintry forecast diagnoses precipitation type at actual local terrain and displays an atmospheric snowline estimate. It provides a point forecast, sounding, and image/MP4 exports. It does not predict snowfall depth or existing ground snow. Earlier experimental snow-layer and terrain-flow outputs are absent from the product.
 
-## Time and missing data
+## Data and time
 
-All internal precipitation values are **three-hour-equivalent liquid amounts**.
-For an overlap of `dt` hours, liquid input is `P3 * dt / 3` mm. Rate displays divide
-`P3` by three. Both precipitation totals and snowfall use the same supported time
-intervals, clipped to the actual source coverage and the 144-hour horizon. A
-24-hour request always represents 24 hours; an incomplete window is unavailable.
-Missing/negative precipitation is not dry weather. Positive traces are wet in the
-map, point forecast, sounding and event detection.
+Calculations use sampled ECMWF profiles and liquid precipitation through the available 144-hour horizon. Map and point profile requests both use a one-hour sampling setting; the source may supply longer intervals. Source-run checks reject older/mismatched data. Forecast gaps stay missing, and a complete 24-hour total requires continuous known coverage.
 
-## Thermodynamics and precipitation type
+Internally, precipitation amounts are three-hour-equivalent liquid millimetres. For an overlap of dt hours, liquid input is P3 × dt / 3; rate displays divide P3 by three. Positive traces are wet. Zero is dry; missing or invalid values are not dry.
 
-The pressure-aware numerical wet-bulb calculation and phase thresholds are
-unchanged. All complete supplied pressure levels from 1000 hPa upward are retained,
-including levels below source-model terrain. Below-model-ground source values may
-be extrapolated. The sounding counts all supplied pressure levels and shows how
-many can be plotted when source values are incomplete. The surface entry is
-separate and is not counted as a pressure level. Precipitation diagnosis follows
-the retained column down to local site terrain; wet/dry shading still uses
-forecast precipitation.
+## Atmospheric profile and terrain
 
-The classifier integrates positive and negative wet-bulb areas in **°C·m**.
-The plugin's thresholds are heuristic, not a verified implementation of the
-published Bourgouin energy algorithm. Its high/medium/low labels are input-detail
-and threshold flags, **not calibrated probabilities**. Melting/refreezing layer
-methods are motivated by [Bourgouin (2000)](https://journals.ametsoc.org/view/journals/wefo/15/5/1520-0434_2000_015_0583_amtdpt_2_0_co_2.xml).
+All complete supplied pressure levels at or above 1000 hPa in altitude are retained: currently 1000, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200 and 150 hPa. Each usable level requires temperature, dew point and geopotential height. The surface entry is separate. Missing fields are not fabricated.
 
-## Snowfall versus the remaining new layer
+No source-model-orography mask is applied. Values below model terrain may be source extrapolations. The classifier and sounding clip the resulting profile at actual local terrain, interpolating its boundary. Precipitation cannot melt or refreeze in layers below that boundary. If actual terrain is below the lowest supplied level, its endpoint thermodynamic values are held down to terrain and flagged internally as extrapolated.
 
-Gross estimated snowfall is `P3 * dt / 3 * f_s * SLR / 10` cm, where `f_s` is the
-snow fraction of liquid input (0–1), and `SLR` is fresh snow depth divided by liquid
-water depth. The existing phase/temperature-dependent fractions and ratios remain
-heuristic. Gross snowfall cannot decrease when snow melts later.
+Map terrain comes from Mapzen Terrain Tiles, served by the public AWS dataset. Point terrain comes from Windy’s elevation service. Interpolated weather samples and differing terrain sources can cause small map/point differences. A whole-frame coarse-terrain fallback avoids mixing partial DEM patches with fine terrain.
 
-The separate **experimental remaining-layer estimate** starts with no existing
-snow. Its state is SWE in mm and depth in cm. Density is `100 * SWE / depth`
-kg/m³. Settling changes depth, not SWE. Melt reduces SWE and exports the same
-amount of water. The budget is `SWE_end + melt = SWE_start + snowfall_SWE`.
-Dry hours still use their thermal profile; if that profile is missing while snow
-is present, remaining snow becomes unavailable rather than silently ignoring melt.
+## Wet bulb and snowline
 
-Provisional parameters, explicitly not calibrated: settling rates 0.003, 0.006
-or 0.010 per hour by local wet-bulb temperature; melt proxy
-`min(2, 0.25 * max(Tw, 0))` mm SWE/hour; maximum compacted density 450 kg/m³.
-Quarter-hour integration steps align hourly and three-hourly constant forcing.
-Radiation, ground heat, initial snow, liquid retention/refreezing and drifting are
-absent. The coefficients and use of Tw require independent evaluation; numerical
-water conservation is not evidence of accurate ground snow depth. Operational
-energy/mass-balance models include substantially more processes:
-[NOAA NOHRSC model description](https://www.nohrsc.noaa.gov/technology/).
+Pressure-aware wet bulb is solved numerically from temperature, dew point and pressure using the ventilated psychrometer relation.
 
-## Terrain-flow diagnostic
+The displayed snowline is the lowest resolved positive-to-nonpositive wet-bulb crossing with increasing height, including an elevated melting layer above a cold surface. It is a wet-bulb-zero diagnostic, not a verified prediction of the lowest falling-snow or accumulation height.
 
-At an inspected point, a lazy DEM request samples four points 2 km away in the
-cardinal directions. Central differences give dimensionless broad terrain slopes
-`dh/dx` and `dh/dy`. The wind level closest to 1 km above the actual terrain is
-selected among available levels 0.2–2 km above terrain. Missing data, polar and
-dateline edge cases leave this optional diagnostic unavailable.
+An entirely nonpositive column has no resolved crossing. The existing bounded downward extrapolation supplies a continuous mapping diagnostic. The assumed gradient is constrained to −12 to −1 °C/km (default −6 °C/km), with at most 4000 m of downward extrapolation. The contour display floor is −500 m; raw diagnostic values remain separate.
 
-`w_proxy = u * dh/dx + v * dh/dy` has units m/s. It describes kinematic wind
-exposure, not actual model vertical velocity. A ±0.05 m/s display deadband marks
-weak/cross-slope flow. Model-layer RH is shown for context; no precipitation
-enhancement is inferred from RH or this display threshold.
+## Precipitation type
 
-This **does not multiply precipitation amounts**. A quantitative orographic
-precipitation model also needs airflow, moisture transport, conversion/fallout
-and evaporation assumptions; a local upslope multiplier can violate water
-conservation. See [Smith & Barstad (2004)](https://journals.ametsoc.org/doi/abs/10.1175/1520-0469%282004%29061%3C1377%3AALTOOP%3E2.0.CO%3B2).
-The diagnostic is not an implementation of their linear precipitation model.
+The classifier integrates positive wet-bulb area for melting and negative area beneath the lowest warm node for refreezing, in °C·m, down to actual terrain. All available heights above terrain are considered.
 
-## What still needs data and validation
+Existing heuristic thresholds are 150, 500 and 1100 °C·m for melting and 800 °C·m for refreezing; the warm-node threshold is 0.2°C. Surface wet bulb also distinguishes snow, wet snow, mix and rain. These thresholds are unchanged in this release and are not a verified implementation of the published Bourgouin energy algorithm.
 
-Quantitative redistribution needs source grid-cell geometry, co-timed winds and
-moisture/stability, a treatment of precipitation already resolved by ECMWF, and
-tests of area-integrated water budgets. Local station precipitation and measured
-snowfall/depth are needed to calibrate coefficients and compare skill against raw
-ECMWF on withheld storms and sites. Webcams can support time-matched visible
-conditions; snow already on a slope cannot verify current falling phase or depth.
+Internal high/medium/low flags describe source gaps, extrapolation and proximity to thresholds. They are not calibrated probabilities. Low-confidence labels use “possible”; no numerical certainty is claimed.
 
-Runtime and synthetic tests check accounting, coverage and implementation. They
-cannot establish meteorological accuracy. No AI model has been trained here.
+Layer-based diagnosis is motivated by [Bourgouin (2000)](https://journals.ametsoc.org/view/journals/wefo/15/5/1520-0434_2000_015_0583_amtdpt_2_0_co_2.xml).
 
+## Rendering
 
-Actual-terrain masking: source profiles retain all complete supplied pressure levels from 1000 hPa upward. Sounding curves and precipitation-type melting/refreezing stop at actual local terrain, with an interpolated terrain boundary. Model orography does not remove source levels. The atmospheric snowline diagnostic remains available for comparison with terrain.
+Profiles and precipitation are interpolated before diagnosis; categorical type colours are not blended. Every wet, classified pixel has alpha 255. Dry, unknown or unclassifiable pixels are transparent. DEM illumination changes colour luminance while preserving alpha, so opaque colours override Windy’s weather colours while showing relief. This is elevation-derived relief, rather than visibility through an opaque layer.
+
+Windy’s interface and labels remain above the overlay. MP4 exports include a separate geographic background; they omit Windy’s weather layer, lightning and dry-terrain hatching.
+
+## Validation status
+
+Unit and browser tests check implementation, data coverage and visible behavior. Synthetic rain, snow, melting/refreezing and terrain-boundary tests are physical sanity checks, not independent forecast-skill evidence.
+
+No verified observational skill score or calibrated uncertainty is available. A defensible evaluation needs forecasts archived before their valid times, time-matched reports of falling precipitation, station elevations, and event/site holdouts. Assess rain, snow, mixed and freezing types separately across lead times, comparing against raw ECMWF/Windy. Webcams can support visible falling phase when time and location are established; snow already on a slope cannot verify present falling type or depth.
+
+Do not tune thresholds on the same cases used to report validation skill.

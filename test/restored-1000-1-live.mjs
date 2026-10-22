@@ -16,13 +16,13 @@ const browser=await chromium.launch({headless:true,args:['--enable-unsafe-swifts
 let page;
 try{
  for(const mobile of [false,true]){
-  page=await browser.newPage(mobile?{viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'}:{viewport:{width:1365,height:1000}});
+  page=await browser.newPage(mobile?{timezoneId:'Asia/Amman',viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'}:{timezoneId:'Asia/Amman',viewport:{width:1365,height:1000}});
   await page.goto('https://www.windy.com/',{waitUntil:'domcontentloaded',timeout:60000});
   await page.waitForFunction(()=>window.W?.map?.map?.maplibreMap&&window.W?.fetch?.getMeteogramForecastData,null,{timeout:60000});
   await page.evaluate(async url=>{
    W.store.set('particlesAnim','off');W.map.map.setView([46.5,10],8,{animate:false});
    const {buildForecastTimes}=await import(url),r=await W.fetch.getMeteogramForecastData('ecmwf',{lat:46.5,lon:10,step:3});
-   const times=buildForecastTimes(r.data.data,Date.parse(r.data.header.refTime));
+   const times=buildForecastTimes(r.data.data,Date.parse(r.data.header.refTime));window.coreForecastStart=times[0];
    W.store.set('timestamp',times.find(t=>t>=Date.now())??times[0]);
   },timelineURL);
   await page.evaluate(async url=>{
@@ -32,6 +32,13 @@ try{
    await host.open({params:{},disableOpeningAnimation:true});window.rollbackApp=host.svelteApp;
   },pluginURL);
   await page.locator('.snowline-panel').waitFor({timeout:60000});
+  await page.getByRole('button',{name:'How it works',exact:true}).click();
+  const help=page.getByRole('dialog',{name:'How Wintry forecast works'});
+  await help.waitFor();
+  assert.equal(await help.getByLabel('Quick start').locator('li').count(),3);
+  assert.ok((await help.innerText()).includes('wet-bulb temperature crosses 0°C'));
+  assert.ok((await help.innerText()).includes('this plugin continues to use ECMWF'));
+  await help.getByRole('button',{name:'Close information'}).click();
   await page.evaluate(()=>rollbackApp.onopen({lat:46.5,lon:10}));
   await page.locator('.point-tools').waitFor({timeout:60000});
   const openForecast=page.locator('.point-tools button').filter({hasText:'Forecast'});
@@ -44,6 +51,14 @@ try{
   assert.ok((await chart.locator('.snowline-line').getAttribute('d')).trim().length>0);
   assert.ok(!/limited atmospheric|unresolved|type uncertain|snowfall|remaining layer|wintry period|terrain flow/i.test(await page.locator('.snowline-click-label').innerText()));
   assert.ok(/Snowline/i.test(await page.locator('.snowline-click-label').innerText()));
+  const plot=chart.getByRole('img',{name:'Terrain-aware wintry forecast through 144 hours'});
+  const rect=await plot.boundingBox();
+  const inspect={x:rect.x+(42+306*12/144)/360*rect.width,y:rect.y+95/286*rect.height};
+  if(mobile)await page.touchscreen.tap(inspect.x,inspect.y);else await page.mouse.click(inspect.x,inspect.y);
+  await page.waitForFunction(()=>Math.abs(W.store.get('timestamp')-(coreForecastStart+12*3600000))<=3*3600000);
+  const pointType=(await chart.locator('.current-type b').innerText()).trim();
+  assert.ok(pointType.length>0,'Point forecast must show selected-time conditions');
+  console.log('Timeline selection',mobile?'mobile':'desktop',await page.evaluate(()=>W.store.get('timestamp')),pointType);
   await page.screenshot({path:'test-output/restored-forecast-'+(mobile?'mobile':'desktop')+'.png'});
   if(!mobile){
     const downloaded=page.waitForEvent('download');
@@ -55,6 +70,7 @@ try{
   if(mobile)await soundingTab.tap();else await soundingTab.click();
   const svg=chart.getByRole('img',{name:'Temperature, dew point and wet-bulb vertical profile'});
   await svg.waitFor();
+  assert.ok((await chart.locator('.phase-banner b').innerText()).trim().endsWith(pointType),'Sounding and forecast must diagnose the same selected-time type');
   const plotted=(await chart.locator('.temp-line').getAttribute('points')).trim().split(' ').length;
   const countText=await chart.getByLabel('Atmospheric layer count').innerText();
   const supplied=Number(countText.match(/^(\d+)/)?.[1]);
@@ -76,6 +92,19 @@ try{
   const close=chart.getByRole('button',{name:'Close graph',exact:true});
   if(mobile)await close.tap();else await close.click();
   await chart.waitFor({state:'detached'});
+  await page.getByRole('button',{name:'Open Wintry settings'}).click();
+  const settings=page.getByRole('dialog',{name:'Wintry settings'});
+  await settings.getByRole('button',{name:'Imperial',exact:true}).click();
+  await settings.getByRole('button',{name:'Close settings'}).click();
+  await page.locator('.point-tools button').filter({hasText:'Forecast'}).click();
+  await chart.waitFor();
+  assert.equal((await chart.locator('.snowline-title').innerText()).trim(),'SNOWLINE ft');
+  await chart.getByRole('button',{name:'Close graph',exact:true}).click();
+  await page.getByRole('button',{name:'Open Wintry settings'}).click();
+  await settings.getByRole('button',{name:'Metric',exact:true}).click();
+  await settings.getByRole('button',{name:'Close settings'}).click();
+  console.log('Quick start, graph timeline selection, forecast/sounding consistency and units passed',mobile?'mobile':'desktop');
+
   await page.evaluate(()=>rollbackHost.close());
   await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
   console.log('Core Wintry forecast '+(mobile?'mobile':'desktop')+' forecast, sounding, zoom, wording and cleanup passed.');
