@@ -5,7 +5,7 @@ A Windy plugin for **snowline and precipitation type at local terrain**, with a 
 ## Install and use
 
 1. Sign in to [Windy](https://www.windy.com/), then choose **Menu → Extend your Windy → Install Windy Plugin**.
-2. Paste the [1000.1.22 plugin URL](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.22/plugin.min.js) into Windy’s plugin URL field.
+2. Paste the [1000.1.23 plugin URL](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.23/plugin.min.js) into Windy’s plugin URL field.
 3. Search for a place or click the map.
 4. Choose a time on Windy’s timeline. Read the type at that point, then use **Forecast** for timing or **Sounding** for the vertical profile.
 
@@ -23,7 +23,7 @@ The plugin opens Windy’s precipitation-type layer automatically. You may then 
 
 ## Save and share
 
-Use **Save image** in the forecast or sounding. **Prepare & download MP4** exports the current area through available forecast times with precipitation shading, enabled type icons and contours. Keep the map view unchanged until it finishes; cancellation and a repeat download link are provided. MP4 encoding needs browser H.264 support. The video uses a geographic background and excludes Windy’s weather layer, lightning and dry-terrain hatching.
+Use **Save image** in the forecast or sounding.
 
 ## Interpretation and validation
 
@@ -33,4 +33,4 @@ Dry and missing-data areas are transparent. Windy’s own type can therefore rem
 
 Automated tests cover calculations, time coverage, missing data, raster opacity, terrain composition and desktop/mobile use. They do **not** establish forecast skill. The phase thresholds remain uncalibrated; see [METHODS.md](METHODS.md). Observed precipitation-type validation is still outstanding.
 
-Current release: **1000.1.22**.
+Current release: **1000.1.23**.

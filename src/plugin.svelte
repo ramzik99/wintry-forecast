@@ -20,7 +20,6 @@
     </div>
     {#if !precipDetailAvailable}<div class="zoom-hint">Zoom in to level 8 for shading and icons</div>{/if}
     <PlaceSearch on:select={handlePlaceSelect} on:clear={handleSearchClear} />
-    {#if showShading && precipDetailAvailable && geographyError}<div class="storm-legend" role="status">{geographyError}</div>{/if}
     {#if (showShading || showIcons) && terrainDetailStatus}<div class="storm-legend" role="status">{terrainDetailStatus}</div>{/if}
     {#if showIcons && precipDetailAvailable}<div class="storm-legend" role="status">{stormStatus}</div>{/if}
     {#if clickedPoint}
@@ -33,18 +32,12 @@
     {#if enabled && (viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading)}
       <div class="status-pill" role="status">
         {#if viewportLoading || terrainLoading || stormLoading || rasterLoading}
-          <div class="prepare-ring" role="progressbar" aria-label="Map layer loading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={layerLoadPercent} aria-valuetext={`${layerLoadPercent}% of layer loading stages processed`} style={`--progress: ${layerLoadPercent}%`}><span>{layerLoadPercent}%</span></div>
+          <div class="loading-ring" role="progressbar" aria-label="Map layer loading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={layerLoadPercent} aria-valuetext={`${layerLoadPercent}% of layer loading stages processed`} style={`--progress: ${layerLoadPercent}%`}><span>{layerLoadPercent}%</span></div>
           <span>Updating…<small class="loading-stage">{viewportLoading ? 'Forecast data' : terrainLoading ? 'Terrain detail' : rasterLoading ? 'Shading and type icons' : 'Lightning icons'}</small></span>
         {:else}<span class="status-dot"></span>Reading point…{/if}
       </div>
     {/if}
     <div class="panel-actions">
-    <div class="prepare-map-controls">
-      {#if preparingMap}<button class="refresh-button" type="button" on:click={cancelMapPreparation}>{exportingMap ? 'Cancel MP4 export' : 'Cancel preparation'}</button>
-      {:else}<button class="refresh-button" type="button" disabled={!enabled || !showShading || !precipDetailAvailable || viewportLoading || terrainLoading || rasterLoading} on:click={prepareMapForecast}>Prepare & download MP4</button>{/if}
-      <small>{prepareMessage || 'Current area · up to 144 h'}</small>
-      {#if videoDownloadUrl}<a href={videoDownloadUrl} download={videoDownloadName}>Download MP4 again</a>{/if}
-    </div>
     <div class="panel-footer"><button class="refresh-button" type="button" disabled={!enabled || viewportLoading || probeLoading || terrainLoading || stormLoading || rasterLoading} on:click={refreshForecast}>↻ Refresh</button><button class="help-link" type="button" on:click={() => infoOpen = true}>How it works</button></div>
     </div>
   </div>
@@ -95,7 +88,6 @@
         <div><b>Colours and terrain:</b> precipitation colours show the plugin’s diagnosed type at actual terrain. They are fully opaque, with elevation relief built into the colours. Dry and missing-data areas remain transparent. Windy’s precipitation-type layer opens beneath the plugin; you can choose another Windy layer afterwards.</div>
         <div><b>Time and model:</b> ECMWF profiles and precipitation, through the available 144-hour forecast. Map and point requests use the same one-hour sampling setting; source intervals may be longer. Valid times use your device timezone; model-cycle labels use UTC. Changing Windy’s model changes the underlying Windy layer; this plugin continues to use ECMWF.</div>
         <div><b>At a point:</b> Forecast shows snowline, precipitation rate and type. Hover or tap the graph to inspect a time; tapping selects it on Windy’s timeline. Sounding shows temperature, dew point and wet bulb, clipped at actual terrain. Hover or touch for values; use +/− and Fit to zoom.</div>
-        <div><b>Prepare & download MP4:</b> exports the current area through available forecast times, up to 144 hours. Includes shading, enabled type icons and contours, local timestamps and a legend. Keep the map view unchanged during export. Cancel stops preparation; a download link lets you save the video again. H.264 support is required. Windy’s weather layer, lightning and dry-terrain hatching are excluded from the video.</div>
         <div><b>Diagonal hatching:</b> dry terrain above the estimated snowline. It does not indicate falling snow or existing snow cover.</div>
         <div><b>Coverage:</b> precipitation follows sampled ECMWF amounts and may differ from Windy’s layer. Terrain refines the type and relief; it does not increase the atmospheric model’s resolution. Blank plugin areas may be dry or missing data; inspect the point forecast to distinguish them.</div>
         <div><b>Terrain shading source:</b> Mapzen Terrain Tiles, served through the public AWS dataset. <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener noreferrer">Terrain data sources and attribution</a>. Point forecasts use Windy’s elevation service for actual local terrain.</div>
@@ -114,7 +106,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import PrecipitationLegend from './PrecipitationLegend.svelte';
-  import { map, getMapTiles } from '@windy/map';
+  import { map } from '@windy/map';
   import store from '@windy/store';
   import { createFullRenderingParams, getDataZoom } from '@windy/renderUtils';
   import { TileLayerInterpolator } from '@windy/tileInterpolator';
@@ -132,7 +124,6 @@
   import { weatherInterpolator, weightedScalar, continuousProfileBlender, visibleRasterTiles, tileLocation, viewportRasterZoom, TILE_SIZE, RASTER_SAMPLES } from './shadingRaster';
   import { TerrainTiles, terrainTileZoom } from './terrainTiles';
   import { precipRasterLayer, colourTerrainTile, terrainIllumination } from './precipRasterLayer';
-  import { GeographicTiles } from './geographicTiles';
   import { buildProfile, PRESSURE_LEVELS, type PressureLevel, wetBulbZeroHeight, wetBulbFromDewpoint } from './snowLevel';
   import { precipMmAt, precipMmAtTime, isPrecipitating } from './precip';
   import { precipitationLabel, terrainPrecipitationType, type TerrainPrecipType } from './precipType';
@@ -147,8 +138,6 @@
   import { automaticRefreshDue } from './automaticRefresh';
   import { register, release } from '@windy/singleclick';
   import config from './pluginConfig';
-  import { PreparedMapCache } from './preparedMapCache';
-  import { canExportMapForecast, encodeMapForecast, forecastMovieTimes, videoImage, videoSize } from './mapForecastVideo';
   import { boundedRequest } from './boundedRequest';
   import { geocode } from './geocoding';
   import { formatElevation, formatPrecip, formatSnow, loadUnitSystem, type UnitSystem } from './displayUnits';
@@ -176,13 +165,7 @@
   let terrainComplete=false;
   let terrainDetailStatus='', rasterEpoch=0, rasterTarget:number|null=null, rasterTimer:ReturnType<typeof setTimeout>|null=null;
   let terrainGeneration=0, terrainJobKey='';
-  type FrameTile={url:string;nw:{lat:number;lon:number};se:{lat:number;lon:number}};
-  type StoredFrame={tiles:FrameTile[];symbols:{lat:number;lon:number;html:string}[];geography:FrameTile[];fallback:boolean;geographyError:string;bytes:number};
-  type RasterFrame={shading:any;icons:any;geography:any|null;fallback:boolean;geographyError:string;bytes:number;record:StoredFrame;geographyPromise?:Promise<void>};
-  const preparedMapCache=new PreparedMapCache<StoredFrame>();
-  const preparedKeys=new Set<string>();
-  let preparingMap=false,prepareMessage='',prepareGeneration=0,preparedReadKey='';
-  let exportingMap=false,videoAbort:AbortController|null=null,videoDownloadUrl='',videoDownloadName='';
+  type RasterFrame={shading:any;icons:any;fallback:boolean;bytes:number};
   let weatherLoadProgress=0,terrainLoadProgress=0,rasterLoadProgress=0,stormLoadProgress=0;
   // Stage-weighted work progress, not a download-byte or forecast-accuracy percentage.
   // Cached and synchronous contour work completes immediately; running jobs stay below 100%.
@@ -198,9 +181,6 @@
   let activePhaseKey='',pendingPhaseKey='',weatherRevision=0,terrainRevision=0,rasterLoading=false;
   let prefetchTimer:ReturnType<typeof setTimeout>|null=null,prefetchBusy=false;
   const PRECIP_PANE='wintry-precip-shading';
-  const GEOGRAPHY_ID=`wintry-geography-${Date.now()}`;
-  let geographyLayer:any=null,geographyEpoch=0,geographyError='';
-  const geographicTiles=new GeographicTiles(map.getSize().x<600?32:96);
   const reliefCache=new Map<string,HTMLCanvasElement>();
   let enabled=true, panelHidden=false, infoOpen=false, settingsOpen=false, chartOpen=false, forecastTab:'graph'|'sounding'='graph', viewportLoading=false, refreshQueued=false, probeLoading=false, unitSystem:UnitSystem='metric', prefsReady=false;
   let cache:(CachedPoint|null)[][]=[], contourLayer:any=null, clickLayer:any=null, clickedPoint:CachedPoint|null=null, clickedLatLon:[number,number]|null=null, clickedMapElevationM:number|null=null, clickedPlaceName:string|null=null, pointSource:PointSource|null=null, clickedNextEventTime:number|null=null;
@@ -351,11 +331,11 @@
     }
   }
   function checkAutomaticRefresh(){
-    if(!destroyed && automaticRefreshDue({enabled,busy:viewportLoading||probeLoading||preparingMap,hidden:document.hidden,online:navigator.onLine,failed:!!refreshError||lastChecked===null,lastAttempt:lastRefreshAttempt})) refreshForecast();
+    if(!destroyed && automaticRefreshDue({enabled,busy:viewportLoading||probeLoading,hidden:document.hidden,online:navigator.onLine,failed:!!refreshError||lastChecked===null,lastAttempt:lastRefreshAttempt})) refreshForecast();
   }
   function refreshForecast(){
     if(!enabled||destroyed)return;
-    resetMapPreparation();
+    
     for(const abort of forecastRequests)abort.abort();forecastRequests.clear();
     lastRefreshAttempt=Date.now();
     stormFrames.clear();clearStorms();void renderStorms();
@@ -366,8 +346,7 @@
   }
   function clearContours(){if(!contourLayer)return;try{map.removeLayer(contourLayer)}catch{}contourLayer=null}
   function clearPrecipIcons(){if(precipIconLayer)try{map.removeLayer(precipIconLayer)}catch{}precipIconLayer=null;activePhaseKey=''}
-  function clearShading(){reliefCache.clear();resetMapPreparation();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}clearGeography();terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
-  function clearGeography(){geographyEpoch++;geographyError='';if(geographyLayer)try{map.removeLayer(geographyLayer)}catch{}geographyLayer=null}
+  function clearShading(){reliefCache.clear();frameCache.clear();activePhaseKey='';pendingPhaseKey='';rasterLoading=false;if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}terrainLoading=false;terrainDetailStatus='';rasterEpoch++;rasterTarget=null;if(rasterTimer){clearTimeout(rasterTimer);rasterTimer=null;}clearPrecipIcons();terrainGeneration++;terrainJobKey='';if(!shadingLayer)return;try{map.removeLayer(shadingLayer)}catch{}shadingLayer=null}
   function clearClickLayer(){if(!clickLayer)return;try{map.removeLayer(clickLayer)}catch{}clickLayer=null}
   function clearPointState(closeChart=true){placeAbort?.abort();placeAbort=null;clickGeneration++;probeLoading=false;if(closeChart)chartOpen=false;clickedPoint=null;clickedLatLon=null;clickedMapElevationM=null;clickedPlaceName=null;pointSource=null;clickedNextEventTime=null;clearClickLayer()}
   function statusColor(s:ProbeStatus){return s==='above'?'#46d9ff':s==='below'?'#ff9d3d':s==='near'?'#ffe45c':'#fff'}
@@ -516,139 +495,6 @@
     return precipMmAtTime(p.forecast,p.times,target);
   }
   function rasterZoom(){const b=currentBounds();return viewportRasterZoom(map.getSize().x,b.west,b.east,map.getZoom());}
-  function cancelMapPreparation(){prepareGeneration++;videoAbort?.abort();videoAbort=null;exportingMap=false;preparingMap=false;prepareMessage=`Stopped · ${preparedKeys.size} times prepared`;}
-  function resetMapPreparation(){cancelMapPreparation();preparedKeys.clear();preparedReadKey='';prepareMessage='';}
-  function restorePreparedFrame(record:StoredFrame):RasterFrame{
-    const shading=L.layerGroup(),icons=L.layerGroup(),geography=L.layerGroup();
-    const pane=map.getPane(PRECIP_PANE)||map.createPane(PRECIP_PANE);pane.style.zIndex='390';pane.style.pointerEvents='none';
-    const geoPane=map.getPane(GEOGRAPHY_ID)||map.createPane(GEOGRAPHY_ID);geoPane.style.zIndex='395';geoPane.style.pointerEvents='none';
-    for(const t of record.tiles)precipRasterLayer(L,t.url,t.nw,t.se,PRECIP_PANE).addTo(shading);
-    for(const s of record.symbols)L.marker([s.lat,s.lon],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html:s.html,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(icons);
-    for(const t of record.geography)L.imageOverlay(t.url,[[t.se.lat,t.nw.lon],[t.nw.lat,t.se.lon]],{pane:GEOGRAPHY_ID,opacity:.45,interactive:false,className:'wintry-geographic-tile'}).addTo(geography);
-    return {shading,icons,geography,fallback:record.fallback,geographyError:record.geographyError,bytes:record.bytes,record};
-  }
-  async function prepareMapForecast(){
-    if(preparingMap||!enabled||!showShading||!precipDetailAvailable||viewportLoading||terrainLoading||rasterLoading||!cache.length)return;
-    const points=cache.flat().filter((p):p is CachedPoint=>!!p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime));
-    if(!points.length)return;
-    const videoTimes=forecastMovieTimes(points.map(p=>p.times),points.map(p=>p.times.map((_,i)=>supportedIntervalEnd(p.times,i,p.forecast.__precipPeriodsH))));
-    const seen=new Set<string>(),times=videoTimes.filter(t=>{const key=phaseFrameKey(t);if(seen.has(key))return false;seen.add(key);return true;});
-    const reference=getStoreTimestamp(),scene=phaseFrameKey(reference),my=++prepareGeneration;
-    const options=JSON.stringify([showContours,showIcons,unitSystem]);
-    const current=()=>my===prepareGeneration&&enabled&&!destroyed&&scene===phaseFrameKey(reference)&&options===JSON.stringify([showContours,showIcons,unitSystem]);
-    const started=Date.now();preparingMap=true;preparedKeys.clear();prepareMessage=`0 / ${times.length} times…`;
-    if(prefetchTimer){clearTimeout(prefetchTimer);prefetchTimer=null;}rasterEpoch++;
-    try{
-      if(!times.length)throw new Error('No available forecast times for MP4');
-      const size=videoSize(map.getSize().x,map.getSize().y+196);
-      const exportAvailable=await canExportMapForecast(size.width,size.height);if(!current())return;
-      if(videoDownloadUrl){URL.revokeObjectURL(videoDownloadUrl);videoDownloadUrl='';}
-      await preparedMapCache.clear();
-      for(let i=0;i<times.length&&current();){
-        if(rasterLoading||viewportLoading||terrainLoading||prefetchBusy){await new Promise(resolve=>setTimeout(resolve,150));continue;}
-        const frame=await paintShading(times[i],true,true);
-        if(!current())break;
-        if(!frame){await new Promise(resolve=>setTimeout(resolve,150));continue;}
-        const key=phaseFrameKey(times[i]);await preparedMapCache.put(key,frame.record);
-        if(!current())break;
-        preparedKeys.add(key);i++;const minutes=Math.ceil((Date.now()-started)/60000/i*(times.length-i));
-        prepareMessage=`${i} / ${times.length} times${i>1&&minutes>0?` · ~${minutes} min left`:'…'}`;
-        await new Promise(resolve=>setTimeout(resolve,0));
-      }
-      if(current()){
-        if(exportAvailable)await downloadMapForecastVideo(videoTimes,current);
-        else prepareMessage=`Map ready · ${preparedKeys.size} times · MP4 unavailable in this browser`;
-      }
-      else if(my===prepareGeneration)prepareMessage='Preparation stopped · forecast changed; refresh to try again';
-    }catch(error){if(current()){prepareMessage=error instanceof Error?`${error.message} · ${preparedKeys.size} times prepared`:'Preparation unavailable · normal timeline still works';preparedMapCache.close();}}
-    finally{if(my===prepareGeneration){preparingMap=false;exportingMap=false;scheduleNextFrame();}}
-  }
-
-  async function downloadMapForecastVideo(times:number[],current:()=>boolean){
-    const abort=new AbortController();videoAbort=abort;exportingMap=true;
-    const requireCurrent=()=>{if(!current())abort.abort();abort.signal.throwIfAborted();};
-    const size=map.getSize(),header=76,footer=120,dimensions=videoSize(size.x,size.y+header+footer);
-    const canvas=document.createElement('canvas');canvas.width=dimensions.width;canvas.height=dimensions.height;
-    const ctx=canvas.getContext('2d');if(!ctx)throw new Error('Video canvas unavailable');
-    const sx=canvas.width/size.x,sy=canvas.height/(size.y+header+footer);
-    const base=document.createElement('canvas');base.width=canvas.width;base.height=Math.max(2,Math.round(size.y*sy));
-    const bc=base.getContext('2d');if(!bc)throw new Error('Video map canvas unavailable');
-    const drawTile=(context:CanvasRenderingContext2D,image:CanvasImageSource,t:FrameTile)=>{
-      const nw=map.latLngToContainerPoint([t.nw.lat,t.nw.lon]),se=map.latLngToContainerPoint([t.se.lat,t.se.lon]);
-      context.drawImage(image,nw.x,nw.y,se.x-nw.x,se.y-nw.y);
-    };
-    try{
-      prepareMessage='MP4 · loading map background…';requireCurrent();
-      const z=rasterZoom(),tiles=typeof getMapTiles==='function'?getMapTiles():{},kind=String(store.get('map')??'sznmap');
-      const template=(Math.floor(Number(map.getZoom()))<=11?(tiles as any).graymap:(tiles as any)[kind]??(tiles as any).sznmap)
-        ??'https://tiles.windy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}/?lang=en';
-      bc.scale(sx,sy);
-      await mapLimit(visibleRasterTiles(currentBounds(),z),4,async t=>{
-        requireCurrent();const n=2**z,url=template.replace('{z}',String(z)).replace('{x}',String(((t.x%n)+n)%n)).replace('{y}',String(t.y));
-        const image=await geographicTiles.get(url);requireCurrent();
-        drawTile(bc,image,{url,nw:tileLocation(t.x,t.y,z),se:tileLocation(t.x+1,t.y+1,z)});
-      });
-      const symbolImages=new Map<string,HTMLImageElement>();
-      const blob=await encodeMapForecast(canvas,times,async time=>{
-        requireCurrent();const record=await preparedMapCache.get(phaseFrameKey(time));requireCurrent();
-        if(!record)throw new Error('Prepared frame unavailable. Prepare this area again.');
-        ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#132431';ctx.fillRect(0,0,canvas.width,canvas.height);
-        ctx.drawImage(base,0,header*sy);
-        ctx.save();ctx.setTransform(sx,0,0,sy,0,header*sy);
-        ctx.beginPath();ctx.rect(0,0,size.x,size.y);ctx.clip();
-        for(const tile of record.tiles){const image=await videoImage(tile.url,abort.signal);requireCurrent();drawTile(ctx,image,tile);}
-        ctx.globalAlpha=.45;
-        for(const tile of record.geography){const image=await videoImage(tile.url,abort.signal);requireCurrent();drawTile(ctx,image,tile);}
-        ctx.globalAlpha=1;
-        if(showContours)drawVideoContours(ctx,time);
-        if(showIcons)for(const symbol of record.symbols){
-          const svg=symbol.html.match(/<svg[\s\S]*<\/svg>/)?.[0];if(!svg)continue;
-          let image=symbolImages.get(svg);if(!image){image=await videoImage('data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),abort.signal);symbolImages.set(svg,image);}
-          requireCurrent();const p=map.latLngToContainerPoint([symbol.lat,symbol.lon]);ctx.drawImage(image,p.x-14,p.y-14,28,28);
-        }
-        ctx.restore();ctx.setTransform(1,0,0,1,0,0);
-        drawVideoCaption(ctx,time,canvas.width,canvas.height,header*sy,footer*sy,record.fallback||mapDataMissing);
-      },abort.signal,(done,total)=>{if(current())prepareMessage=`Encoding MP4 · ${done} / ${total} times`;});
-      requireCurrent();videoDownloadUrl=URL.createObjectURL(blob);videoDownloadName=`wintry-forecast-${new Date(times[0]).toISOString().replace(/[:.]/g,'-')}.mp4`;
-      const link=document.createElement('a');link.href=videoDownloadUrl;link.download=videoDownloadName;document.body.appendChild(link);link.click();link.remove();
-      prepareMessage=`MP4 ready · ${times.length} times · download available below`;
-    }finally{if(videoAbort===abort){videoAbort=null;exportingMap=false;}canvas.width=canvas.height=base.width=base.height=0;}
-  }
-
-  function drawVideoContours(ctx:CanvasRenderingContext2D,target:number){
-    const field=cache.map(row=>row.map(p=>p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)
-      ?{lat:p.lat,lon:p.lon,value:interpolatedSnowline(p,target)}:{lat:0,lon:0,value:null}));
-    const prepared=prepareSnowlineContours(field,contourIntervalForZoom()),lines=contourLinesForLevels(prepared.field,prepared.levels);
-    ctx.lineJoin='round';ctx.lineCap='round';
-    const labels:{x:number;y:number}[]=[];
-    for(const level of prepared.levels){
-      const paths=lines.get(level)??[],colour=colorForLevel(level),weight=level%1000===0?3:level%500===0?2.2:1.5;
-      ctx.beginPath();for(const line of paths)line.forEach((p,i)=>{const q=map.latLngToContainerPoint(p);if(i)ctx.lineTo(q.x,q.y);else ctx.moveTo(q.x,q.y);});
-      ctx.strokeStyle='#14212b';ctx.lineWidth=weight+2;ctx.stroke();ctx.strokeStyle=colour;ctx.lineWidth=weight;ctx.stroke();
-      if(level%500!==0)continue;
-      for(const line of [...paths].sort((a,b)=>lineLength(b)-lineLength(a))){
-        if(labels.length>=12||lineLength(line)<110)continue;const mid=midpointAlongLine(line);if(!mid)continue;
-        const p=map.latLngToContainerPoint(mid),size=map.getSize();if(p.x<45||p.x>size.x-45||p.y<20||p.y>size.y-20||labels.some(l=>Math.abs(l.x-p.x)<100&&Math.abs(l.y-p.y)<32))continue;
-        ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.lineWidth=4;ctx.strokeStyle='#14212b';ctx.strokeText(formatElevation(level,unitSystem),p.x,p.y);
-        ctx.fillStyle=colour;ctx.fillText(formatElevation(level,unitSystem),p.x,p.y);labels.push(p);break;
-      }
-    }
-  }
-
-  function drawVideoCaption(ctx:CanvasRenderingContext2D,time:number,width:number,height:number,header:number,footer:number,uncertain:boolean){
-    const font=Math.max(10,Math.min(16,width/40)),pad=12;ctx.textAlign='left';ctx.fillStyle='#132431';ctx.fillRect(0,0,width,header);ctx.fillRect(0,height-footer,width,footer);
-    ctx.fillStyle='#fff';ctx.font=`bold ${font+3}px sans-serif`;ctx.fillText('Wintry forecast · ECMWF',pad,header*.35,width-pad*2);
-    ctx.font=`${font}px sans-serif`;ctx.fillText(formatLocal(time),pad,header*.67,width-pad*2);
-    const legend=[['Rain','rain'],['Freezing rain','freezing-rain'],['Ice pellets','ice-pellets'],['Snow','snow'],['Wet snow','wet-snow'],['Rain/snow mix','mix']];
-    const columns=width<600?2:3,rows=Math.ceil(legend.length/columns),step=footer*.5/rows,top=height-footer+font+3;
-    ctx.font=`${Math.max(10,font-1)}px sans-serif`;
-    legend.forEach(([label,key],i)=>{const x=pad+(i%columns)*(width-pad*2)/columns,y=top+Math.floor(i/columns)*step;ctx.fillStyle=(PRECIP_TYPE_COLOURS as Record<string,string>)[key];ctx.fillRect(x,y-9,10,10);ctx.fillStyle='#fff';ctx.fillText(label,x+15,y,(width-pad*2)/columns-18);});
-    ctx.fillStyle='#d1dce4';ctx.font=`${Math.max(9,font-3)}px sans-serif`;
-    const notes=[`${showContours?'Contours: estimated snowline · ':''}Blank: dry or unavailable`,
-      'Map: Windy / OpenStreetMap contributors · Terrain: Mapzen / Tilezen',
-      'Forecast guidance · No Windy weather layer or lightning · 5 forecast h/s'];
-    notes.forEach((note,i)=>ctx.fillText(note,pad,height-footer*.32+i*footer*.105,width-pad*2));
-  }
   function phaseFrameKey(target:number){
     const b=currentBounds(),size=map.getSize();
     // The map diagnosis uses the represented profile interval, not invented hourly profiles.
@@ -673,18 +519,18 @@
     const ready=await Promise.all(frame.shading.getLayers().map((layer:any)=>layer.ready??true));
     if(destroyed||!enabled||epoch!==rasterEpoch||key!==phaseFrameKey(getStoreTimestamp()))return;
     if(ready.some(value=>!value)){rasterLoading=false;terrainDetailStatus='Shading image unavailable · retry refresh';return;}
-    const previous=[shadingLayer,precipIconLayer,geographyLayer];
-    frame.shading.addTo(map);if(showIcons)frame.icons.addTo(map);frame.geography?.addTo(map);
-    shadingLayer=frame.shading;precipIconLayer=showIcons?frame.icons:null;geographyLayer=frame.geography;activePhaseKey=key;pendingPhaseKey=key;
-    for(const layer of previous)if(layer&&layer!==shadingLayer&&layer!==precipIconLayer&&layer!==geographyLayer)try{map.removeLayer(layer)}catch{}
-    geographyError=frame.geographyError;terrainDetailStatus=frame.fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';rasterLoading=false;scheduleNextFrame();
+    const previous=[shadingLayer,precipIconLayer];
+    frame.shading.addTo(map);if(showIcons)frame.icons.addTo(map);
+    shadingLayer=frame.shading;precipIconLayer=showIcons?frame.icons:null;activePhaseKey=key;pendingPhaseKey=key;
+    for(const layer of previous)if(layer&&layer!==shadingLayer&&layer!==precipIconLayer)try{map.removeLayer(layer)}catch{}
+    terrainDetailStatus=frame.fallback&&!terrainLoading?'Terrain detail unavailable here · coarse estimate':'';rasterLoading=false;scheduleNextFrame();
   }
   function scheduleNextFrame(){
-    if(preparingMap||prefetchTimer||prefetchBusy||viewportLoading||terrainLoading||destroyed||!enabled)return;
+    if(prefetchTimer||prefetchBusy||viewportLoading||terrainLoading||destroyed||!enabled)return;
     const active=frameCache.get(activePhaseKey);if(!active||active.bytes*2>FRAME_PIXEL_BUDGET)return;
     const point=cache.flat().find((p):p is CachedPoint=>!!p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime));if(!point)return;
     const i=forecastIntervalIndex(point.times,getStoreTimestamp()),next=point.times[i+1];
-    if(i<0||!Number.isFinite(next)||frameCache.has(phaseFrameKey(next))||preparedKeys.has(phaseFrameKey(next))||phaseFrameKey(next)===skippedPrefetchKey)return;
+    if(i<0||!Number.isFinite(next)||frameCache.has(phaseFrameKey(next))||phaseFrameKey(next)===skippedPrefetchKey)return;
     prefetchTimer=setTimeout(()=>{prefetchTimer=null;prefetchBusy=true;void paintShading(next,true).finally(()=>prefetchBusy=false)},200);
   }
   function queueRasterPaint(){
@@ -709,15 +555,6 @@
     if(key===activePhaseKey&&shadingLayer){const current=frameCache.get(key);if(current&&showIcons!==!!precipIconLayer)applyFrame(key,current);else if(showIcons&&!precipIconLayer){rasterLoading=true;queueRasterPaint();return;}rasterLoading=false;scheduleNextFrame();return;}
     const frame=frameCache.get(key);
     if(frame){rememberFrame(key,frame);applyFrame(key,frame);scheduleNextFrame();return;}
-    if(preparedKeys.has(key)){
-      if(preparedReadKey===key)return;
-      preparedReadKey=key;rasterLoading=true;const epoch=++rasterEpoch;
-      void preparedMapCache.get(key).then(record=>{
-        if(destroyed||!enabled||epoch!==rasterEpoch||key!==phaseFrameKey(getStoreTimestamp()))return;
-        if(record){const restored=restorePreparedFrame(record);applyFrame(key,restored);rememberFrame(key,restored);}
-        else{preparedKeys.delete(key);queueRasterPaint();}
-      }).catch(()=>{if(epoch===rasterEpoch&&!destroyed){preparedKeys.delete(key);queueRasterPaint();}}).finally(()=>{if(preparedReadKey===key)preparedReadKey='';});return;
-    }
     rasterLoading=true;queueRasterPaint();
   }
   async function terrainRelief(tile:{x:number;y:number},z:number){
@@ -738,15 +575,14 @@
     while(reliefCache.size>32)reliefCache.delete(reliefCache.keys().next().value!);
     return canvas;
   }
-  async function paintShading(target:number,background=false,preparation=false):Promise<RasterFrame|undefined>{
+  async function paintShading(target:number,background=false):Promise<RasterFrame|undefined>{
     if(!enabled||!precipDetailAvailable||(!showShading&&!showIcons)||destroyed||!cache.length||terrainLoading)return;
     const key=phaseFrameKey(target),mainKey=phaseFrameKey(getStoreTimestamp());
-    if(background&&frameCache.has(key)){const cached=frameCache.get(key)!;if(preparation)await cached.geographyPromise;return cached;}
+    if(background&&frameCache.has(key))return frameCache.get(key)!;
     const epoch=background?rasterEpoch:++rasterEpoch,b=currentBounds(),z=rasterZoom(),detailZoom=Number(map.getZoom()),stencil=weatherInterpolator(cache),next=L.layerGroup();
-    const preparationEpoch=prepareGeneration;
     if(!background)rasterLoadProgress=0;
-    const obsolete=()=>epoch!==rasterEpoch||destroyed||!enabled||(preparation&&preparationEpoch!==prepareGeneration)||(background&&!preparation&&mainKey!==phaseFrameKey(getStoreTimestamp()));
-    const record:StoredFrame={tiles:[],symbols:[],geography:[],fallback:false,geographyError:'',bytes:0};
+    const obsolete=()=>epoch!==rasterEpoch||destroyed||!enabled||(background&&mainKey!==phaseFrameKey(getStoreTimestamp()));
+    let tileCount=0;
     const profiles=new Map<CachedPoint,ReturnType<typeof buildProfile>>(),amounts=new Map<CachedPoint,number|null>();
     for(const p of cache.flat())if(p&&profileIsFresh(p.fetchedAt,p.runTime,activeRunTime)){
       const i=forecastIntervalIndex(p.times,target);profiles.set(p,i<0?[]:buildProfile(p.forecast,i));amounts.set(p,mapPrecipAt(p,target));
@@ -787,7 +623,7 @@
             if(fc){fc.imageSmoothingEnabled=false;fc.drawImage(canvas,0,0,TILE_SIZE,TILE_SIZE);const nw=tileLocation(tile.x,tile.y,z),se=tileLocation(tile.x+1,tile.y+1,z);
               const relief=terrainComplete?await terrainRelief(tile,z):null;if(obsolete()){next.clearLayers();return;}
               const textured=relief?colourTerrainTile(full,relief):full;
-              const url=textured.toDataURL('image/png');record.tiles.push({url,nw,se});
+              const url=textured.toDataURL('image/png');tileCount++;
               precipRasterLayer(L,url,nw,se,PRECIP_PANE).addTo(next);}
           }
           paintedTiles++;if(!background)rasterLoadProgress=.9*paintedTiles/tiles.length;
@@ -802,20 +638,18 @@
       if(detailZoom>=PRECIP_DETAIL_MIN_ZOOM)for(let y=spacing/2;y<size.y;y+=spacing)for(let x=spacing/2;x<size.x;x+=spacing){
         const p=map.containerPointToLatLng([x,y]),result=diagnose(p.lat,p.lng);if(!result)continue;
         const html=`<span role="img" aria-label="${result.phase.label}">${precipitationIconSvg(result.phase.key)}</span>`;
-        record.symbols.push({lat:p.lat,lon:p.lng,html});
         L.marker([p.lat,p.lng],{interactive:false,keyboard:false,zIndexOffset:1000,icon:L.divIcon({className:'wintry-precip-icon',html,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(iconLayer);
       }
       if(obsolete()){next.clearLayers();iconLayer.clearLayers();return;}
       if(!background)rasterLoadProgress=1;
-      record.fallback=fallback;record.bytes=record.tiles.length*TILE_SIZE*TILE_SIZE*4+iconLayer.getLayers().length*4096;
-      const frame:RasterFrame={shading:next,icons:iconLayer,geography:null,fallback,geographyError:'',bytes:record.bytes,record};
-      if(preparation)return frame;
+      const bytes=tileCount*TILE_SIZE*TILE_SIZE*4+iconLayer.getLayers().length*4096;
+      const frame:RasterFrame={shading:next,icons:iconLayer,fallback,bytes};
       if(background&&frame.bytes+(frameCache.get(activePhaseKey)?.bytes??0)>FRAME_PIXEL_BUDGET){skippedPrefetchKey=key;next.clearLayers();iconLayer.clearLayers();return;}
       if(!background)applyFrame(key,frame);
       rememberFrame(key,frame);
       if(!background)scheduleNextFrame();
       return frame;
-    }catch(error){next.clearLayers();console.warn('Wintry raster rendering failed',error);if(preparation)throw error;if(epoch===rasterEpoch&&!background){rasterLoading=false;terrainDetailStatus='Shading unavailable · retry refresh';}}
+    }catch(error){next.clearLayers();console.warn('Wintry raster rendering failed',error);if(epoch===rasterEpoch&&!background){rasterLoading=false;terrainDetailStatus='Shading unavailable · retry refresh';}}
   }
   function clearStorms(){
     stormLoading=false;stormEpoch++;stormAbort?.abort();stormAbort=null;stormKey='';
@@ -922,7 +756,7 @@
   $: if(prefsReady){unitSystem;refreshUnitDependentUi()}
 
   let lastNavigationKey='';
-  function handleMapNavigation(){const size=map.getSize(),key=JSON.stringify([currentBounds(),Number(map.getZoom()),size.x,size.y]);if(key===lastNavigationKey)return;const wasPrepared=preparingMap||preparedKeys.size>0;resetMapPreparation();if(wasPrepared)prepareMessage='Map changed · prepare this area';lastNavigationKey=key;precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
+  function handleMapNavigation(){const size=map.getSize(),key=JSON.stringify([currentBounds(),Number(map.getZoom()),size.x,size.y]);if(key===lastNavigationKey)return;lastNavigationKey=key;precipDetailAvailable=Number(map.getZoom())>=PRECIP_DETAIL_MIN_ZOOM;if(!precipDetailAvailable)clearShading();if(!enabled)return;clearStorms();terrainLoading=false;terrainGeneration++;terrainJobKey='';if(cache.length&&(showShading||showIcons))renderPrecipitation(getStoreTimestamp());if(moveTimer)clearTimeout(moveTimer);moveTimer=setTimeout(()=>{void renderStorms();void refreshViewport()},350)}
   function toggleEnabled(){
     lastNavigationKey='';
     if(enabled){store.set('overlay','ptype');register(config.name,'high');void renderStorms();refreshViewport();return}
@@ -930,7 +764,7 @@
     if(moveTimer){clearTimeout(moveTimer);moveTimer=null}clearContours();clearShading();clearStorms();clearPointState(true);
   }
   onMount(()=>{loadPreferences();if(enabled)store.set('overlay','ptype');if(!enabled)release(config.name,'high');freshnessTimer=setInterval(checkAutomaticRefresh,30_000);document.addEventListener('visibilitychange',checkAutomaticRefresh);window.addEventListener('online',checkAutomaticRefresh);map.on('moveend',handleMapNavigation);map.on('zoomend',handleMapNavigation);try{timestampListener=store.on('timestamp',()=>{if(enabled&&cache.length)renderFromCache();else void renderStorms();if(enabled)updatePersistentClickLabel()})}catch{}void renderStorms();refreshViewport()})
-  onDestroy(()=>{destroyed=true;if(videoDownloadUrl)URL.revokeObjectURL(videoDownloadUrl);cancelMapPreparation();preparedMapCache.close();stormFrames.clear();placeAbort?.abort();for(const abort of forecastRequests)abort.abort();forecastRequests.clear();refreshEpoch++;pendingProfiles.clear();precipFieldCache.clear();pendingPrecipFields.clear();if(freshnessTimer)clearInterval(freshnessTimer);document.removeEventListener('visibilitychange',checkAutomaticRefresh);window.removeEventListener('online',checkAutomaticRefresh);generation++;clickGeneration++;refreshQueued=false;if(moveTimer)clearTimeout(moveTimer);map.off('moveend',handleMapNavigation);map.off('zoomend',handleMapNavigation);if(timestampListener!==null)try{store.off(timestampListener)}catch{}clearContours();clearShading();clearStorms();terrainTiles.destroy();geographicTiles.destroy();clearClickLayer();stormInterpolator?.destroy();stormInterpolator=null;profileCache.clear()})
+  onDestroy(()=>{destroyed=true;stormFrames.clear();placeAbort?.abort();for(const abort of forecastRequests)abort.abort();forecastRequests.clear();refreshEpoch++;pendingProfiles.clear();precipFieldCache.clear();pendingPrecipFields.clear();if(freshnessTimer)clearInterval(freshnessTimer);document.removeEventListener('visibilitychange',checkAutomaticRefresh);window.removeEventListener('online',checkAutomaticRefresh);generation++;clickGeneration++;refreshQueued=false;if(moveTimer)clearTimeout(moveTimer);map.off('moveend',handleMapNavigation);map.off('zoomend',handleMapNavigation);if(timestampListener!==null)try{store.off(timestampListener)}catch{}clearContours();clearShading();clearStorms();terrainTiles.destroy();clearClickLayer();stormInterpolator?.destroy();stormInterpolator=null;profileCache.clear()})
 </script>
 
 <style lang="less">
@@ -945,9 +779,8 @@
   :global(.wintry-precip-icon svg){width:25px;height:25px;padding:1.5px;filter:drop-shadow(0 0 .75px #ffffffc0)}
   .layer-controls{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;margin-top:8px;font-size:12px;font-weight:700}.layer-controls label{display:flex;align-items:center;gap:5px;cursor:pointer}.layer-controls input{accent-color:#67d7ff;margin:0;width:15px;height:15px}
   .zoom-hint{margin-top:8px;font-size:11px;color:#b5cbd7}.layer-controls label.unavailable{opacity:.45;cursor:not-allowed}.layer-controls label.unavailable input{cursor:not-allowed}
-  .prepare-map-controls{display:flex;flex-direction:column;gap:5px;margin:8px 0}.prepare-map-controls small{color:#b5cad8;font-size:10px;line-height:1.4}.prepare-map-controls .refresh-button{min-height:34px}
-  .prepare-ring{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress),#324857 0)}
-  .prepare-ring span{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+  .loading-ring{--progress:0%;display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#67d8ef var(--progress),#324857 0)}
+  .loading-ring span{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#172a38;color:#e8f8ff;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
   .loading-stage{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#b5cad8}
   .data-status{display:flex;flex-direction:column;gap:5px;padding:8px 0;font-size:10px;line-height:1.4;color:#b5cad8}.data-status b{color:#dff5ff}
   .shade-legend{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;color:#c5d5df;font-size:9px;line-height:1.4}.shade-legend small{width:100%;color:#9fb2be;font-size:9px}
@@ -1047,7 +880,6 @@
   :global(#device-mobile) .layer-controls label{min-height:44px;padding:6px 4px;justify-content:center;font-size:11px}
   :global(#device-mobile) .shade-types{grid-template-columns:repeat(3,minmax(0,1fr));gap:2px 4px;font-size:10px;margin-top:5px}
   :global(#device-mobile) .shade-types :global(svg){width:15px;height:15px}
-  :global(#device-mobile) .prepare-map-controls{margin:6px 0;gap:3px}
   :global(#device-mobile) .panel-footer{position:relative;bottom:auto;padding-bottom:0}
   .mobile-extra-settings,.mobile-options-label{display:none}
   :global(#device-mobile) .desktop-legend,:global(#device-mobile) .desktop-options-label{display:none}
@@ -1056,12 +888,10 @@
   :global(#device-mobile) .panel-options summary{box-sizing:border-box;min-height:44px;padding:12px 0;font-size:11px}
   :global(#device-mobile) .title{font-size:15px}
   :global(#device-mobile) .hide-button,:global(#device-mobile) .switch{min-height:44px}
-  :global(#device-mobile) .panel-actions{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px}
-  :global(#device-mobile) .prepare-map-controls,:global(#device-mobile) .panel-footer{display:contents}
-  :global(#device-mobile) .prepare-map-controls button{grid-column:1;grid-row:1;min-height:44px;padding-inline:5px}
-  :global(#device-mobile) .prepare-map-controls small{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}
-  :global(#device-mobile) .panel-footer .refresh-button{grid-column:2;grid-row:1;min-height:44px;padding-inline:6px}
-  :global(#device-mobile) .panel-footer .help-link{grid-column:3;grid-row:1;min-height:44px;padding-inline:3px}
+  :global(#device-mobile) .panel-footer{display:contents}
+  :global(#device-mobile) .panel-actions{position:sticky;bottom:-8px;z-index:4;background:#102330;padding-top:7px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px}
+  :global(#device-mobile) .panel-footer .refresh-button{grid-column:1;grid-row:1;min-height:44px;padding-inline:6px}
+  :global(#device-mobile) .panel-footer .help-link{grid-column:2;justify-self:end;grid-row:1;min-height:44px;padding-inline:3px}
   /* Primary controls never scroll. Secondary controls live in Settings. */
   .snowline-panel{max-height:none;overflow:visible}
   .panel-head{position:static}
@@ -1069,12 +899,10 @@
   .layer-controls label{padding-inline:4px;justify-content:center;font-size:11px}
   .settings-button{width:30px;height:32px;border:1px solid #304655;border-radius:7px;background:#152735;color:#dff5ff;font-size:17px;cursor:pointer}
   .title{font-size:14px}
-  .panel-actions{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px;padding-top:7px}
-  .prepare-map-controls,.panel-footer{display:contents}
-  .prepare-map-controls button{grid-column:1;grid-row:1;min-height:34px;padding-inline:5px}
-  .prepare-map-controls small{grid-column-start:1;grid-column-end:4;grid-row:2;min-height:14px}
-  .panel-footer .refresh-button{grid-column:2;grid-row:1;padding-inline:6px}
-  .panel-footer .help-link{grid-column:3;grid-row:1;padding-inline:3px}
+  .panel-footer{display:contents}
+  .panel-actions{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px;padding-top:7px}
+  .panel-footer .refresh-button{grid-column:1;grid-row:1;padding-inline:6px}
+  .panel-footer .help-link{grid-column:2;justify-self:end;grid-row:1;padding-inline:3px}
   :global(#device-mobile) .snowline-panel{max-height:none;overflow:visible}
   /* Windy's small mobile host defaults to max-height:200px!important.
      Size this host to its content so actions and point tools are not clipped. */
@@ -1086,6 +914,6 @@
   :global(#device-mobile) .settings-button{min-height:44px;min-width:36px}
   :global(#device-mobile) .point-tools strong{max-height:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   :global(#device-mobile) .status-pill{margin-top:4px;padding:3px;justify-content:flex-start}
-  :global(#device-mobile) .prepare-ring{width:30px;height:30px;flex-basis:30px}
-  :global(#device-mobile) .prepare-ring span{width:24px;height:24px;font-size:9px}
+  :global(#device-mobile) .loading-ring{width:30px;height:30px;flex-basis:30px}
+  :global(#device-mobile) .loading-ring span{width:24px;height:24px;font-size:9px}
 </style>
