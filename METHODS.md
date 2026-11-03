@@ -38,7 +38,7 @@ Layer-based diagnosis is motivated by [Bourgouin (2000)](https://journals.ametso
 
 ## Rendering
 
-Profiles and precipitation are interpolated before diagnosis; categorical type colours are not blended. Every wet, classified pixel has alpha 255. Dry, unknown or unclassifiable pixels are transparent. DEM illumination changes colour luminance while preserving alpha, so opaque colours override Windy’s weather colours while showing relief. This is elevation-derived relief, rather than visibility through an opaque layer.
+Profiles and precipitation are interpolated before diagnosis; categorical type colours are not blended. Every wet, classified pixel has alpha 255. Dry, unknown or unclassifiable pixels are transparent. DEM illumination changes colour luminance while preserving the source alpha mask. The image overlay is displayed at 75% opacity, applied once at the Leaflet layer, so Windy’s terrain/base map remains visible beneath wet areas. Classification and terrain masking are unchanged; dry and missing-data pixels remain transparent.
 
 Windy’s interface and labels remain above the overlay.
 
