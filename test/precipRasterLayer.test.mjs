@@ -4,14 +4,14 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 const js=ts.transpileModule(readFileSync(new URL('../src/precipRasterLayer.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const {precipRasterLayer,precipitationPane,terrainIllumination}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
-test('raster blends with the base map at 75% opacity and waits for decoding',async()=>{
+test('raster blends with the base map at 60% opacity and waits for decoding',async()=>{
  const previous=globalThis.Image;let resolveDecode,call;
  globalThis.Image=class{decode(){return new Promise(resolve=>resolveDecode=resolve)}};
  try{
   const overlay={};const L={imageOverlay:(image,bounds,options)=>{call={image,bounds,options};return overlay}};
   const layer=precipRasterLayer(L,'data:image/png,test',{lat:48,lon:12},{lat:47,lon:13},'precip');
   assert.equal(layer,overlay);assert.equal(call.image.src,'data:image/png,test');
-  assert.deepEqual(call.bounds,[[47,12],[48,13]]);assert.equal(call.options.opacity,0.75);
+  assert.deepEqual(call.bounds,[[47,12],[48,13]]);assert.equal(call.options.opacity,0.6);
   assert.equal(call.options.interactive,false);assert.equal(call.options.pane,'precip');
   let ready=false;layer.ready.then(()=>ready=true);await Promise.resolve();assert.equal(ready,false);
   resolveDecode();assert.equal(await layer.ready,true);
