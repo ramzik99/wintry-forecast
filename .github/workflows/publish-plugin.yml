@@ -2,6 +2,8 @@ name: publish-plugin
 
 on:
   workflow_dispatch:
+  push:
+    branches: [publish-terrain-opacity-1000-1-27]
 
 jobs:
   publish-plugin:
