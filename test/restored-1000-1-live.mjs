@@ -32,6 +32,7 @@ try{
    await host.open({params:{},disableOpeningAnimation:true});window.rollbackApp=host.svelteApp;
   },pluginURL);
   await page.locator('.snowline-panel').waitFor({timeout:60000});
+  assert.equal(await page.getByRole('button',{name:/prepare|download.*mp4/i}).count(),0,'No map preparation or MP4 controls');
   await page.getByRole('button',{name:'How it works',exact:true}).click();
   const help=page.getByRole('dialog',{name:'How Wintry forecast works'});
   await help.waitFor();
