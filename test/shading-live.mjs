@@ -67,20 +67,20 @@ try{
   for(const x of [440,500,560,620])for(const y of [300,400,500,600])backgrounds.push({x,y,rgb:await colour(x,y)});
   await page.evaluate(()=>testRaster.addTo(W.map.map));await page.waitForTimeout(100);
   const expected=await page.evaluate(()=>expectedRasterColour);
-  assert.equal(await page.evaluate(()=>testRaster.options.opacity),0.6);
-  assert.equal(await page.evaluate(()=>Number(getComputedStyle(testRaster.getElement()).opacity)),0.6);
+  assert.equal(await page.evaluate(()=>testRaster.options.opacity),0.75);
+  assert.equal(await page.evaluate(()=>Number(getComputedStyle(testRaster.getElement()).opacity)),0.75);
   // Native place labels sit above this overlay. Sample several areas so a label cannot masquerade as alpha blending.
   let matching=0;const samples=[];
   for(const {x,y,rgb} of backgrounds){
     const actual=await colour(x,y);samples.push({x,y,actual});
-    const blended=expected.map((v,i)=>v*.6+rgb[i]*.4);
+    const blended=expected.map((v,i)=>v*.75+rgb[i]*.25);
     if(actual.every((v,i)=>Math.abs(v-blended[i])<12))matching++;
   }
   assert.ok(matching>=4,JSON.stringify({zoom,matching,expected,samples}));
   await page.screenshot({path:'test-output/windy-raster-zoom-'+zoom+'.png'});
   await page.evaluate(()=>W.map.map.removeLayer(testRaster));
  }
- console.log('60% terrain-textured shading blends with Windy at zoom 9 and 12; dry gaps are preserved.');
+ console.log('75% terrain-textured shading blends with Windy at zoom 9 and 12; dry gaps are preserved.');
  await page.evaluate(()=>W.map.map.setView([46.5,10],9,{animate:false}));await page.waitForTimeout(1000);
  const wet=await page.evaluate(async({precipURL,timelineURL,selectedURL})=>{
   const {precipMmAt}=await import(precipURL),{buildForecastTimes}=await import(timelineURL),{loadSelectedPrecipFields,alignSelectedPrecipFields}=await import(selectedURL);
@@ -105,7 +105,7 @@ try{
   return count;
  });// Natural live conditions can be wet across the entire viewport; synthetic dry-gap pixels above are deterministic.
  assert.equal(edgePixels,0,'Source classification masks remain binary; transparency is applied by the display layer');
- assert.ok(await page.locator('.wintry-raster-tile').evaluateAll(images=>images.every(image=>Number(getComputedStyle(image).opacity)===.6)),'Live shading uses 60% display opacity');
+ assert.ok(await page.locator('.wintry-raster-tile').evaluateAll(images=>images.every(image=>Number(getComputedStyle(image).opacity)===.75)),'Live shading uses 75% display opacity');
  console.log('Live partially transparent precipitation pixels',edgePixels);
  await page.screenshot({path:'test-output/windy-wintry-desktop.png'});
  await page.evaluate(()=>W.store.set('overlay','rain'));await page.waitForTimeout(1500);
@@ -141,7 +141,7 @@ try{
  });
  assert.ok(mobileAlpha.wet>0,'Mobile precipitation must include classified pixels');
  assert.equal(mobileAlpha.partial,0,'Mobile source masks retain dry and wet boundaries');
- assert.ok(await page.locator('.wintry-raster-tile').evaluateAll(images=>images.every(image=>Number(getComputedStyle(image).opacity)===.6)),'Mobile shading uses 60% display opacity');
+ assert.ok(await page.locator('.wintry-raster-tile').evaluateAll(images=>images.every(image=>Number(getComputedStyle(image).opacity)===.75)),'Mobile shading uses 75% display opacity');
  console.log('Mobile precipitation opacity',mobileAlpha);
  await page.screenshot({path:'test-output/shading-mobile.png'});
  await page.getByRole('checkbox',{name:'Enable Wintry forecast'}).uncheck();

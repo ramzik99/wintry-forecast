@@ -5,7 +5,7 @@ A Windy plugin for **snowline and precipitation type at local terrain**, with a 
 ## Install and use
 
 1. Sign in to [Windy](https://www.windy.com/), then choose **Menu → Extend your Windy → Install Windy Plugin**.
-2. Paste the [1000.1.25 plugin URL](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.25/plugin.min.js) into Windy’s plugin URL field.
+2. Paste the [1000.1.26 plugin URL](https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.26/plugin.min.js) into Windy’s plugin URL field.
 3. Search for a place or click the map.
 4. Choose a time on Windy’s timeline. Read the type at that point, then use **Forecast** for timing or **Sounding** for the vertical profile.
 
@@ -13,7 +13,7 @@ Hover or touch the forecast graph to inspect it; tap to select that time on Wind
 
 ## What to read
 
-- **Precipitation colours:** rain, snow, wet snow, rain/snow mix, ice pellets or freezing rain, diagnosed from melting and refreezing above actual local terrain. Shading is displayed at 60% opacity so Windy’s terrain/base map remains visible beneath it. Elevation relief is built into the colours; native map labels and controls remain above the overlay.
+- **Precipitation colours:** rain, snow, wet snow, rain/snow mix, ice pellets or freezing rain, diagnosed from melting and refreezing above actual local terrain. Shading is displayed at 75% opacity so Windy’s terrain/base map remains visible beneath it. Elevation relief is built into the colours; native map labels and controls remain above the overlay.
 - **Snowline contours:** estimated wet-bulb-zero height, for comparison with terrain. The snowline alone does not determine precipitation type or snow cover. Elevated warm layers can produce freezing rain or ice pellets below it.
 - **Point forecast:** snowline, interval-average precipitation rate, type and next-24-hour liquid total when coverage is complete.
 - **Sounding:** temperature, dew point and wet bulb, stopping at an interpolated actual-terrain boundary. The count distinguishes all supplied pressure levels from those above terrain.
@@ -33,4 +33,4 @@ Dry and missing-data areas are transparent. Windy’s own type can therefore rem
 
 Automated tests cover calculations, time coverage, missing data, raster opacity, terrain composition and desktop/mobile use. They do **not** establish forecast skill. The phase thresholds remain uncalibrated; see [METHODS.md](METHODS.md). Observed precipitation-type validation is still outstanding.
 
-Current release: **1000.1.25**.
+Current release: **1000.1.26**.
