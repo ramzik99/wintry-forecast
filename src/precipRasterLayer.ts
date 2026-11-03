@@ -1,5 +1,5 @@
 // Blend once at the display layer so Windy's base map shows through every wet type.
-export const PRECIP_RASTER_OPACITY=0.75;
+export const PRECIP_RASTER_OPACITY=0.68;
 
 /** Geographic pane below contours and interface. */
 export function precipitationPane(map:any,name:string){
