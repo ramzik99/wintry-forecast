@@ -13,7 +13,7 @@ Hover or touch the forecast graph to inspect it; tap to select that time on Wind
 
 ## What to read
 
-- **Precipitation colours:** rain, snow, wet snow, rain/snow mix, ice pellets or freezing rain, diagnosed from melting and refreezing above actual local terrain. Every shaded pixel is opaque. Elevation relief is built into the colours; native map labels and controls remain above the overlay.
+- **Precipitation colours:** rain, snow, wet snow, rain/snow mix, ice pellets or freezing rain, diagnosed from melting and refreezing above actual local terrain. Shading is displayed at 75% opacity so Windy’s terrain/base map remains visible beneath it. Elevation relief is built into the colours; native map labels and controls remain above the overlay.
 - **Snowline contours:** estimated wet-bulb-zero height, for comparison with terrain. The snowline alone does not determine precipitation type or snow cover. Elevated warm layers can produce freezing rain or ice pellets below it.
 - **Point forecast:** snowline, interval-average precipitation rate, type and next-24-hour liquid total when coverage is complete.
 - **Sounding:** temperature, dew point and wet bulb, stopping at an interpolated actual-terrain boundary. The count distinguishes all supplied pressure levels from those above terrain.

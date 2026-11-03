@@ -1,4 +1,5 @@
-export const PRECIP_RASTER_OPACITY=1;
+// Blend once at the display layer so Windy's base map shows through every wet type.
+export const PRECIP_RASTER_OPACITY=0.75;
 
 /** Geographic pane below contours and interface. */
 export function precipitationPane(map:any,name:string){
@@ -19,7 +20,7 @@ export function precipRasterLayer(L:any,url:string,nw:{lat:number;lon:number},se
   return layer;
 }
 
-/** Apply label-free elevation relief to full-opacity phase colours; preserve dry/missing alpha. */
+/** Apply label-free elevation relief to phase colours; preserve dry/missing alpha. */
 export function colourTerrainTile(phase:HTMLCanvasElement,terrain:CanvasImageSource){
   const result=document.createElement('canvas');result.width=phase.width;result.height=phase.height;
   const ctx=result.getContext('2d');if(!ctx)throw new Error('Canvas unavailable');
