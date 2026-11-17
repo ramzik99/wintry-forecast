@@ -37,7 +37,7 @@ export function drawPrecipRaster(
  * Composite under Windy's geographic raster and above its weather renderers.
  * The forecast selection and native timeline stay attached to Windy's product.
  */
-export function createPrecipRaster(map: any, basemapOrder: number) {
+export function createPrecipRaster(map: any) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { alpha: false });
   let active = false, tiles: PrecipRasterTile[] = [], dirty = true;
@@ -85,9 +85,11 @@ export function createPrecipRaster(map: any, basemapOrder: number) {
 
   function sync() {
     if (!active) return;
-    if (!map.getLayer(PRECIP_RASTER_ID)) map.addLayerToBucket(layer, basemapOrder - 1);
-    // Windy's LeafletGL fork omits MapLibre's layout mutators.
-    if (!map.setLayoutProperty || !map.getLayoutProperty) return;
+    const order: string[] = map.getLayersOrder();
+    const basemap = order.find(id => id === 'raster-basemap' || id === 'topoMap');
+    const current = order.indexOf(PRECIP_RASTER_ID);
+    if (current < 0) map.addLayer(layer, basemap);
+    else if (basemap && current + 1 !== order.indexOf(basemap)) map.moveLayer(PRECIP_RASTER_ID, basemap);
     for (const id of UPPER_WEATHER_LAYERS) {
       if (!map.getLayer(id)) {
         hidden.delete(id);

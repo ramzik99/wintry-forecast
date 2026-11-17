@@ -106,7 +106,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import PrecipitationLegend from './PrecipitationLegend.svelte';
-  import { layerOrder, map } from '@windy/map';
+  import { map } from '@windy/map';
   import store from '@windy/store';
   import { createFullRenderingParams, getDataZoom } from '@windy/renderUtils';
   import { TileLayerInterpolator } from '@windy/tileInterpolator';
@@ -161,7 +161,7 @@
   let stormInterpolator:any=null;
   let stormLayer:any=null, stormAbort:AbortController|null=null, stormKey='', stormEpoch=0, stormStatus='⚡ ECMWF forecast lightning';
   let precipIconLayer:any=null;
-  const precipRaster=createPrecipRaster(map.maplibreMap,layerOrder.BASE_MAP);
+  const precipRaster=createPrecipRaster(map.maplibreMap);
   const terrainTiles=new TerrainTiles();
   let terrainComplete=false;
   let terrainDetailStatus='', rasterEpoch=0, rasterTarget:number|null=null, rasterTimer:ReturnType<typeof setTimeout>|null=null;

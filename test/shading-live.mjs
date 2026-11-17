@@ -70,7 +70,7 @@ try{
   window.expectedRasterColour=[...wet].slice(0,3);
   window.makeTestRaster=()=>{
    const bounds=map.getBounds();
-   const raster=createPrecipRaster(map.maplibreMap,W.map.layerOrder.BASE_MAP);
+   const raster=createPrecipRaster(map.maplibreMap);
    raster.setTiles([{nw:{lat:bounds.getNorth(),lon:bounds.getWest()},se:{lat:bounds.getSouth(),lon:bounds.getEast()},terrain,phase}]);
    raster.setActive(true);
    return raster;
@@ -79,6 +79,10 @@ try{
  for(const zoom of [9,12]){
   await page.evaluate(z=>{W.store.set('overlay','temp');W.map.map.setZoom(z,{animate:false})},zoom);
   await page.waitForTimeout(2200);
+  console.log('Windy map at test zoom',zoom,JSON.stringify(await page.evaluate(()=>{
+   const map=W.map.map.maplibreMap, base=map.getLayer('raster-basemap')?.implementation;
+   return {layers:map.getLayersOrder(),zoom:map.getZoom(),base:base?._options,cacheKeys:Object.keys(base?._tileCache??{})};
+  })));
   const locations=[[460,350],[540,450],[620,520],[760,380],[820,480],[900,530]];
   const samples=()=>Promise.all(locations.map(([x,y])=>colour(x,y)));
   const native=await samples();

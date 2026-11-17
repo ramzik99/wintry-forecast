@@ -9,16 +9,17 @@ test('weather cover follows shading and restores Windy particle and radar visibi
  const previous=globalThis.document;
  globalThis.document={createElement:()=>({getContext:()=>null})};
  try{
-  const listeners=new Map(),layers=new Map([['gl-particles','visible'],['radar-coverage','none']]);
+  const listeners=new Map(),layers=new Map([['gl-particles','visible'],['radar-coverage','none'],['raster-basemap','visible']]);
   const canvas={addEventListener(){},removeEventListener(){}};
   const map={
    on:(event,handler)=>listeners.set(event,handler),off:event=>listeners.delete(event),
    getCanvas:()=>canvas,
    getLayer:id=>layers.has(id),removeLayer:id=>layers.delete(id),
    getLayoutProperty:id=>layers.get(id),setLayoutProperty:(id,_prop,value)=>layers.set(id,value),
-   addLayerToBucket:(layer,bucket)=>{assert.equal(bucket,99);layers.set(layer.id,'visible')},
+   getLayersOrder:()=>[...layers.keys()].sort((a,b)=>(a==='raster-basemap')-(b==='raster-basemap')),
+   addLayer:(layer,before)=>{assert.equal(before,'raster-basemap');layers.set(layer.id,'visible')},
   };
-  const raster=createPrecipRaster(map,100);
+  const raster=createPrecipRaster(map);
   raster.setActive(true);
   assert.equal(layers.get(PRECIP_RASTER_ID),'visible');
   assert.equal(layers.get('gl-particles'),'none');
