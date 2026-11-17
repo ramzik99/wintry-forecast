@@ -2,6 +2,8 @@ name: publish-plugin
 
 on:
   workflow_dispatch:
+  push:
+    branches: [publish-wintry-1000-1-28]
 
 jobs:
   publish-plugin:
@@ -36,6 +38,7 @@ jobs:
           test "$PACKAGE_VERSION" = "$BUILT_VERSION"
 
       - name: Publish plugin
+        id: publish
         run: |
           if [ -z "$WINDY_API_KEY" ]; then
             echo "Secret WINDY_API_KEY is not configured" >&2
@@ -50,7 +53,23 @@ jobs:
           tar --exclude='*.map' -cf ../plugin.tar .
 
           echo "Publishing plugin..."
-          curl -s --fail-with-body \
+          response="$(curl -s --fail-with-body \
             -X POST 'https://node.windy.com/plugins/v1.0/upload' \
             -H "x-windy-api-key: ${WINDY_API_KEY}" \
-            -F "plugin_archive=@../plugin.tar"
+            -F "plugin_archive=@../plugin.tar")"
+          echo "$response"
+          install_url="$(jq -er '.installUrl' <<< "$response")"
+          test "$install_url" = 'https://windy-plugins.com/458307/windy-plugin-snowline-map-100m/1000.1.28/plugin.min.js'
+          echo "install_url=$install_url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify published version on Windy
+        env:
+          WINTRY_PLUGIN_URL: ${{ steps.publish.outputs.install_url }}
+          WINTRY_PLUGIN_VERSION: '1000.1.28'
+        run: |
+          curl --fail --silent --show-error --retry 6 --retry-delay 5 --retry-all-errors -o /tmp/wintry-published.mjs "$WINTRY_PLUGIN_URL"
+          test -s /tmp/wintry-published.mjs
+          node --check /tmp/wintry-published.mjs
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps chromium
+          node test/restored-1000-1-live.mjs
