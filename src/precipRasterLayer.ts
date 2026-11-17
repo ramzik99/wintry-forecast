@@ -1,5 +1,7 @@
-// Blend once at the display layer so Windy's base map shows through every wet type.
-export const PRECIP_RASTER_OPACITY=0.68;
+// Render precipitation colours fully opaque so the underlying Windy weather layer
+// cannot bleed through. Geographic relief is already composited into each phase
+// raster by colourTerrainTile; labels and controls occupy higher map panes.
+export const PRECIP_RASTER_OPACITY=1;
 
 /** Geographic pane below contours and interface. */
 export function precipitationPane(map:any,name:string){
