@@ -25,6 +25,18 @@ try{
    const times=buildForecastTimes(r.data.data,Date.parse(r.data.header.refTime));window.coreForecastStart=times[0];
    W.store.set('timestamp',times.find(t=>t>=Date.now())??times[0]);
   },timelineURL);
+  if(!mobile){
+   const describe=()=>page.evaluate(()=>{
+    const m=W.map.map.maplibreMap;
+    return { overlay:W.store.get('overlay'),product:W.store.get('product'), timestamp:W.store.get('timestamp'), style:m.getStyle()?.layers?.map(({id,type,source,layout})=>[id,type,source,layout?.visibility]), order:m.getLayersOrder?.(), panes:Object.fromEntries(Object.entries(W.map.map.getPanes()).map(([k,v])=>[k,[v.className,getComputedStyle(v).zIndex,v.childElementCount]])), timeline:[...document.querySelectorAll('[id*=progress],[id*=calendar]')].map(el=>[el.id,!!el.getClientRects().length,getComputedStyle(el).visibility]) };
+   });
+   for(const overlay of ['temp','rain','radar','satellite','topoMap']){
+    await page.evaluate(overlay=>W.store.set('overlay',overlay),overlay);
+    await page.waitForTimeout(1600);
+    console.log('WINDY_MAP_PROBE',JSON.stringify(await describe()));
+   }
+   await page.evaluate(()=>W.store.set('overlay','temp'));
+  }
   await page.evaluate(async url=>{
    const mod=await import(url),config=mod.__pluginConfig;
    const host=new W.ExternalSveltePlugin.ExternalSveltePlugin({ident:config.name},{...config,url});
