@@ -1,4 +1,6 @@
 export const PRECIP_RASTER_ID = 'wintry-precip-shading';
+const CLOSE_ZOOM_RASTER_ID = 'wintry-precip-shading-close';
+const CLOSE_ZOOM = 11; // MapLibre zoom 11 is Windy zoom 12, where the outdoor map becomes opaque.
 const GEOGRAPHIC_BACKGROUND = '#d5d0bd';
 const UPPER_WEATHER_LAYERS = ['gl-particles', 'radar-coverage'];
 
@@ -14,9 +16,14 @@ export function drawPrecipRaster(
   ctx: CanvasRenderingContext2D,
   tiles: PrecipRasterTile[],
   project: (point: [number, number]) => { x: number; y: number },
+  overOutdoorMap = false,
 ) {
-  ctx.fillStyle = GEOGRAPHIC_BACKGROUND;
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  if (overOutdoorMap) {
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  } else {
+    ctx.fillStyle = GEOGRAPHIC_BACKGROUND;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
   ctx.imageSmoothingEnabled = false;
   for (const { nw, se, terrain, phase } of tiles) {
     const start = project([nw.lon, nw.lat]), end = project([se.lon, se.lat]);
@@ -24,7 +31,7 @@ export function drawPrecipRaster(
     const width = Math.round(end.x) - x, height = Math.round(end.y) - y;
     if (width <= 0 || height <= 0 || x >= ctx.canvas.width || y >= ctx.canvas.height ||
         x + width <= 0 || y + height <= 0) continue;
-    if (terrain) {
+    if (terrain && !overOutdoorMap) {
       ctx.globalCompositeOperation = 'multiply';
       ctx.drawImage(terrain, x, y, width, height);
       ctx.globalCompositeOperation = 'source-over';
@@ -38,58 +45,79 @@ export function drawPrecipRaster(
  * The forecast selection and native timeline stay attached to Windy's product.
  */
 export function createPrecipRaster(map: any) {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d', { alpha: false });
-  let active = false, tiles: PrecipRasterTile[] = [], dirty = true;
-  let program: WebGLProgram | null = null, texture: WebGLTexture | null = null;
+  let active = false, tiles: PrecipRasterTile[] = [];
   const hidden = new Map<string, 'visible' | undefined>();
 
-  const invalidate = () => { dirty = true; map.triggerRepaint(); };
-  const layer = {
-    id: PRECIP_RASTER_ID,
-    type: 'custom',
-    onAdd(_map: unknown, gl: WebGL2RenderingContext) {
-      program = compileRasterProgram(gl);
-      texture = gl.createTexture();
-      dirty = true;
-    },
-    render(gl: WebGL2RenderingContext) {
-      if (!ctx || !program || !texture) return;
-      const { clientWidth: width, clientHeight: height } = map.getCanvas();
-      if (!width || !height) return;
-      gl.useProgram(program);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      if (dirty || canvas.width !== width || canvas.height !== height) {
-        if (canvas.width !== width || canvas.height !== height) {
-          canvas.width = width;
-          canvas.height = height;
+  function createPass(id: string, overOutdoorMap: boolean) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { alpha: overOutdoorMap });
+    let dirty = true;
+    let program: WebGLProgram | null = null, texture: WebGLTexture | null = null;
+    return {
+      id,
+      type: 'custom',
+      invalidate() { dirty = true; },
+      onAdd(_map: unknown, gl: WebGL2RenderingContext) {
+        program = compileRasterProgram(gl, overOutdoorMap);
+        texture = gl.createTexture();
+        dirty = true;
+      },
+      render(gl: WebGL2RenderingContext) {
+        if (!ctx || !program || !texture) return;
+        const { clientWidth: width, clientHeight: height } = map.getCanvas();
+        if (!width || !height) return;
+        gl.useProgram(program);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        if (dirty || canvas.width !== width || canvas.height !== height) {
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+          }
+          drawPrecipRaster(ctx, tiles, point => map.project(point), overOutdoorMap);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+          gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, overOutdoorMap);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+          gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+          dirty = false;
         }
-        drawPrecipRaster(ctx, tiles, point => map.project(point));
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-        dirty = false;
-      }
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-    },
-    onRemove(_map: unknown, gl: WebGL2RenderingContext) {
-      gl.deleteTexture(texture);
-      gl.deleteProgram(program);
-      texture = program = null;
-    },
-  };
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      },
+      onRemove(_map: unknown, gl: WebGL2RenderingContext) {
+        gl.deleteTexture(texture);
+        gl.deleteProgram(program);
+        texture = program = null;
+      },
+    };
+  }
+
+  const layer = createPass(PRECIP_RASTER_ID, false);
+  // Above the opaque outdoor map, retain detail by compositing wet colours with geography.
+  // The lower pass already covers all weather, including behind transparent phase pixels.
+  const closeLayer = createPass(CLOSE_ZOOM_RASTER_ID, true);
+  const invalidate = () => { layer.invalidate(); closeLayer.invalidate(); map.triggerRepaint(); };
+
+  function position(pass: typeof layer, before?: string) {
+    const order: string[] = map.getLayersOrder();
+    const current = order.indexOf(pass.id);
+    if (current < 0) map.addLayer(pass, before);
+    else if (current + 1 !== (before ? order.indexOf(before) : order.length)) map.moveLayer(pass.id, before);
+  }
 
   function sync() {
     if (!active) return;
     const order: string[] = map.getLayersOrder();
     const basemap = order.find(id => id === 'raster-basemap' || id === 'topoMap');
-    const current = order.indexOf(PRECIP_RASTER_ID);
-    if (current < 0) map.addLayer(layer, basemap);
-    else if (basemap && current + 1 !== order.indexOf(basemap)) map.moveLayer(PRECIP_RASTER_ID, basemap);
+    position(layer, basemap);
+    if (basemap === 'raster-basemap' && map.getZoom() >= CLOSE_ZOOM) {
+      const above = map.getLayersOrder().slice(map.getLayersOrder().indexOf(basemap) + 1)
+        .find((id: string) => id !== CLOSE_ZOOM_RASTER_ID);
+      position(closeLayer, above);
+    } else if (map.getLayer(CLOSE_ZOOM_RASTER_ID)) map.removeLayer(CLOSE_ZOOM_RASTER_ID);
     for (const id of UPPER_WEATHER_LAYERS) {
       if (!map.getLayer(id)) {
         hidden.delete(id);
@@ -110,13 +138,16 @@ export function createPrecipRaster(map: any) {
         map.on('styledata', sync);
         map.on('move', invalidate);
         map.on('resize', invalidate);
+        map.on('zoom', sync);
         map.getCanvas().addEventListener('webglcontextrestored', invalidate);
         sync();
       } else {
         map.off('styledata', sync);
         map.off('move', invalidate);
         map.off('resize', invalidate);
+        map.off('zoom', sync);
         map.getCanvas().removeEventListener('webglcontextrestored', invalidate);
+        if (map.getLayer(CLOSE_ZOOM_RASTER_ID)) map.removeLayer(CLOSE_ZOOM_RASTER_ID);
         if (map.getLayer(PRECIP_RASTER_ID)) map.removeLayer(PRECIP_RASTER_ID);
         for (const [id, visibility] of hidden) {
           if (map.getLayer(id) && map.getLayoutProperty(id, 'visibility') === 'none') {
@@ -134,7 +165,7 @@ export function createPrecipRaster(map: any) {
   };
 }
 
-function compileRasterProgram(gl: WebGL2RenderingContext) {
+function compileRasterProgram(gl: WebGL2RenderingContext, overOutdoorMap: boolean) {
   const shaders: WebGLShader[] = [];
   const program = gl.createProgram();
   if (!program) throw new Error('Wintry raster program unavailable');
@@ -152,7 +183,7 @@ function compileRasterProgram(gl: WebGL2RenderingContext) {
         uniform sampler2D image;
         in vec2 uv;
         out vec4 colour;
-        void main() { colour = texture(image, uv); }`],
+        void main() { colour = texture(image, uv) * ${overOutdoorMap ? '0.80' : '1.0'}; }`],
     ] as const) {
       const shader = gl.createShader(type);
       if (!shader) throw new Error('Wintry raster shader unavailable');

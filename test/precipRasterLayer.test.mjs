@@ -13,7 +13,7 @@ test('weather cover follows shading and restores Windy particle and radar visibi
   const canvas={addEventListener(){},removeEventListener(){}};
   const map={
    on:(event,handler)=>listeners.set(event,handler),off:event=>listeners.delete(event),
-   getCanvas:()=>canvas,
+   getCanvas:()=>canvas,getZoom:()=>8,
    getLayer:id=>layers.has(id),removeLayer:id=>layers.delete(id),
    getLayoutProperty:id=>layers.get(id),setLayoutProperty:(id,_prop,value)=>layers.set(id,value),
    getLayersOrder:()=>[...layers.keys()].sort((a,b)=>(a==='raster-basemap')-(b==='raster-basemap')),

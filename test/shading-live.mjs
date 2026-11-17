@@ -79,10 +79,6 @@ try{
  for(const zoom of [9,12]){
   await page.evaluate(z=>{W.store.set('overlay','temp');W.map.map.setZoom(z,{animate:false})},zoom);
   await page.waitForTimeout(2200);
-  console.log('Windy map at test zoom',zoom,JSON.stringify(await page.evaluate(()=>{
-   const map=W.map.map.maplibreMap, base=map.getLayer('raster-basemap')?.implementation;
-   return {layers:map.getLayersOrder(),zoom:map.getZoom(),base:base?._options,cacheKeys:Object.keys(base?._tileCache??{})};
-  })));
   const locations=[[460,350],[540,450],[620,520],[760,380],[820,480],[900,530]];
   const samples=()=>Promise.all(locations.map(([x,y])=>colour(x,y)));
   const native=await samples();
@@ -91,8 +87,14 @@ try{
   const expected=await page.evaluate(()=>expectedRasterColour);
   const first=await samples();
   const close=(a,b,threshold)=>a.every((v,i)=>Math.abs(v-b[i])<threshold);
-  assert.ok(first.slice(0,3).some(rgb=>close(rgb,expected,24)),JSON.stringify({zoom,expected,first}));
-  assert.ok(first.slice(3).some((rgb,i)=>!close(rgb,native[i+3],24)),'Dry terrain must hide the native temperature layer');
+  if(zoom===9){
+   assert.ok(first.slice(0,3).some(rgb=>close(rgb,expected,24)),JSON.stringify({zoom,expected,first}));
+   assert.ok(first.slice(3).some((rgb,i)=>!close(rgb,native[i+3],24)),'Dry terrain must hide the native temperature layer');
+  }else{
+   assert.ok(first.slice(0,3).some(([r,g,b])=>r<85&&g>r+30&&b>g),JSON.stringify({zoom,first}));
+   const order=await page.evaluate(()=>W.map.map.maplibreMap.getLayersOrder());
+   assert.equal(order[order.indexOf('raster-basemap')+1],'wintry-precip-shading-close');
+  }
   const assertGeography=()=>page.evaluate(()=>{
    const order=W.map.map.maplibreMap.getLayersOrder();
    return order.indexOf('tileLayer')<order.indexOf('wintry-precip-shading')&&order.indexOf('wintry-precip-shading')<order.indexOf('raster-basemap');
