@@ -22,6 +22,7 @@ async function loadWindy(time){
 async function settled(){
  await page.waitForFunction(()=>document.querySelector('.snowline-panel')&&!document.querySelector('.status-pill')&&!document.querySelector('.refresh-error'),null,{timeout:180000});
 }
+const hasRaster=()=>page.evaluate(()=>W.map.map.maplibreMap.getLayersOrder().includes('wintry-precip-shading'));
 async function mount(){
  await page.evaluate(async url=>{
   const mod=await import(url),config=mod.__pluginConfig;
@@ -30,7 +31,8 @@ async function mount(){
   await host.open({params:{},disableOpeningAnimation:true});window.wintryTest=host.svelteApp;
  },pluginURL);
  await settled();
- assert.equal(await page.locator('.wintry-terrain-tile').count(),0,'Plugin must not cover Windy with an extra base map');
+ assert.ok(await hasRaster(),'Plugin adds the weather cover to the native map');
+ assert.ok(await page.evaluate(()=>{const order=W.map.map.maplibreMap.getLayersOrder();return order.indexOf('tileLayer')<order.indexOf('wintry-precip-shading')&&order.indexOf('wintry-precip-shading')<order.indexOf('raster-basemap')}),'Weather cover is below the native geographic raster');
  assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype','Opening selects precipitation type automatically');
  assert.equal(await page.locator('.wintry-geographic-tile').count(),0,'No duplicate geographic map over shading');
 }
@@ -46,41 +48,60 @@ async function colour(x,y){
 }
 try{
  await loadWindy();await page.screenshot({path:'test-output/windy-background.png'});
- // Verify actual visible colours, including at close zoom; layer existence cannot catch black textures.
+ // Use fixed phase and terrain values to test dry and unknown pixels independently of the live forecast.
  await page.evaluate(async url=>{
-  const {precipRasterLayer,colourTerrainTile}=await import(url),m=W.map.map,b=m.getBounds(),c=document.createElement('canvas');c.width=c.height=256;
-  const ctx=c.getContext('2d');ctx.fillStyle='#00c6ff';ctx.fillRect(0,0,128,256);ctx.fillStyle='rgba(0,198,255,0.5)';ctx.fillRect(128,0,32,256);
-  m.createPane('wintry-test-shading').style.zIndex='390';
-  const terrain=document.createElement('canvas');terrain.width=terrain.height=256;const tc=terrain.getContext('2d');
+  const {createPrecipRaster,colourTerrainTile,drawPrecipRaster}=await import(url);
+  const source=document.createElement('canvas');source.width=source.height=256;
+  const phaseContext=source.getContext('2d');
+  phaseContext.fillStyle='#00c6ff';phaseContext.fillRect(0,0,128,256);
+  const terrain=document.createElement('canvas');terrain.width=terrain.height=256;
+  const tc=terrain.getContext('2d');
   tc.fillStyle='#808080';tc.fillRect(0,0,256,256);tc.fillStyle='#404040';tc.fillRect(0,0,256,64);
-  const coloured=colourTerrainTile(c,terrain),cc=coloured.getContext('2d'),light=cc.getImageData(64,128,1,1).data,dark=cc.getImageData(64,32,1,1).data,clear=cc.getImageData(192,128,1,1).data;
-  const partial=cc.getImageData(144,128,1,1).data;
-  if(Math.abs(partial[3]-128)>1||Math.abs(partial[1]-light[1])>2||Math.abs(partial[2]-light[2])>2)throw new Error('Terrain relief must preserve partial-coverage hue and alpha');
-  if(light[3]!==255||dark[3]!==255||clear[3]!==0||Math.abs(light[1]-99)>2||Math.abs(light[2]-128)>2||Math.abs(dark[1]-50)>2||Math.abs(dark[2]-64)>2)throw new Error('Opaque terrain composition must preserve luminance and dry gaps');
-  window.expectedRasterColour=[...light].slice(0,3);
-  window.testRaster=precipRasterLayer(L,coloured.toDataURL(),{lat:b.getNorth(),lon:b.getWest()},{lat:b.getSouth(),lon:b.getEast()},'wintry-test-shading');
-  await testRaster.ready;
+  const phase=colourTerrainTile(source,terrain);
+  const preview=document.createElement('canvas');preview.width=384;preview.height=256;
+  const ctx=preview.getContext('2d');
+  drawPrecipRaster(ctx,[{nw:{lat:0,lon:0},se:{lat:256,lon:256},terrain,phase}],([x,y])=>({x,y}));
+  const wet=ctx.getImageData(64,128,1,1).data,dark=ctx.getImageData(64,32,1,1).data;
+  const dry=ctx.getImageData(192,128,1,1).data,missing=ctx.getImageData(300,128,1,1).data;
+  if([wet,dark,dry,missing].some(p=>p[3]!==255))throw new Error('Weather cover must be opaque for wet, dry and missing pixels');
+  if(Math.abs(wet[1]-99)>2||Math.abs(wet[2]-128)>2||Math.abs(dark[1]-50)>2||Math.abs(dark[2]-64)>2)throw new Error('Wet colours must retain terrain relief');
+  if(dry[0]<90||dry[0]>115||missing[0]<190)throw new Error('Dry and missing pixels must show the neutral base');
+  const map=W.map.map;
+  window.expectedRasterColour=[...wet].slice(0,3);
+  window.makeTestRaster=()=>{
+   const bounds=map.getBounds();
+   const raster=createPrecipRaster(map.maplibreMap,W.map.layerOrder.BASE_MAP);
+   raster.setTiles([{nw:{lat:bounds.getNorth(),lon:bounds.getWest()},se:{lat:bounds.getSouth(),lon:bounds.getEast()},terrain,phase}]);
+   raster.setActive(true);
+   return raster;
+  };
  },rasterURL);
  for(const zoom of [9,12]){
-  await page.evaluate(z=>W.map.map.setZoom(z,{animate:false}),zoom);await page.waitForTimeout(3000);
-  const backgrounds=[];
-  for(const x of [440,500,560,620])for(const y of [300,400,500,600])backgrounds.push({x,y,rgb:await colour(x,y)});
-  await page.evaluate(()=>testRaster.addTo(W.map.map));await page.waitForTimeout(100);
+  await page.evaluate(z=>{W.store.set('overlay','temp');W.map.map.setZoom(z,{animate:false})},zoom);
+  await page.waitForTimeout(2200);
+  const locations=[[460,350],[540,450],[620,520],[760,380],[820,480],[900,530]];
+  const samples=()=>Promise.all(locations.map(([x,y])=>colour(x,y)));
+  const native=await samples();
+  await page.evaluate(()=>{window.testRaster=makeTestRaster()});
+  await page.waitForTimeout(400);
   const expected=await page.evaluate(()=>expectedRasterColour);
-  assert.equal(await page.evaluate(()=>testRaster.options.opacity),0.68);
-  assert.equal(await page.evaluate(()=>Number(getComputedStyle(testRaster.getElement()).opacity)),0.68);
-  // Native place labels sit above this overlay. Sample several areas so a label cannot masquerade as alpha blending.
-  let matching=0;const samples=[];
-  for(const {x,y,rgb} of backgrounds){
-    const actual=await colour(x,y);samples.push({x,y,actual});
-    const blended=expected.map((v,i)=>v*.68+rgb[i]*.32);
-    if(actual.every((v,i)=>Math.abs(v-blended[i])<12))matching++;
-  }
-  assert.ok(matching>=4,JSON.stringify({zoom,matching,expected,samples}));
+  const first=await samples();
+  const close=(a,b,threshold)=>a.every((v,i)=>Math.abs(v-b[i])<threshold);
+  assert.ok(first.slice(0,3).some(rgb=>close(rgb,expected,24)),JSON.stringify({zoom,expected,first}));
+  assert.ok(first.slice(3).some((rgb,i)=>!close(rgb,native[i+3],24)),'Dry terrain must hide the native temperature layer');
+  const assertGeography=()=>page.evaluate(()=>{
+   const order=W.map.map.maplibreMap.getLayersOrder();
+   return order.indexOf('tileLayer')<order.indexOf('wintry-precip-shading')&&order.indexOf('wintry-precip-shading')<order.indexOf('raster-basemap');
+  });
+  assert.ok(await assertGeography(),'Native basemap remains above the weather cover');
+  await page.evaluate(()=>W.store.set('overlay','rain'));await page.waitForTimeout(1400);
+  const second=await samples();
+  assert.ok(first.every((rgb,i)=>close(rgb,second[i],12)),JSON.stringify({zoom,first,second}));
+  assert.ok(await assertGeography(),'Switching weather layers keeps the geographic basemap above Wintry');
   await page.screenshot({path:'test-output/windy-raster-zoom-'+zoom+'.png'});
-  await page.evaluate(()=>W.map.map.removeLayer(testRaster));
+  await page.evaluate(()=>testRaster.setActive(false));
  }
- console.log('68% terrain-textured shading blends with Windy at zoom 9 and 12; dry gaps are preserved.');
+ console.log('Opaque wet and dry rendering, relief and geographic layer order passed at zoom 9 and 12.');
  await page.evaluate(()=>W.map.map.setView([46.5,10],9,{animate:false}));await page.waitForTimeout(1000);
  const wet=await page.evaluate(async({precipURL,timelineURL,selectedURL})=>{
   const {precipMmAt}=await import(precipURL),{buildForecastTimes}=await import(timelineURL),{loadSelectedPrecipFields,alignSelectedPrecipFields}=await import(selectedURL);
@@ -93,30 +114,20 @@ try{
  },{precipURL,timelineURL,selectedURL});
  console.log('Live wet ECMWF forecast',wet);
  await mount();
- assert.ok(await page.locator('.wintry-raster-tile').count()>0,'Wet live forecast must draw precipitation');
+ assert.ok(await hasRaster(),'Real wet forecast mounts the raster');
  assert.equal(await page.locator('.zoom-hint').count(),0);
- const edgePixels=await page.evaluate(()=>{
-  let count=0;
-  for(const image of document.querySelectorAll('.wintry-raster-tile')){
-   const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d');ctx.drawImage(image,0,0);
-   const pixels=ctx.getImageData(0,0,256,256).data;
-   for(let i=3;i<pixels.length;i+=4)if(pixels[i]>0&&pixels[i]<255)count++;
-  }
-  return count;
- });// Natural live conditions can be wet across the entire viewport; synthetic dry-gap pixels above are deterministic.
- assert.equal(edgePixels,0,'Source classification masks remain binary; transparency is applied by the display layer');
- assert.ok(await page.locator('.wintry-raster-tile').evaluateAll(images=>images.every(image=>Number(getComputedStyle(image).opacity)===.68)),'Live shading uses 68% display opacity');
- console.log('Live partially transparent precipitation pixels',edgePixels);
  await page.screenshot({path:'test-output/windy-wintry-desktop.png'});
  await page.evaluate(()=>W.store.set('overlay','rain'));await page.waitForTimeout(1500);
  assert.equal(await page.evaluate(()=>W.store.get('overlay')),'rain');
- assert.ok(await page.locator('.wintry-raster-tile').count()>0);
- assert.equal(await page.locator('.wintry-terrain-tile').count(),0);
+ assert.ok(await hasRaster());
  await page.screenshot({path:'test-output/windy-wintry-rain-beneath.png'});
- console.log('Selected Windy weather remains beneath shading.');
+ await page.getByRole('checkbox',{name:'Shading',exact:true}).uncheck();
+ assert.equal(await hasRaster(),false,'Turning off shading restores the Windy weather map');
+ await page.getByRole('checkbox',{name:'Shading',exact:true}).check();await settled();
+ assert.ok(await hasRaster());
 
  await page.getByRole('checkbox',{name:'Enable Wintry forecast'}).uncheck();
- assert.equal(await page.locator('.wintry-raster-tile').count(),0);
+ assert.equal(await hasRaster(),false);
  await page.getByRole('checkbox',{name:'Enable Wintry forecast'}).check();await settled();
  await page.evaluate(t=>W.store.set('timestamp',t+3*3600000),wet.time);await settled();
  await page.evaluate(()=>W.map.map.panBy([100,40],{animate:false}));await page.waitForTimeout(800);await settled();
@@ -124,32 +135,18 @@ try{
  await page.screenshot({path:'test-output/shading-after-timeline-pan.png'});
  await page.evaluate(()=>wintryHost.close());
  await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
- assert.equal(await page.locator('.wintry-raster-tile,.wintry-geographic-tile').count(),0);
+ assert.equal(await hasRaster(),false);
  await page.close();
  page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'});
  await loadWindy(wet.time);await mount();
- assert.ok(await page.locator('.wintry-raster-tile').count()>0,'Wet forecast draws on mobile');
- const mobileAlpha=await page.evaluate(()=>{
-  let wet=0,partial=0;
-  for(const image of document.querySelectorAll('.wintry-raster-tile')){
-   const canvas=document.createElement('canvas');canvas.width=canvas.height=256;
-   const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
-   const pixels=ctx.getImageData(0,0,256,256).data;
-   for(let i=3;i<pixels.length;i+=4){if(pixels[i]===255)wet++;else if(pixels[i]>0)partial++;}
-  }
-  return{wet,partial};
- });
- assert.ok(mobileAlpha.wet>0,'Mobile precipitation must include classified pixels');
- assert.equal(mobileAlpha.partial,0,'Mobile source masks retain dry and wet boundaries');
- assert.ok(await page.locator('.wintry-raster-tile').evaluateAll(images=>images.every(image=>Number(getComputedStyle(image).opacity)===.68)),'Mobile shading uses 68% display opacity');
- console.log('Mobile precipitation opacity',mobileAlpha);
+ assert.ok(await hasRaster(),'Wet forecast mounts shading on mobile');
  await page.screenshot({path:'test-output/shading-mobile.png'});
  await page.getByRole('checkbox',{name:'Enable Wintry forecast'}).uncheck();
- assert.equal(await page.locator('.wintry-raster-tile').count(),0);
+ assert.equal(await hasRaster(),false);
  await page.getByRole('checkbox',{name:'Enable Wintry forecast'}).check();await settled();
  await page.evaluate(()=>wintryHost.close());
  await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
- assert.equal(await page.locator('.wintry-raster-tile,.wintry-geographic-tile').count(),0);
+ assert.equal(await hasRaster(),false);
  console.log('Visible colours, terrain relief, dry gaps, real wet forecast, layer selection, timeline, pan, mobile toggles and cleanup passed.');
 }catch(error){
  await page.screenshot({path:'test-output/shading-failure.png'}).catch(()=>{});
