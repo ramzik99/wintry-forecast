@@ -53,8 +53,9 @@ async function run(name,url,location=[43.05,44.0],zoom=8){
  },url);
  await settled();
  if(name==='fixed')assert.equal(await page.evaluate(()=>W.store.get('overlay')),'ptype');
- results[name]={loadMs:Date.now()-start,requests,elevations,valid,tiles:await page.locator('.wintry-raster-tile').count()};
- assert.ok(results[name].tiles>0,'Wet Caucasus forecast must draw shading');
+ const rendering=name==='fixed'?await page.evaluate(()=>W.map.map.maplibreMap.getLayersOrder().includes('wintry-precip-shading')):await page.locator('.wintry-raster-tile').count()>0;
+ results[name]={loadMs:Date.now()-start,requests,elevations,valid,rendering};
+ assert.ok(rendering,'Wet Caucasus forecast must mount shading');
  await page.screenshot({path:'test-output/caucasus-'+name+'.png'});
  // Measure the complete point forecast, including the graph, then an identical repeat.
  for(const warm of [false,true]){
@@ -108,6 +109,7 @@ async function run(name,url,location=[43.05,44.0],zoom=8){
  await page.evaluate(()=>shadingHost.close());
  await page.waitForFunction(()=>!document.querySelector('.snowline-panel'));
  assert.equal(await page.locator('.wintry-raster-tile').count(),0);
+ assert.equal(await page.evaluate(()=>W.map.map.maplibreMap.getLayersOrder().includes('wintry-precip-shading')),false);
  await page.close();
 }
 try{
