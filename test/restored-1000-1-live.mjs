@@ -17,6 +17,8 @@ let page;
 try{
  for(const mobile of [false,true]){
   page=await browser.newPage(mobile?{timezoneId:'Asia/Amman',viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,userAgent:'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'}:{timezoneId:'Asia/Amman',viewport:{width:1365,height:1000}});
+  page.on('pageerror',error=>console.log('Windy browser error',error.message));
+  page.on('console',message=>{if(message.type()==='error'||message.type()==='warning')console.log('Windy browser',message.type(),message.text().slice(0,550));});
   await page.goto('https://www.windy.com/',{waitUntil:'domcontentloaded',timeout:60000});
   await page.waitForFunction(()=>window.W?.map?.map?.maplibreMap&&window.W?.fetch?.getMeteogramForecastData,null,{timeout:60000});
   await page.evaluate(async url=>{
@@ -25,6 +27,16 @@ try{
    const times=buildForecastTimes(r.data.data,Date.parse(r.data.header.refTime));window.coreForecastStart=times[0];
    W.store.set('timestamp',times.find(t=>t>=Date.now())??times[0]);
   },timelineURL);
+  if(!mobile){
+   console.log('Windy MapLibre renderer',JSON.stringify(await page.evaluate(()=>{
+    const map=W.map.map.maplibreMap;
+    return { layerOrder:W.map.layerOrder, helpers:['getLayoutProperty','setLayoutProperty','addLayerToBucket','moveLayer','getLayer','project'].map(k=>[k,typeof map[k]]),
+     layers:map.getLayersOrder().map(id=>{
+      const layer=map.getLayer(id),impl=layer?.implementation;
+      return [id,Object.keys(layer??{}),Object.keys(impl??{}),Object.getOwnPropertyNames(Object.getPrototypeOf(impl??{}))];
+     }) };
+   })));
+  }
   await page.evaluate(async url=>{
    const mod=await import(url),config=mod.__pluginConfig;
    const host=new W.ExternalSveltePlugin.ExternalSveltePlugin({ident:config.name},{...config,url});

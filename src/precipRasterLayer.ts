@@ -86,6 +86,8 @@ export function createPrecipRaster(map: any, basemapOrder: number) {
   function sync() {
     if (!active) return;
     if (!map.getLayer(PRECIP_RASTER_ID)) map.addLayerToBucket(layer, basemapOrder - 1);
+    // Windy's LeafletGL fork omits MapLibre's layout mutators.
+    if (!map.setLayoutProperty || !map.getLayoutProperty) return;
     for (const id of UPPER_WEATHER_LAYERS) {
       if (!map.getLayer(id)) {
         hidden.delete(id);
